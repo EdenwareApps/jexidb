@@ -1,0 +1,24 @@
+{
+  "name": "jexidb",
+  "version": "1.0.0",
+  "description": "JexiDB is a pure JS NPM library for managing data on disk using JSONL efficiently, without the need for a server.",
+  "main": "./dist/Database.cjs",
+  "module": "./src/Database.mjs",
+  "exports": {
+    ".": {
+      "require": "./dist/Database.cjs",
+      "import": "./src/Database.mjs"
+    }
+  },
+  "scripts": {
+    "build": "npx babel src/Database.mjs --out-file-extension .cjs --out-dir dist",
+    "postinstall": "npm run build"
+  },
+  "author": "EdenwareApps",
+  "license": "MIT",
+  "devDependencies": {
+    "@babel/cli": "^7.25.6",
+    "@babel/core": "^7.25.2",
+    "@babel/preset-env": "^7.25.4"
+  }
+}
