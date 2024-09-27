@@ -109,4 +109,8 @@ JexiDB provides a simple yet powerful way to store and manage data in JavaScript
   <img width="380" src="https://edenware.app/jexidb/images/jexidb-mascot.jpg" alt="JexiDB mascot" title="JexiDB mascot" />
 </p>
 
- <br />
+# Contributing
+
+Please, feel free to contribute to the project by opening a discussion under Issues section or sending your PR.
+
+If you find this library useful, please consider making a donation of any amount via [PayPal by clicking here](https://www.paypal.com/donate/?item_name=megacubo.tv&cmd=_donations&business=efox.web%40gmail.com) to help the developer continue to dedicate himself to the project. ❤
