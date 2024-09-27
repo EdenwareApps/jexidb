@@ -1,6 +1,3 @@
-
-# JexiDB Documentation
-
 <p align="center">
   <img width="270" src="https://edenware.app/jexidb/images/jexidb-logo-icon.jpg" alt="JexiDB logo" title="JexiDB logo" />
 </p>
