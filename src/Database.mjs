@@ -7,7 +7,7 @@ export class Database extends EventEmitter {
   constructor(filePath, opts={}) {
     super()
     this.opts = Object.assign({
-      indexes: {},
+      indexes: {}
       /*
       serializer: {
         parse: b => {
@@ -18,15 +18,17 @@ export class Database extends EventEmitter {
         },
         stringify: v8.serialize
       }
-      */
       serializer: JSON
+      */
     }, opts)
     this.shouldSave = false
     this.serialize = JSON.stringify.bind(JSON)
     this.deserialize = JSON.parse.bind(JSON)
     this.fileHandler = new FileHandler(filePath)
     this.indexManager = new IndexManager(this.opts)
-    this.indexOffset = 0  
+    this.indexOffset = 0
+    //this.exitListener = this.saveSync.bind(this)
+    //process.on('exit', this.exitListener) //code => { console.log('Processo está saindo com o código:', code);
   }
 
   use(plugin) {
@@ -78,7 +80,7 @@ export class Database extends EventEmitter {
         this.shouldTruncate = false
     }
     await this.fileHandler.writeData(indexString)
-    await this.fileHandler.writeData(offsetsString)
+    await this.fileHandler.writeData(offsetsString, true)
     this.shouldSave = false
   }
 
@@ -232,7 +234,8 @@ export class Database extends EventEmitter {
     this.shouldSave && await this.save()
     this.indexOffset = 0
     this.indexManager.index = {}
-    this.initialized = false    
+    this.initialized = false
+    this.fileHandler.destroy()
   }
 
 }
