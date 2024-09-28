@@ -27,8 +27,8 @@ export class Database extends EventEmitter {
     this.fileHandler = new FileHandler(filePath)
     this.indexManager = new IndexManager(this.opts)
     this.indexOffset = 0
-    //this.exitListener = this.saveSync.bind(this)
-    //process.on('exit', this.exitListener) //code => { console.log('Processo está saindo com o código:', code);
+    this.exitListener = () => this.save(true).catch(console.error)
+    process.on('exit', this.exitListener) //code => { console.log('Processo está saindo com o código:', code);
   }
 
   use(plugin) {
@@ -63,7 +63,7 @@ export class Database extends EventEmitter {
     this.emit('init')
   }
 
-  async save() {
+  async save(sync) {
     const index = this.indexManager.index
     for(const field in index.data) {
         for(const term in index.data[field]) {
@@ -75,12 +75,21 @@ export class Database extends EventEmitter {
     offsets.push(this.indexOffset)
     offsets.push(this.indexOffset + indexString.length)
     const offsetsString = Buffer.from(this.serialize(offsets))
-    if (this.shouldTruncate) {
-        await this.fileHandler.truncate(this.indexOffset)
+    if(sync === true) {      
+      if (this.shouldTruncate) {
+        this.fileHandler.truncateSync(this.indexOffset)
         this.shouldTruncate = false
+      }
+      this.fileHandler.writeDataSync(indexString) // Sincronizar escrita de dados
+      this.fileHandler.writeDataSync(offsetsString, true) // Sincronizar escrita de dados com append
+    } else {
+      if (this.shouldTruncate) {
+          await this.fileHandler.truncate(this.indexOffset)
+          this.shouldTruncate = false
+      }
+      await this.fileHandler.writeData(indexString)
+      await this.fileHandler.writeData(offsetsString, true)
     }
-    await this.fileHandler.writeData(indexString)
-    await this.fileHandler.writeData(offsetsString, true)
     this.shouldSave = false
   }
 
@@ -236,6 +245,7 @@ export class Database extends EventEmitter {
     this.indexManager.index = {}
     this.initialized = false
     this.fileHandler.destroy()
+    process.removeListener('exit', this.exitListener)
   }
 
 }
