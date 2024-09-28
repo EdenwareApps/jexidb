@@ -106,7 +106,7 @@ await db.save();
 JexiDB provides a simple yet powerful way to store and manage data in JavaScript applications. With its indexing and querying features, you can build efficient data-driven applications.
 
 <p align="center">
-  <img width="380" src="https://edenware.app/jexidb/images/jexidb-mascot2.jpg" alt="JexiDB mascot" title="JexiDB mascot" />
+  <img width="380" src="https://edenware.app/jexidb/images/jexidb-mascot3.jpg" alt="JexiDB mascot" title="JexiDB mascot" />
 </p>
 
 # Contributing
