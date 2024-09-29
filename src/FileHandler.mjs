@@ -6,16 +6,16 @@ export default class FileHandler {
     this.descriptors = {}
   }
 
-  async open(mode, file) {
+  async open(mode, file='') {
     if (!file) {
       file = this.filePath
     }
     const key = file +'-'+ mode
     if (this.descriptors[key]) {
       this.descriptors[key].clients++
-      return this.descriptors[key]
+      return this.descriptors[key].fd
     }
-    this.descriptors[key] = {fd: await fs.promises.open(this.filePath, mode), clients: 1}
+    this.descriptors[key] = {fd: await fs.promises.open(file, mode), clients: 1}
     this.descriptors[key].fd.leave = async immediate => {
       this.descriptors[key].clients--
       if (this.descriptors[key].clients === 0) {
@@ -24,7 +24,7 @@ export default class FileHandler {
           delete this.descriptors[key]
         } else {
           setTimeout(async () => {
-            if (this.descriptors[key].clients === 0) {
+            if (this.descriptors[key] && this.descriptors[key].clients === 0) {
               await this.descriptors[key].fd.close()
               delete this.descriptors[key]
             }
@@ -32,7 +32,7 @@ export default class FileHandler {
         }
       }
     }
-    return this.descriptors[key]
+    return this.descriptors[key].fd
   }
 
   async truncate(offset) {
@@ -46,7 +46,7 @@ export default class FileHandler {
       }
       map.sort()
     }
-    let closed = false, max, i = 0
+    let closed, max, i = 0
     const rl = readline.createInterface({
       input: fs.createReadStream(this.filePath, { highWaterMark: 1024 * 64 }),
       crlfDelay: Infinity
@@ -78,12 +78,12 @@ export default class FileHandler {
 
   async readRange(start, end) {
     let data = []
-    const stream = fs.createReadStream(this.filePath, { start, end });
-    stream.on('data', chunk => data.push(chunk))
-    return await new Promise((resolve, reject) => {
-      stream.on('end', () => resolve(Buffer.concat(data).toString('utf-8')))
-      stream.on('error', err => reject(err))
-    })
+    let fd = await this.open('r')
+    const length = end - start
+    let buffer = Buffer.alloc(length)
+    await fd.read(buffer, 0, length, start)
+    await fd.leave()
+    return buffer
   }
 
   async readRanges(ranges) {
@@ -93,11 +93,8 @@ export default class FileHandler {
       try {
         const length = r.end - r.start
         let buffer = Buffer.alloc(length)
-        const { bytesRead } = await fd.read(buffer, 0, length, r.start)
-        if (bytesRead < buffer.length) {
-          buffer = buffer.slice(0, bytesRead)
-        }
-        lines[r.start] = buffer.toString('utf-8')
+        await fd.read(buffer, 0, length, r.start)
+        lines[r.start] = buffer
       } catch (error) {
         console.error(error)
       }
@@ -114,16 +111,11 @@ export default class FileHandler {
     for (const r of ranges) {
       const length = r.start - start
       const buffer = Buffer.alloc(length)
-      const { bytesRead } = await reader.read(buffer, 0, length, start)
-      if (bytesRead < buffer.length) {
-        buffer = buffer.slice(0, bytesRead)
-      }
-      start = r.end + 1
+      await reader.read(buffer, 0, length, start)
+      start = r.end
       buffer.length && await writer.write(buffer)
-      console.log('write replace', JSON.stringify(String(buffer)), buffer.length)
       if (lines[i]) {
         await writer.write(lines[i])
-        console.log('write replace*', JSON.stringify(String(lines[i])))
       }
       i++
     }
@@ -131,26 +123,28 @@ export default class FileHandler {
     const length = size - start
     const buffer = Buffer.alloc(length)
     await reader.read(buffer, 0, length, start)
-    await reader.leave()
+    await reader.leave(true)
     await writer.write(buffer)
-    console.log('write last', JSON.stringify(String(buffer)))
-    await writer.leave()
+    await writer.leave(true)
     await fs.promises.copyFile(tmpFile, this.filePath)
     await fs.promises.unlink(tmpFile)
-    console.log('read updated', String(await fs.promises.readFile(this.filePath)))
   }
 
   async writeData(data, immediate) {
     const fd = await this.open('a')
-    await fd.write(this.filePath, data)
+    await fd.write(data)
     await fd.leave(immediate)
+  }
+
+  writeDataSync(data) {
+    fs.writeFileSync(this.filePath, data, { flag: 'a' })
   }
 
   async readLastLine() {
     const reader = await this.open('r')
     try {
       const { size } = await reader.stat()
-      if (size < 1) throw 'empty file **'
+      if (size < 1) throw 'empty file'
       this.size = size
       const bufferSize = 16384
       let buffer, lastReadSize, readPosition = Math.max(size - bufferSize, 0)
@@ -162,13 +156,13 @@ export default class FileHandler {
         }
         const { bytesRead } = await reader.read(buffer, 0, readSize, readPosition)
         if (bytesRead === 0) break
-        const newlineIndex = buffer.lastIndexOf(0x0A) // 0x0A is the ASCII code for '\n'
+        const newlineIndex = buffer.lastIndexOf('\n') // 0x0A is the ASCII code for '\n'
         if (newlineIndex !== -1) {
           const start = readPosition + newlineIndex + 1
           const lastLine = Buffer.alloc(size - start)
           await reader.read(lastLine, 0, size - start, start)
           if (!lastLine || !lastLine.length) {
-            throw 'empty file ***'
+            throw 'empty file *'
           }
           return lastLine
         } else {
@@ -176,7 +170,7 @@ export default class FileHandler {
         }
       }
     } catch (e) {
-      console.error('Error reading last line:', e)
+      String(e).includes('empty file') || console.error('Error reading last line:', e)
     } finally {
       reader.leave()
     }

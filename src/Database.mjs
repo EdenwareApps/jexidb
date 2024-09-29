@@ -1,95 +1,87 @@
 import FileHandler from './FileHandler.mjs'
 import IndexManager from './IndexManager.mjs'
-import { EventEmitter } from 'events'
-// import v8 from 'v8'
+import Serializer from './Serializer.mjs'
 
-export class Database extends EventEmitter {
+export class Database extends Serializer {
   constructor(filePath, opts={}) {
     super()
     this.opts = Object.assign({
-      indexes: {}
-      /*
-      serializer: {
-        parse: b => {
-          if(!Buffer.isBuffer(b)) {
-            b = Buffer.from(b)
-          }
-          return v8.deserialize(b)
-        },
-        stringify: v8.serialize
-      }
-      serializer: JSON
-      */
+      indexes: {},
+      v8: false,
+      compressIndex: false
     }, opts)
     this.shouldSave = false
-    this.serialize = JSON.stringify.bind(JSON)
-    this.deserialize = JSON.parse.bind(JSON)
     this.fileHandler = new FileHandler(filePath)
     this.indexManager = new IndexManager(this.opts)
     this.indexOffset = 0
-    this.exitListener = () => this.save(true).catch(console.error)
-    process.on('exit', this.exitListener) //code => { console.log('Processo está saindo com o código:', code);
+    if(this.opts.compressIndex) {
+      throw 'compressIndex is not supported yet'
+    }
   }
 
   use(plugin) {
     plugin(this)
   }
 
-  safeDeserialize(json) {
-    try {
-      return this.deserialize(json)
-    } catch (e) {                
-      console.error(e)
-      return null
-    }
-  }
-
   async init() {
     try {
       const lastLine = await this.fileHandler.readLastLine()
-      const offsets = this.deserialize(lastLine)
+      if(!lastLine || !lastLine.length) {
+        throw new Error('File does not exists or is a empty file')
+      }
+      const offsets = await this.deserialize(lastLine)
+      if(!Array.isArray(offsets)) {
+        throw new Error('File to parse offsets, expected an array')
+      }
       this.indexOffset = offsets[offsets.length - 2]
+      this.offsets = offsets
+      const ptr = this.locate(offsets.length - 2)
+      this.offsets = this.offsets.slice(0, -2)
       this.shouldTruncate = true
-      this.offsets = offsets.slice(0, -2)
-      const indexLine = await this.fileHandler.readRange(...this.locate(this.offsets.length - 2))
-      const index = this.deserialize(indexLine)
-      this.indexManager.index = index
+      let indexLine = await this.fileHandler.readRange(...ptr)
+      console.log('readen', indexLine.length, ptr, String(indexLine))
+      const index = await this.deserialize(indexLine, {compress: this.opts.compressIndex})
+      console.log({index})
+      if(index) {
+        this.indexManager.index = index
+        if (!this.indexManager.index.data) {
+          this.indexManager.index.data = {}
+        }
+      }
     } catch (e) {
-      this.offsets = []
+      if(!this.offsets) {
+        this.offsets = []
+      }
       this.indexOffset = 0
-      console.error('Error loading database:', e)
+      if(!String(e).includes('empty file')) {
+        console.error('Error loading database:', e)
+      }
     }
     this.initialized = true
     this.emit('init')
   }
 
-  async save(sync) {
-    const index = this.indexManager.index
-    for(const field in index.data) {
-        for(const term in index.data[field]) {
-            index.data[field][term] = [...index.data[field][term]] // set to array
-        }
+  async save() {
+    const index = {data: {}}
+    for(const field in this.indexManager.index.data) {
+      if(typeof(index.data[field]) === 'undefined') index.data[field] = {}
+      for(const term in this.indexManager.index.data[field]) {
+        if(typeof(index.data[field][term]) === 'undefined') index.data[field][term] = {}
+        index.data[field][term] = [...this.indexManager.index.data[field][term]] // set to array 
+      }
     }
     const offsets = this.offsets.slice(0)
-    const indexString = Buffer.from(this.serialize(index) +'\n')
+    const indexString = await this.serialize(index, {compress: this.opts.compressIndex})
     offsets.push(this.indexOffset)
     offsets.push(this.indexOffset + indexString.length)
-    const offsetsString = Buffer.from(this.serialize(offsets))
-    if(sync === true) {      
-      if (this.shouldTruncate) {
-        this.fileHandler.truncateSync(this.indexOffset)
+    const offsetsString = await this.serialize(offsets, {nl: false})
+    if (this.shouldTruncate) {
+        await this.fileHandler.truncate(this.indexOffset)
         this.shouldTruncate = false
-      }
-      this.fileHandler.writeDataSync(indexString) // Sincronizar escrita de dados
-      this.fileHandler.writeDataSync(offsetsString, true) // Sincronizar escrita de dados com append
-    } else {
-      if (this.shouldTruncate) {
-          await this.fileHandler.truncate(this.indexOffset)
-          this.shouldTruncate = false
-      }
-      await this.fileHandler.writeData(indexString)
-      await this.fileHandler.writeData(offsetsString, true)
     }
+    await this.fileHandler.writeData(indexString)
+    await this.fileHandler.writeData(offsetsString, true)
+    this.shouldTruncate = true
     this.shouldSave = false
   }
 
@@ -100,35 +92,40 @@ export class Database extends EventEmitter {
   }
 
   locate(n) {
-    const ret = {}
-    if (!this.offsets[n]) throw new Error(`Invalid line map at position ${n}`);
-    return [this.offsets[n], this.offsets[n + 1] || Number.MAX_SAFE_INTEGER]
+    if (this.offsets[n] === undefined) {
+      if(this.offsets[n - 1]) {
+        return [this.indexOffset, Number.MAX_SAFE_INTEGER]
+      }
+      return
+    }
+    let end = this.offsets[n + 1] || this.indexOffset || Number.MAX_SAFE_INTEGER
+    return [this.offsets[n], end]
   }
   
   getRanges(map) {
     return map.map(n => {
-        if(this.offsets[n] === undefined) return
-        const end = this.offsets[n + 1] ? (this.offsets[n + 1] - 1) : this.indexOffset
-        console.log('getRanges', {n, start: this.offsets[n], offset: this.indexOffset, next: this.offsets[n+1], end})
-        return {
-          start: this.offsets[n],
-          end
-        }
+        const ret = this.locate(n)
+        if(ret !== undefined) return {start: ret[0], end: ret[1], index: n}
     }).filter(n => n !== undefined)
   }
 
-  async readLines(map) {
-    console.log('map', map, this.offsets)
-    const ranges = this.getRanges(map)
-    console.log('ranges', ranges)
+  async readLines(map, ranges) {
+    if(!ranges) {
+      ranges = this.getRanges(map)
+    }
+    const results = []
     const lines = await this.fileHandler.readRanges(ranges)
-    console.log('lines', lines)
-    return Object.values(lines).map(l => this.safeDeserialize(l)).filter(s => s)
+    for(const l of Object.values(lines)) {
+      let err
+      const ret = await this.safeDeserialize(l).catch(e => err = e)
+      err || results.push(ret)
+    }
+    return results
   }
 
   async insert(data) {
     const position = this.offsets.length
-    const line = Buffer.from(this.serialize(data) +'\n') // using Buffer for offsets accuracy
+    const line = await this.serialize(data) // using Buffer for offsets accuracy
     if (this.shouldTruncate) {
         await this.fileHandler.truncate(this.indexOffset)
         this.shouldTruncate = false
@@ -147,8 +144,9 @@ export class Database extends EventEmitter {
     }
     const rl = this.fileHandler.iterate(map)
     for await (const line of rl) {
-      const e = this.safeDeserialize(line)
-      e && (yield e)
+      let err
+      const e = await this.safeDeserialize(line).catch(e => err = e)
+      err || (yield e)
     }
   }
        
@@ -182,46 +180,54 @@ export class Database extends EventEmitter {
         return []
     }
     const ranges = this.getRanges([...matchingLines])
-    const entries = await this.readLines([...matchingLines])
-    const lines = entries.map(entry => Object.assign(entry, data)).map(e => Buffer.from(this.serialize(e) +'\n'))
+    const validMatchingLines = new Set(ranges.map(r => r.index))
+    if (!validMatchingLines.size) {
+      return []
+    }
+    const entries = await this.readLines([...validMatchingLines], ranges)
+    const lines = []
+    for(const entry of entries) {
+      let err
+      const updated = Object.assign(entry, data)
+      const ret = await this.serialize(updated).catch(e => err = e)
+      err || lines.push(ret)
+    }
     const offsets = []
     let byteOffset = 0, k = 0
     this.offsets.forEach((n, i) => {
       const prevByteOffset = byteOffset
-      if (matchingLines.has(i)) {
+      if (validMatchingLines.has(i) && ranges[k]) {
         const r = ranges[k]
-        byteOffset += lines[k].length - (r.end - r.start) - 1
+        byteOffset += lines[k].length - (r.end - r.start)
         k++
       }
       offsets.push(n + prevByteOffset)
     })
     this.offsets = offsets
     this.indexOffset += byteOffset
-    console.log('replacingd', ranges, JSON.stringify(lines.map(b => String(b))))
     await this.fileHandler.replaceLines(ranges, lines);
-    [...matchingLines].forEach((lineNumber, i) => this.indexManager.add(entries[i], lineNumber))
+    [...validMatchingLines].forEach((lineNumber, i) => this.indexManager.add(entries[i], lineNumber))
     this.shouldSave = true
     return entries
   }
 
   async delete(criteria, options={}) {
-    console.log('delete')
     const matchingLines = await this.indexManager.query(criteria)
     if (!matchingLines || !matchingLines.size) {
         return 0
     }
     const ranges = this.getRanges([...matchingLines])
+    const validMatchingLines = new Set(ranges.map(r => r.index))
     await this.fileHandler.replaceLines(ranges, [])
     const replaces = new Map()
     const offsets = []
     let positionOffset = 0, byteOffset = 0, k = 0
     this.offsets.forEach((n, i) => {
       let skip
-      if (matchingLines.has(i)) {
+      if (validMatchingLines.has(i)) {
         const r = ranges[k]
         positionOffset--
-        byteOffset -= (r.end - r.start) + 1
-        console.log({byteOffset, positionOffset})
+        byteOffset -= (r.end - r.start)
         k++
         skip = true
       } else {
@@ -231,7 +237,6 @@ export class Database extends EventEmitter {
         offsets.push(n + byteOffset)
       }
     })
-    console.log('offsets~', {offsets, previous: this.offsets})
     this.offsets = offsets
     this.indexOffset += byteOffset
     this.indexManager.replace(replaces)
@@ -245,7 +250,6 @@ export class Database extends EventEmitter {
     this.indexManager.index = {}
     this.initialized = false
     this.fileHandler.destroy()
-    process.removeListener('exit', this.exitListener)
   }
 
 }

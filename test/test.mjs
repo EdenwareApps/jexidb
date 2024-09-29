@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import Database from '../src/Database.js';
+import { Database } from '../src/Database.mjs';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -11,13 +11,17 @@ const testFilePath = path.join(__dirname, 'test.jdb');
 
 // Function to clear the test file before each run
 const clearTestFile = () => {
-    fs.writeFileSync(testFilePath, '', { encoding: 'utf8' });
+    fs.writeFileSync(testFilePath, '', { encoding: null });
 };
 
 // Function to run the tests
 const runTests = async () => {
     clearTestFile(); // Clears the file before starting tests
-    const db = new Database(testFilePath, { indexes: {id: 'number'} });
+    const db = new Database(testFilePath, {
+        indexes: {id: 'number'},
+        v8: false,
+        compressIndex: false
+    }); // Instantiate the database
     
     // 1. Test if the instance is created correctly
     await db.init(); // Call init() right after instantiation
@@ -40,6 +44,7 @@ const runTests = async () => {
 
     // 5. Test data deletion
     await db.delete({ id: 1 });
+    
     results = await db.query([0, 1]);
     console.assert(results.length === 1, 'Test failed: Expected 1 entry after deletion.');
     console.assert(results[0].name === 'Bob', 'Test failed: Remaining entry is incorrect.');
@@ -47,7 +52,7 @@ const runTests = async () => {
     // 6. Test reading lines
     await db.insert({ id: 3, name: 'Charlie' });
     await db.insert({ id: 4, name: 'Diana' });
-    results = await db.readLines([0, 1, 2]);
+    results = await db.query([0, 1, 2]);
     console.assert(results.length === 3, 'Test failed: Expected 3 entries when reading lines.');
 
     // 7. Test query with criteria

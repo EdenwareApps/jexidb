@@ -11,7 +11,7 @@
     }
   },
   "scripts": {
-    "build": "npx babel src/Database.mjs --out-file-extension .cjs --out-dir dist",
+    "build": "npx babel src/Database.mjs --plugins @babel/plugin-transform-async-generator-functions --out-file-extension .cjs --out-dir dist",
     "postinstall": "npm run build"
   },
   "author": "EdenwareApps",

@@ -10,6 +10,12 @@ export default class IndexManager {
   }
 
   add(row, lineNumber) {
+    if (typeof row !== 'object' || !row) {
+      throw new Error('Invalid \'row\' parameter, it must be an object')
+    }
+    if (typeof lineNumber !== 'number') {
+      throw new Error('Invalid line number')
+    }
     for (const field in this.index.data) {
       if (row[field]) {
         const values = Array.isArray(row[field]) ? row[field] : [row[field]]
@@ -39,12 +45,12 @@ export default class IndexManager {
   replace(map) {
     for (const field in this.index.data) {
       for (const value in this.index.data[field]) {
-        this.index.data[field][value].forEach(lineNumber => {
+        for(const lineNumber of this.index.data[field][value]) {
           if (map.has(lineNumber)) {
             this.index.data[field][value].delete(lineNumber)
             this.index.data[field][value].add(map.get(lineNumber))
           }
-        })
+        }
       }
     }
   }
@@ -54,11 +60,11 @@ export default class IndexManager {
     if (!fields.length) throw new Error('No query criteria provided')
     let matchingLines = matchAny ? new Set() : null
     for (const field of fields) {
+      if (typeof(this.index.data[field]) == 'undefined') continue
       const criteriaValue = criteria[field]
       let lineNumbersForField = new Set()
-      if (!this.index.data[field]) continue
       const isNumericField = this.opts.indexes[field] === 'number'
-      if (typeof criteriaValue === 'object' && !Array.isArray(criteriaValue)) {
+      if (typeof(criteriaValue) === 'object' && !Array.isArray(criteriaValue)) {
         const fieldIndex = this.index.data[field];
         for (const value in fieldIndex) {
           let includeValue = true
@@ -106,7 +112,6 @@ export default class IndexManager {
 
           if (includeValue) {
             for (const lineNumber of fieldIndex[value]) {
-              console.log('lineNumber', lineNumber)
               lineNumbersForField.add(lineNumber);
             }
           }
@@ -116,13 +121,11 @@ export default class IndexManager {
         for (const value of values) {
           if (this.index.data[field][value]) {
             for (const lineNumber of this.index.data[field][value]) {
-              console.log('lineNumber', lineNumber)
               lineNumbersForField.add(lineNumber);
             }
           }
         }
       }
-      console.log('matchingLines', matchingLines, matchAny)
       if (matchAny) {
         matchingLines = new Set([...matchingLines, ...lineNumbersForField]);
       } else {
@@ -131,7 +134,6 @@ export default class IndexManager {
         } else {
           matchingLines = new Set([...matchingLines].filter(n => lineNumbersForField.has(n)));
         }
-        console.log('matchingLines-', matchingLines)
         if (!matchingLines.size) {
           return new Set()
         }
