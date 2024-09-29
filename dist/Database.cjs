@@ -7,8 +7,9 @@ Object.defineProperty(exports, "__esModule", {
 exports.Database = void 0;
 var _FileHandler = _interopRequireDefault(require("./FileHandler.mjs"));
 var _IndexManager = _interopRequireDefault(require("./IndexManager.mjs"));
-var _events = require("events");
+var _Serializer2 = _interopRequireDefault(require("./Serializer.mjs"));
 function _interopRequireDefault(e) { return e && e.__esModule ? e : { "default": e }; }
+function _createForOfIteratorHelper(r, e) { var t = "undefined" != typeof Symbol && r[Symbol.iterator] || r["@@iterator"]; if (!t) { if (Array.isArray(r) || (t = _unsupportedIterableToArray(r)) || e && r && "number" == typeof r.length) { t && (r = t); var _n = 0, F = function F() {}; return { s: F, n: function n() { return _n >= r.length ? { done: !0 } : { done: !1, value: r[_n++] }; }, e: function e(r) { throw r; }, f: F }; } throw new TypeError("Invalid attempt to iterate non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method."); } var o, a = !0, u = !1; return { s: function s() { t = t.call(r); }, n: function n() { var r = t.next(); return a = r.done, r; }, e: function e(r) { u = !0, o = r; }, f: function f() { try { a || null == t["return"] || t["return"](); } finally { if (u) throw o; } } }; }
 function _slicedToArray(r, e) { return _arrayWithHoles(r) || _iterableToArrayLimit(r, e) || _unsupportedIterableToArray(r, e) || _nonIterableRest(); }
 function _nonIterableRest() { throw new TypeError("Invalid attempt to destructure non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method."); }
 function _iterableToArrayLimit(r, l) { var t = null == r ? null : "undefined" != typeof Symbol && r[Symbol.iterator] || r["@@iterator"]; if (null != t) { var e, n, i, u, a = [], f = !0, o = !1; try { if (i = (t = t.call(r)).next, 0 === l) { if (Object(t) !== t) return; f = !1; } else for (; !(f = (e = i.call(t)).done) && (a.push(e.value), a.length !== l); f = !0); } catch (r) { o = !0, n = r; } finally { try { if (!f && null != t["return"] && (u = t["return"](), Object(u) !== u)) return; } finally { if (o) throw n; } } return a; } }
@@ -41,95 +42,115 @@ AsyncGenerator.prototype["function" == typeof Symbol && Symbol.asyncIterator || 
 function _OverloadYield(e, d) { this.v = e, this.k = d; }
 function _asyncIterator(r) { var n, t, o, e = 2; for ("undefined" != typeof Symbol && (t = Symbol.asyncIterator, o = Symbol.iterator); e--;) { if (t && null != (n = r[t])) return n.call(r); if (o && null != (n = r[o])) return new AsyncFromSyncIterator(n.call(r)); t = "@@asyncIterator", o = "@@iterator"; } throw new TypeError("Object is not async iterable"); }
 function AsyncFromSyncIterator(r) { function AsyncFromSyncIteratorContinuation(r) { if (Object(r) !== r) return Promise.reject(new TypeError(r + " is not an object.")); var n = r.done; return Promise.resolve(r.value).then(function (r) { return { value: r, done: n }; }); } return AsyncFromSyncIterator = function AsyncFromSyncIterator(r) { this.s = r, this.n = r.next; }, AsyncFromSyncIterator.prototype = { s: null, n: null, next: function next() { return AsyncFromSyncIteratorContinuation(this.n.apply(this.s, arguments)); }, "return": function _return(r) { var n = this.s["return"]; return void 0 === n ? Promise.resolve({ value: r, done: !0 }) : AsyncFromSyncIteratorContinuation(n.apply(this.s, arguments)); }, "throw": function _throw(r) { var n = this.s["return"]; return void 0 === n ? Promise.reject(r) : AsyncFromSyncIteratorContinuation(n.apply(this.s, arguments)); } }, new AsyncFromSyncIterator(r); }
-// import v8 from 'v8'
-var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
+var Database = exports.Database = /*#__PURE__*/function (_Serializer) {
   function Database(filePath) {
     var _this2;
     var opts = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
     _classCallCheck(this, Database);
     _this2 = _callSuper(this, Database);
     _this2.opts = Object.assign({
-      indexes: {}
-      /*
-      serializer: {
-        parse: b => {
-          if(!Buffer.isBuffer(b)) {
-            b = Buffer.from(b)
-          }
-          return v8.deserialize(b)
-        },
-        stringify: v8.serialize
-      }
-      serializer: JSON
-      */
+      indexes: {},
+      v8: false,
+      compressIndex: false
     }, opts);
     _this2.shouldSave = false;
-    _this2.serialize = JSON.stringify.bind(JSON);
-    _this2.deserialize = JSON.parse.bind(JSON);
     _this2.fileHandler = new _FileHandler["default"](filePath);
     _this2.indexManager = new _IndexManager["default"](_this2.opts);
     _this2.indexOffset = 0;
-    _this2.exitListener = function () {
-      return _this2.save(true)["catch"](console.error);
-    };
-    process.on('exit', _this2.exitListener); //code => { console.log('Processo está saindo com o código:', code);
+    if (_this2.opts.compressIndex) {
+      throw 'compressIndex is not supported yet';
+    }
     return _this2;
   }
-  _inherits(Database, _EventEmitter);
+  _inherits(Database, _Serializer);
   return _createClass(Database, [{
     key: "use",
     value: function use(plugin) {
       plugin(this);
     }
   }, {
-    key: "safeDeserialize",
-    value: function safeDeserialize(json) {
-      try {
-        return this.deserialize(json);
-      } catch (e) {
-        console.error(e);
-        return null;
-      }
-    }
-  }, {
     key: "init",
     value: function () {
       var _init = _asyncToGenerator(/*#__PURE__*/_regeneratorRuntime().mark(function _callee() {
-        var _this$fileHandler, lastLine, offsets, indexLine, index;
+        var _this$fileHandler, lastLine, offsets, ptr, indexLine, index;
         return _regeneratorRuntime().wrap(function _callee$(_context) {
           while (1) switch (_context.prev = _context.next) {
             case 0:
               _context.prev = 0;
-              _context.next = 3;
+              if (!this.opts.clear) {
+                _context.next = 5;
+                break;
+              }
+              _context.next = 4;
+              return this.fileHandler.truncate(0)["catch"](console.error);
+            case 4:
+              throw new Error('Cleared, empty file');
+            case 5:
+              _context.next = 7;
               return this.fileHandler.readLastLine();
-            case 3:
+            case 7:
               lastLine = _context.sent;
-              offsets = this.deserialize(lastLine);
-              this.indexOffset = offsets[offsets.length - 2];
-              this.shouldTruncate = true;
-              this.offsets = offsets.slice(0, -2);
-              _context.next = 10;
-              return (_this$fileHandler = this.fileHandler).readRange.apply(_this$fileHandler, _toConsumableArray(this.locate(this.offsets.length - 2)));
+              if (!(!lastLine || !lastLine.length)) {
+                _context.next = 10;
+                break;
+              }
+              throw new Error('File does not exists or is a empty file');
             case 10:
-              indexLine = _context.sent;
-              index = this.deserialize(indexLine);
-              this.indexManager.index = index;
-              _context.next = 20;
-              break;
+              _context.next = 12;
+              return this.deserialize(lastLine);
+            case 12:
+              offsets = _context.sent;
+              if (Array.isArray(offsets)) {
+                _context.next = 15;
+                break;
+              }
+              throw new Error('File to parse offsets, expected an array');
             case 15:
-              _context.prev = 15;
+              this.indexOffset = offsets[offsets.length - 2];
+              this.offsets = offsets;
+              ptr = this.locate(offsets.length - 2);
+              this.offsets = this.offsets.slice(0, -2);
+              this.shouldTruncate = true;
+              _context.next = 22;
+              return (_this$fileHandler = this.fileHandler).readRange.apply(_this$fileHandler, _toConsumableArray(ptr));
+            case 22:
+              indexLine = _context.sent;
+              console.log('readen', indexLine.length, ptr, String(indexLine));
+              _context.next = 26;
+              return this.deserialize(indexLine, {
+                compress: this.opts.compressIndex
+              });
+            case 26:
+              index = _context.sent;
+              console.log({
+                index: index
+              });
+              if (index) {
+                this.indexManager.index = index;
+                if (!this.indexManager.index.data) {
+                  this.indexManager.index.data = {};
+                }
+              }
+              _context.next = 36;
+              break;
+            case 31:
+              _context.prev = 31;
               _context.t0 = _context["catch"](0);
-              this.offsets = [];
+              if (!this.offsets) {
+                this.offsets = [];
+              }
               this.indexOffset = 0;
-              console.error('Error loading database:', _context.t0);
-            case 20:
+              if (!String(_context.t0).includes('empty file')) {
+                console.error('Error loading database:', _context.t0);
+              }
+            case 36:
               this.initialized = true;
               this.emit('init');
-            case 22:
+            case 38:
             case "end":
               return _context.stop();
           }
-        }, _callee, this, [[0, 15]]);
+        }, _callee, this, [[0, 31]]);
       }));
       function init() {
         return _init.apply(this, arguments);
@@ -139,50 +160,53 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
   }, {
     key: "save",
     value: function () {
-      var _save = _asyncToGenerator(/*#__PURE__*/_regeneratorRuntime().mark(function _callee2(sync) {
+      var _save = _asyncToGenerator(/*#__PURE__*/_regeneratorRuntime().mark(function _callee2() {
         var index, field, term, offsets, indexString, offsetsString;
         return _regeneratorRuntime().wrap(function _callee2$(_context2) {
           while (1) switch (_context2.prev = _context2.next) {
             case 0:
-              index = this.indexManager.index;
-              for (field in index.data) {
-                for (term in index.data[field]) {
-                  index.data[field][term] = _toConsumableArray(index.data[field][term]); // set to array
+              this.emit('before-save');
+              index = {
+                data: {}
+              };
+              for (field in this.indexManager.index.data) {
+                if (typeof index.data[field] === 'undefined') index.data[field] = {};
+                for (term in this.indexManager.index.data[field]) {
+                  if (typeof index.data[field][term] === 'undefined') index.data[field][term] = {};
+                  index.data[field][term] = _toConsumableArray(this.indexManager.index.data[field][term]); // set to array 
                 }
               }
               offsets = this.offsets.slice(0);
-              indexString = Buffer.from(this.serialize(index) + '\n');
+              _context2.next = 6;
+              return this.serialize(index, {
+                compress: this.opts.compressIndex
+              });
+            case 6:
+              indexString = _context2.sent;
               offsets.push(this.indexOffset);
               offsets.push(this.indexOffset + indexString.length);
-              offsetsString = Buffer.from(this.serialize(offsets));
-              if (!(sync === true)) {
-                _context2.next = 13;
-                break;
-              }
-              if (this.shouldTruncate) {
-                this.fileHandler.truncateSync(this.indexOffset);
-                this.shouldTruncate = false;
-              }
-              this.fileHandler.writeDataSync(indexString); // Sincronizar escrita de dados
-              this.fileHandler.writeDataSync(offsetsString, true); // Sincronizar escrita de dados com append
-              _context2.next = 21;
-              break;
-            case 13:
+              _context2.next = 11;
+              return this.serialize(offsets, {
+                nl: false
+              });
+            case 11:
+              offsetsString = _context2.sent;
               if (!this.shouldTruncate) {
-                _context2.next = 17;
+                _context2.next = 16;
                 break;
               }
-              _context2.next = 16;
+              _context2.next = 15;
               return this.fileHandler.truncate(this.indexOffset);
-            case 16:
+            case 15:
               this.shouldTruncate = false;
-            case 17:
-              _context2.next = 19;
+            case 16:
+              _context2.next = 18;
               return this.fileHandler.writeData(indexString);
-            case 19:
-              _context2.next = 21;
+            case 18:
+              _context2.next = 20;
               return this.fileHandler.writeData(offsetsString, true);
-            case 21:
+            case 20:
+              this.shouldTruncate = true;
               this.shouldSave = false;
             case 22:
             case "end":
@@ -190,7 +214,7 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
           }
         }, _callee2, this);
       }));
-      function save(_x) {
+      function save() {
         return _save.apply(this, arguments);
       }
       return save;
@@ -225,27 +249,25 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
   }, {
     key: "locate",
     value: function locate(n) {
-      var ret = {};
-      if (!this.offsets[n]) throw new Error("Invalid line map at position ".concat(n));
-      return [this.offsets[n], this.offsets[n + 1] || Number.MAX_SAFE_INTEGER];
+      if (this.offsets[n] === undefined) {
+        if (this.offsets[n - 1]) {
+          return [this.indexOffset, Number.MAX_SAFE_INTEGER];
+        }
+        return;
+      }
+      var end = this.offsets[n + 1] || this.indexOffset || Number.MAX_SAFE_INTEGER;
+      return [this.offsets[n], end];
     }
   }, {
     key: "getRanges",
     value: function getRanges(map) {
       var _this4 = this;
       return map.map(function (n) {
-        if (_this4.offsets[n] === undefined) return;
-        var end = _this4.offsets[n + 1] ? _this4.offsets[n + 1] - 1 : _this4.indexOffset;
-        console.log('getRanges', {
-          n: n,
-          start: _this4.offsets[n],
-          offset: _this4.indexOffset,
-          next: _this4.offsets[n + 1],
-          end: end
-        });
-        return {
-          start: _this4.offsets[n],
-          end: end
+        var ret = _this4.locate(n);
+        if (ret !== undefined) return {
+          start: ret[0],
+          end: ret[1],
+          index: n
         };
       }).filter(function (n) {
         return n !== undefined;
@@ -254,32 +276,59 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
   }, {
     key: "readLines",
     value: function () {
-      var _readLines = _asyncToGenerator(/*#__PURE__*/_regeneratorRuntime().mark(function _callee4(map) {
+      var _readLines = _asyncToGenerator(/*#__PURE__*/_regeneratorRuntime().mark(function _callee4(map, ranges) {
         var _this5 = this;
-        var ranges, lines;
-        return _regeneratorRuntime().wrap(function _callee4$(_context4) {
-          while (1) switch (_context4.prev = _context4.next) {
+        var results, lines, _loop, _i, _Object$values;
+        return _regeneratorRuntime().wrap(function _callee4$(_context5) {
+          while (1) switch (_context5.prev = _context5.next) {
             case 0:
-              console.log('map', map, this.offsets);
-              ranges = this.getRanges(map);
-              console.log('ranges', ranges);
-              _context4.next = 5;
+              if (!ranges) {
+                ranges = this.getRanges(map);
+              }
+              results = [];
+              _context5.next = 4;
               return this.fileHandler.readRanges(ranges);
-            case 5:
-              lines = _context4.sent;
-              console.log('lines', lines);
-              return _context4.abrupt("return", Object.values(lines).map(function (l) {
-                return _this5.safeDeserialize(l);
-              }).filter(function (s) {
-                return s;
-              }));
-            case 8:
+            case 4:
+              lines = _context5.sent;
+              _loop = /*#__PURE__*/_regeneratorRuntime().mark(function _loop() {
+                var l, err, ret;
+                return _regeneratorRuntime().wrap(function _loop$(_context4) {
+                  while (1) switch (_context4.prev = _context4.next) {
+                    case 0:
+                      l = _Object$values[_i];
+                      _context4.next = 3;
+                      return _this5.safeDeserialize(l)["catch"](function (e) {
+                        return err = e;
+                      });
+                    case 3:
+                      ret = _context4.sent;
+                      err || results.push(ret);
+                    case 5:
+                    case "end":
+                      return _context4.stop();
+                  }
+                }, _loop);
+              });
+              _i = 0, _Object$values = Object.values(lines);
+            case 7:
+              if (!(_i < _Object$values.length)) {
+                _context5.next = 12;
+                break;
+              }
+              return _context5.delegateYield(_loop(), "t0", 9);
+            case 9:
+              _i++;
+              _context5.next = 7;
+              break;
+            case 12:
+              return _context5.abrupt("return", results);
+            case 13:
             case "end":
-              return _context4.stop();
+              return _context5.stop();
           }
         }, _callee4, this);
       }));
-      function readLines(_x2) {
+      function readLines(_x, _x2) {
         return _readLines.apply(this, arguments);
       }
       return readLines;
@@ -289,30 +338,34 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
     value: function () {
       var _insert = _asyncToGenerator(/*#__PURE__*/_regeneratorRuntime().mark(function _callee5(data) {
         var position, line;
-        return _regeneratorRuntime().wrap(function _callee5$(_context5) {
-          while (1) switch (_context5.prev = _context5.next) {
+        return _regeneratorRuntime().wrap(function _callee5$(_context6) {
+          while (1) switch (_context6.prev = _context6.next) {
             case 0:
               position = this.offsets.length;
-              line = Buffer.from(this.serialize(data) + '\n'); // using Buffer for offsets accuracy
+              _context6.next = 3;
+              return this.serialize(data);
+            case 3:
+              line = _context6.sent;
               if (!this.shouldTruncate) {
-                _context5.next = 6;
+                _context6.next = 8;
                 break;
               }
-              _context5.next = 5;
+              _context6.next = 7;
               return this.fileHandler.truncate(this.indexOffset);
-            case 5:
+            case 7:
               this.shouldTruncate = false;
-            case 6:
-              _context5.next = 8;
-              return this.fileHandler.writeData(line);
             case 8:
+              _context6.next = 10;
+              return this.fileHandler.writeData(line);
+            case 10:
               this.offsets.push(this.indexOffset);
               this.indexOffset += line.length;
               this.indexManager.add(data, position);
               this.shouldSave = true;
-            case 12:
+              this.emit('insert', data, position);
+            case 15:
             case "end":
-              return _context5.stop();
+              return _context6.stop();
           }
         }, _callee5, this);
       }));
@@ -327,15 +380,15 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
       var _this = this;
       var options = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
       return _wrapAsyncGenerator(/*#__PURE__*/_regeneratorRuntime().mark(function _callee6() {
-        var rl, _iteratorAbruptCompletion, _didIteratorError, _iteratorError, _iterator, _step, line, _e;
-        return _regeneratorRuntime().wrap(function _callee6$(_context6) {
-          while (1) switch (_context6.prev = _context6.next) {
+        var rl, _iteratorAbruptCompletion, _didIteratorError, _iteratorError, _loop2, _iterator, _step;
+        return _regeneratorRuntime().wrap(function _callee6$(_context8) {
+          while (1) switch (_context8.prev = _context8.next) {
             case 0:
               if (!(_this.indexOffset === 0)) {
-                _context6.next = 2;
+                _context8.next = 2;
                 break;
               }
-              return _context6.abrupt("return");
+              return _context8.abrupt("return");
             case 2:
               if (!Array.isArray(map)) {
                 map = _this.indexManager.query(map, options.matchAny);
@@ -343,62 +396,79 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
               rl = _this.fileHandler.iterate(map);
               _iteratorAbruptCompletion = false;
               _didIteratorError = false;
-              _context6.prev = 6;
+              _context8.prev = 6;
+              _loop2 = /*#__PURE__*/_regeneratorRuntime().mark(function _loop2() {
+                var line, err, _e;
+                return _regeneratorRuntime().wrap(function _loop2$(_context7) {
+                  while (1) switch (_context7.prev = _context7.next) {
+                    case 0:
+                      line = _step.value;
+                      _context7.next = 3;
+                      return _awaitAsyncGenerator(_this.safeDeserialize(line)["catch"](function (e) {
+                        return err = e;
+                      }));
+                    case 3:
+                      _e = _context7.sent;
+                      _context7.t0 = err;
+                      if (_context7.t0) {
+                        _context7.next = 8;
+                        break;
+                      }
+                      _context7.next = 8;
+                      return _e;
+                    case 8:
+                    case "end":
+                      return _context7.stop();
+                  }
+                }, _loop2);
+              });
               _iterator = _asyncIterator(rl);
-            case 8:
-              _context6.next = 10;
+            case 9:
+              _context8.next = 11;
               return _awaitAsyncGenerator(_iterator.next());
-            case 10:
-              if (!(_iteratorAbruptCompletion = !(_step = _context6.sent).done)) {
-                _context6.next = 20;
+            case 11:
+              if (!(_iteratorAbruptCompletion = !(_step = _context8.sent).done)) {
+                _context8.next = 16;
                 break;
               }
-              line = _step.value;
-              _e = _this.safeDeserialize(line);
-              _context6.t0 = _e;
-              if (!_context6.t0) {
-                _context6.next = 17;
-                break;
-              }
-              _context6.next = 17;
-              return _e;
-            case 17:
+              return _context8.delegateYield(_loop2(), "t0", 13);
+            case 13:
               _iteratorAbruptCompletion = false;
-              _context6.next = 8;
+              _context8.next = 9;
               break;
-            case 20:
-              _context6.next = 26;
+            case 16:
+              _context8.next = 22;
               break;
-            case 22:
-              _context6.prev = 22;
-              _context6.t1 = _context6["catch"](6);
+            case 18:
+              _context8.prev = 18;
+              _context8.t1 = _context8["catch"](6);
               _didIteratorError = true;
-              _iteratorError = _context6.t1;
-            case 26:
-              _context6.prev = 26;
-              _context6.prev = 27;
+              _iteratorError = _context8.t1;
+            case 22:
+              _context8.prev = 22;
+              _context8.prev = 23;
               if (!(_iteratorAbruptCompletion && _iterator["return"] != null)) {
-                _context6.next = 31;
+                _context8.next = 27;
                 break;
               }
-              _context6.next = 31;
+              _context8.next = 27;
               return _awaitAsyncGenerator(_iterator["return"]());
-            case 31:
-              _context6.prev = 31;
+            case 27:
+              _context8.prev = 27;
               if (!_didIteratorError) {
-                _context6.next = 34;
+                _context8.next = 30;
                 break;
               }
               throw _iteratorError;
-            case 34:
-              return _context6.finish(31);
-            case 35:
-              return _context6.finish(26);
-            case 36:
+            case 30:
+              return _context8.finish(27);
+            case 31:
+              return _context8.finish(22);
+            case 32:
             case "end":
-              return _context6.stop();
+              return _context8.stop();
           }
-        }, _callee6, null, [[6, 22, 26, 36], [27,, 31, 35]]);
+        }, _callee6, null, [[6, 18, 22, 32], [23,, 27, 31]]);
       }))();
     }
   }, {
@@ -413,19 +483,19 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
           _options$orderBy$spli3,
           direction,
           matchingLines,
-          _args7 = arguments;
-        return _regeneratorRuntime().wrap(function _callee7$(_context7) {
-          while (1) switch (_context7.prev = _context7.next) {
+          _args9 = arguments;
+        return _regeneratorRuntime().wrap(function _callee7$(_context9) {
+          while (1) switch (_context9.prev = _context9.next) {
             case 0:
-              options = _args7.length > 1 && _args7[1] !== undefined ? _args7[1] : {};
+              options = _args9.length > 1 && _args9[1] !== undefined ? _args9[1] : {};
               if (!Array.isArray(criteria)) {
-                _context7.next = 10;
+                _context9.next = 10;
                 break;
               }
-              _context7.next = 4;
+              _context9.next = 4;
               return this.readLines(criteria);
             case 4:
-              results = _context7.sent;
+              results = _context9.sent;
               if (options.orderBy) {
                 _options$orderBy$spli = options.orderBy.split(' '), _options$orderBy$spli2 = _slicedToArray(_options$orderBy$spli, 2), field = _options$orderBy$spli2[0], _options$orderBy$spli3 = _options$orderBy$spli2[1], direction = _options$orderBy$spli3 === void 0 ? 'asc' : _options$orderBy$spli3;
                 results.sort(function (a, b) {
@@ -437,25 +507,25 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
               if (options.limit) {
                 results = results.slice(0, options.limit);
               }
-              return _context7.abrupt("return", results);
+              return _context9.abrupt("return", results);
             case 10:
-              _context7.next = 12;
+              _context9.next = 12;
               return this.indexManager.query(criteria, options.matchAny);
             case 12:
-              matchingLines = _context7.sent;
+              matchingLines = _context9.sent;
               if (!(!matchingLines || !matchingLines.size)) {
-                _context7.next = 15;
+                _context9.next = 15;
                 break;
               }
-              return _context7.abrupt("return", []);
+              return _context9.abrupt("return", []);
             case 15:
-              _context7.next = 17;
+              _context9.next = 17;
               return this.query(_toConsumableArray(matchingLines), options);
             case 17:
-              return _context7.abrupt("return", _context7.sent);
+              return _context9.abrupt("return", _context9.sent);
             case 18:
             case "end":
-              return _context7.stop();
+              return _context9.stop();
           }
         }, _callee7, this);
       }));
@@ -472,65 +542,115 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
         var options,
           matchingLines,
           ranges,
+          validMatchingLines,
           entries,
           lines,
+          _iterator2,
+          _step2,
+          _loop3,
           offsets,
           byteOffset,
           k,
-          _args8 = arguments;
-        return _regeneratorRuntime().wrap(function _callee8$(_context8) {
-          while (1) switch (_context8.prev = _context8.next) {
+          _args11 = arguments;
+        return _regeneratorRuntime().wrap(function _callee8$(_context11) {
+          while (1) switch (_context11.prev = _context11.next) {
             case 0:
-              options = _args8.length > 2 && _args8[2] !== undefined ? _args8[2] : {};
-              _context8.next = 3;
+              options = _args11.length > 2 && _args11[2] !== undefined ? _args11[2] : {};
+              _context11.next = 3;
               return this.indexManager.query(criteria);
             case 3:
-              matchingLines = _context8.sent;
+              matchingLines = _context11.sent;
               if (!(!matchingLines || !matchingLines.size)) {
-                _context8.next = 6;
+                _context11.next = 6;
                 break;
               }
-              return _context8.abrupt("return", []);
+              return _context11.abrupt("return", []);
             case 6:
               ranges = this.getRanges(_toConsumableArray(matchingLines));
-              _context8.next = 9;
-              return this.readLines(_toConsumableArray(matchingLines));
-            case 9:
-              entries = _context8.sent;
-              lines = entries.map(function (entry) {
-                return Object.assign(entry, data);
-              }).map(function (e) {
-                return Buffer.from(_this6.serialize(e) + '\n');
+              validMatchingLines = new Set(ranges.map(function (r) {
+                return r.index;
+              }));
+              if (validMatchingLines.size) {
+                _context11.next = 10;
+                break;
+              }
+              return _context11.abrupt("return", []);
+            case 10:
+              _context11.next = 12;
+              return this.readLines(_toConsumableArray(validMatchingLines), ranges);
+            case 12:
+              entries = _context11.sent;
+              lines = [];
+              _iterator2 = _createForOfIteratorHelper(entries);
+              _context11.prev = 15;
+              _loop3 = /*#__PURE__*/_regeneratorRuntime().mark(function _loop3() {
+                var entry, err, updated, ret;
+                return _regeneratorRuntime().wrap(function _loop3$(_context10) {
+                  while (1) switch (_context10.prev = _context10.next) {
+                    case 0:
+                      entry = _step2.value;
+                      updated = Object.assign(entry, data);
+                      _context10.next = 4;
+                      return _this6.serialize(updated)["catch"](function (e) {
+                        return err = e;
+                      });
+                    case 4:
+                      ret = _context10.sent;
+                      err || lines.push(ret);
+                    case 6:
+                    case "end":
+                      return _context10.stop();
+                  }
+                }, _loop3);
               });
+              _iterator2.s();
+            case 18:
+              if ((_step2 = _iterator2.n()).done) {
+                _context11.next = 22;
+                break;
+              }
+              return _context11.delegateYield(_loop3(), "t0", 20);
+            case 20:
+              _context11.next = 18;
+              break;
+            case 22:
+              _context11.next = 27;
+              break;
+            case 24:
+              _context11.prev = 24;
+              _context11.t1 = _context11["catch"](15);
+              _iterator2.e(_context11.t1);
+            case 27:
+              _context11.prev = 27;
+              _iterator2.f();
+              return _context11.finish(27);
+            case 30:
               offsets = [];
               byteOffset = 0, k = 0;
               this.offsets.forEach(function (n, i) {
                 var prevByteOffset = byteOffset;
-                if (matchingLines.has(i)) {
+                if (validMatchingLines.has(i) && ranges[k]) {
                   var r = ranges[k];
-                  byteOffset += lines[k].length - (r.end - r.start) - 1;
+                  byteOffset += lines[k].length - (r.end - r.start);
                   k++;
                 }
                 offsets.push(n + prevByteOffset);
               });
               this.offsets = offsets;
               this.indexOffset += byteOffset;
-              console.log('replacingd', ranges, JSON.stringify(lines.map(function (b) {
-                return String(b);
-              })));
-              _context8.next = 19;
+              _context11.next = 37;
               return this.fileHandler.replaceLines(ranges, lines);
-            case 19:
-              _toConsumableArray(matchingLines).forEach(function (lineNumber, i) {
+            case 37:
+              _toConsumableArray(validMatchingLines).forEach(function (lineNumber, i) {
                 return _this6.indexManager.add(entries[i], lineNumber);
               });
               this.shouldSave = true;
-              return _context8.abrupt("return", entries);
-            case 22:
+              return _context11.abrupt("return", entries);
+            case 40:
             case "end":
-              return _context8.stop();
+              return _context11.stop();
           }
-        }, _callee8, this);
+        }, _callee8, this, [[15, 24, 27, 30]]);
       }));
       function update(_x5, _x6) {
         return _update.apply(this, arguments);
@@ -544,29 +664,32 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
         var options,
           matchingLines,
           ranges,
+          validMatchingLines,
           replaces,
           offsets,
           positionOffset,
           byteOffset,
           k,
-          _args9 = arguments;
-        return _regeneratorRuntime().wrap(function _callee9$(_context9) {
-          while (1) switch (_context9.prev = _context9.next) {
+          _args12 = arguments;
+        return _regeneratorRuntime().wrap(function _callee9$(_context12) {
+          while (1) switch (_context12.prev = _context12.next) {
             case 0:
-              options = _args9.length > 1 && _args9[1] !== undefined ? _args9[1] : {};
-              console.log('delete');
-              _context9.next = 4;
+              options = _args12.length > 1 && _args12[1] !== undefined ? _args12[1] : {};
+              _context12.next = 3;
               return this.indexManager.query(criteria);
-            case 4:
-              matchingLines = _context9.sent;
+            case 3:
+              matchingLines = _context12.sent;
               if (!(!matchingLines || !matchingLines.size)) {
-                _context9.next = 7;
+                _context12.next = 6;
                 break;
               }
-              return _context9.abrupt("return", 0);
-            case 7:
+              return _context12.abrupt("return", 0);
+            case 6:
               ranges = this.getRanges(_toConsumableArray(matchingLines));
-              _context9.next = 10;
+              validMatchingLines = new Set(ranges.map(function (r) {
+                return r.index;
+              }));
+              _context12.next = 10;
               return this.fileHandler.replaceLines(ranges, []);
             case 10:
               replaces = new Map();
@@ -574,14 +697,10 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
               positionOffset = 0, byteOffset = 0, k = 0;
               this.offsets.forEach(function (n, i) {
                 var skip;
-                if (matchingLines.has(i)) {
+                if (validMatchingLines.has(i)) {
                   var r = ranges[k];
                   positionOffset--;
-                  byteOffset -= r.end - r.start + 1;
-                  console.log({
-                    byteOffset: byteOffset,
-                    positionOffset: positionOffset
-                  });
+                  byteOffset -= r.end - r.start;
                   k++;
                   skip = true;
                 } else {
@@ -591,18 +710,14 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
                   offsets.push(n + byteOffset);
                 }
               });
-              console.log('offsets~', {
-                offsets: offsets,
-                previous: this.offsets
-              });
               this.offsets = offsets;
               this.indexOffset += byteOffset;
               this.indexManager.replace(replaces);
               this.shouldSave = true;
-              return _context9.abrupt("return", ranges.length);
-            case 20:
+              return _context12.abrupt("return", ranges.length);
+            case 19:
             case "end":
-              return _context9.stop();
+              return _context12.stop();
           }
         }, _callee9, this);
       }));
@@ -615,25 +730,24 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
     key: "destroy",
     value: function () {
       var _destroy = _asyncToGenerator(/*#__PURE__*/_regeneratorRuntime().mark(function _callee10() {
-        return _regeneratorRuntime().wrap(function _callee10$(_context10) {
-          while (1) switch (_context10.prev = _context10.next) {
+        return _regeneratorRuntime().wrap(function _callee10$(_context13) {
+          while (1) switch (_context13.prev = _context13.next) {
             case 0:
-              _context10.t0 = this.shouldSave;
-              if (!_context10.t0) {
-                _context10.next = 4;
+              _context13.t0 = this.shouldSave;
+              if (!_context13.t0) {
+                _context13.next = 4;
                 break;
               }
-              _context10.next = 4;
+              _context13.next = 4;
               return this.save();
             case 4:
               this.indexOffset = 0;
               this.indexManager.index = {};
               this.initialized = false;
               this.fileHandler.destroy();
-              process.removeListener('exit', this.exitListener);
-            case 9:
+            case 8:
             case "end":
-              return _context10.stop();
+              return _context13.stop();
           }
         }, _callee10, this);
       }));
@@ -642,5 +756,15 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
       }
       return destroy;
     }()
+  }, {
+    key: "length",
+    get: function get() {
+      return this.offsets.length;
+    }
+  }, {
+    key: "index",
+    get: function get() {
+      return this.indexManager.index;
+    }
   }]);
-}(_events.EventEmitter);
+}(_Serializer2["default"]);
