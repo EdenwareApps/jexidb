@@ -43,9 +43,7 @@ export class Database extends Serializer {
       this.offsets = this.offsets.slice(0, -2)
       this.shouldTruncate = true
       let indexLine = await this.fileHandler.readRange(...ptr)
-      console.log('readen', indexLine.length, ptr, String(indexLine))
       const index = await this.deserialize(indexLine, {compress: this.opts.compressIndex})
-      console.log({index})
       if(index) {
         this.indexManager.index = index
         if (!this.indexManager.index.data) {
@@ -181,7 +179,7 @@ export class Database extends Serializer {
   }
 
   async update(criteria, data, options={}) {
-    const matchingLines = await this.indexManager.query(criteria)
+    const matchingLines = await this.indexManager.query(criteria, options.matchAny)
     if (!matchingLines || !matchingLines.size) {
         return []
     }
@@ -218,7 +216,7 @@ export class Database extends Serializer {
   }
 
   async delete(criteria, options={}) {
-    const matchingLines = await this.indexManager.query(criteria)
+    const matchingLines = await this.indexManager.query(criteria, options.matchAny)
     if (!matchingLines || !matchingLines.size) {
         return 0
     }

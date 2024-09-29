@@ -115,26 +115,22 @@ var Database = exports.Database = /*#__PURE__*/function (_Serializer) {
               return (_this$fileHandler = this.fileHandler).readRange.apply(_this$fileHandler, _toConsumableArray(ptr));
             case 22:
               indexLine = _context.sent;
-              console.log('readen', indexLine.length, ptr, String(indexLine));
-              _context.next = 26;
+              _context.next = 25;
               return this.deserialize(indexLine, {
                 compress: this.opts.compressIndex
               });
-            case 26:
+            case 25:
               index = _context.sent;
-              console.log({
-                index: index
-              });
               if (index) {
                 this.indexManager.index = index;
                 if (!this.indexManager.index.data) {
                   this.indexManager.index.data = {};
                 }
               }
-              _context.next = 36;
+              _context.next = 34;
               break;
-            case 31:
-              _context.prev = 31;
+            case 29:
+              _context.prev = 29;
               _context.t0 = _context["catch"](0);
               if (!this.offsets) {
                 this.offsets = [];
@@ -143,14 +139,14 @@ var Database = exports.Database = /*#__PURE__*/function (_Serializer) {
               if (!String(_context.t0).includes('empty file')) {
                 console.error('Error loading database:', _context.t0);
               }
-            case 36:
+            case 34:
               this.initialized = true;
               this.emit('init');
-            case 38:
+            case 36:
             case "end":
               return _context.stop();
           }
-        }, _callee, this, [[0, 31]]);
+        }, _callee, this, [[0, 29]]);
       }));
       function init() {
         return _init.apply(this, arguments);
@@ -557,7 +553,7 @@ var Database = exports.Database = /*#__PURE__*/function (_Serializer) {
             case 0:
               options = _args11.length > 2 && _args11[2] !== undefined ? _args11[2] : {};
               _context11.next = 3;
-              return this.indexManager.query(criteria);
+              return this.indexManager.query(criteria, options.matchAny);
             case 3:
               matchingLines = _context11.sent;
               if (!(!matchingLines || !matchingLines.size)) {
@@ -676,7 +672,7 @@ var Database = exports.Database = /*#__PURE__*/function (_Serializer) {
             case 0:
               options = _args12.length > 1 && _args12[1] !== undefined ? _args12[1] : {};
               _context12.next = 3;
-              return this.indexManager.query(criteria);
+              return this.indexManager.query(criteria, options.matchAny);
             case 3:
               matchingLines = _context12.sent;
               if (!(!matchingLines || !matchingLines.size)) {
