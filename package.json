@@ -17,11 +17,9 @@
   "author": "EdenwareApps",
   "license": "MIT",
   "dependencies": {
-    "@babel/plugin-transform-async-generator-functions": "^7.25.4"
-  },
-  "devDependencies": {
     "@babel/cli": "^7.25.6",
     "@babel/core": "^7.25.2",
-    "@babel/preset-env": "^7.25.4"
+    "@babel/preset-env": "^7.25.4",    
+    "@babel/plugin-transform-async-generator-functions": "^7.25.4"
   }
 }
