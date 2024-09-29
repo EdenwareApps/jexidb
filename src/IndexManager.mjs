@@ -1,12 +1,13 @@
 export default class IndexManager {
   constructor(opts) {
-    this.index = {
-      data: {}
-    }
     this.opts = Object.assign({}, opts)
+    this.index = this.opts.index || {}
+    if(typeof(this.index.data) == 'object') {
+      this.index.data = {}
+    }    
     Object.keys(this.opts.indexes).forEach(field => {
       this.index.data[field] = {}
-    })
+    })    
   }
 
   add(row, lineNumber) {

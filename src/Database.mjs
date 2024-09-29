@@ -25,6 +25,10 @@ export class Database extends Serializer {
 
   async init() {
     try {
+      if(this.opts.clear) {
+        await this.fileHandler.truncate(0).catch(console.error)
+        throw new Error('Cleared, empty file')
+      }
       const lastLine = await this.fileHandler.readLastLine()
       if(!lastLine || !lastLine.length) {
         throw new Error('File does not exists or is a empty file')
@@ -62,6 +66,7 @@ export class Database extends Serializer {
   }
 
   async save() {
+    this.emit('before-save')
     const index = {data: {}}
     for(const field in this.indexManager.index.data) {
       if(typeof(index.data[field]) === 'undefined') index.data[field] = {}
@@ -135,6 +140,7 @@ export class Database extends Serializer {
     this.indexOffset += line.length
     this.indexManager.add(data, position)
     this.shouldSave = true
+    this.emit('insert', data, position)
   }
 
   async *iterate(map, options={}) {
@@ -250,6 +256,14 @@ export class Database extends Serializer {
     this.indexManager.index = {}
     this.initialized = false
     this.fileHandler.destroy()
+  }
+
+  get length() {
+    return this.offsets.length
+  }
+
+  get index() {
+    return this.indexManager.index
   }
 
 }
