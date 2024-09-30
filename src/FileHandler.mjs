@@ -11,24 +11,22 @@ export default class FileHandler {
       file = this.filePath
     }
     const key = file +'-'+ mode
+    const uid = Math.random().toString(36).substr(0, 12)
     if (this.descriptors[key]) {
-      this.descriptors[key].clients++
+      this.descriptors[key].clients.add(uid)
       return this.descriptors[key].fd
     }
-    this.descriptors[key] = {fd: await fs.promises.open(file, mode), clients: 1}
+    this.descriptors[key] = {fd: await fs.promises.open(file, mode), clients: new Set([uid])}
     this.descriptors[key].fd.leave = async immediate => {
-      this.descriptors[key].clients--
-      if (this.descriptors[key].clients === 0) {
-        if (immediate) {
-          await this.descriptors[key].fd.close()
-          delete this.descriptors[key]
-        } else {
-          setTimeout(async () => {
-            if (this.descriptors[key] && this.descriptors[key].clients === 0) {
-              await this.descriptors[key].fd.close()
-              delete this.descriptors[key]
-            }
-          }, 1000)
+      this.descriptors[key].clients.remove(uid)
+      if (this.descriptors[key].clients.size === 0) {
+        if (immediate !== true) {
+          await new Promise(resolve => setTimeout(resolve, 1000))
+        }
+        if (this.descriptors[key] && this.descriptors[key].clients.size === 0) {
+          this.descriptors[key].fd.close().catch(() => {}).finally(() => {
+            delete this.descriptors[key]
+          })
         }
       }
     }
@@ -178,7 +176,8 @@ export default class FileHandler {
 
   async destroy() {
     for (const key in this.descriptors) {
-      await this.descriptors[key].fd.close()
+      await this.descriptors[key].fd.close().catch(console.error)
+      delete this.descriptors[key]
     }
   }
 }
