@@ -18,7 +18,7 @@ export default class FileHandler {
     }
     this.descriptors[key] = {fd: await fs.promises.open(file, mode), clients: new Set([uid])}
     this.descriptors[key].fd.leave = async immediate => {
-      this.descriptors[key].clients.remove(uid)
+      this.descriptors[key].clients.delete(uid)
       if (this.descriptors[key].clients.size === 0) {
         if (immediate !== true) {
           await new Promise(resolve => setTimeout(resolve, 1000))

@@ -71,7 +71,7 @@ export default class IndexManager {
           let includeValue = true
           if (isNumericField) {
             const numericValue = parseFloat(value);
-            if (!isNaN(numericValue)) {
+            if (!isNaN(numericValue)) { 
               if (criteriaValue['>'] !== undefined && numericValue <= criteriaValue['>']) {
                 includeValue = false;
               }
