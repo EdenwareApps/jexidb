@@ -27,7 +27,7 @@ const runTests = async () => {
     // 1. Test if the instance is created correctly
     await db.init(); // Call init() right after instantiation
     console.assert(db.initialized === true, 'Test failed: Database is not loaded.');
-    console.log('Database initialized successfully!', db.index, db.offsets);
+    //console.log('Database initialized successfully!', db.index, db.offsets);
 
     // 2. Test data insertion
     await db.insert({ id: 1, name: 'Alice' });
@@ -65,7 +65,7 @@ const runTests = async () => {
         i++
     }
     console.assert(i === 3, 'Test failed: Expected 3 entries on iterating.');
-
+    db.index.myCustomValue = true
     await db.save();
     await db.destroy();
 
@@ -77,7 +77,8 @@ const runTests = async () => {
     });
     await bd.init();
     console.assert(bd.initialized === true, 'Test failed: Database is not loaded.');
-    console.log('Database initialized successfully!', bd.index, bd.offsets);
+    console.assert(bd.index.myCustomValue === true, 'Test failed: Arbitrary value not saved.'); 
+    //console.log('Database initialized successfully!', bd.index, bd.offsets);
     console.log('All tests ran successfully!');
 };
 

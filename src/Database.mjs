@@ -7,6 +7,7 @@ export class Database extends Serializer {
     super()
     this.opts = Object.assign({
       v8: false,
+      index: {data: {}},
       indexes: {},
       compress: false,
       compressIndex: false
@@ -43,12 +44,7 @@ export class Database extends Serializer {
       this.shouldTruncate = true
       let indexLine = await this.fileHandler.readRange(...ptr)
       const index = await this.serializer.deserialize(indexLine, {compress: this.opts.compressIndex})
-      if(index) {
-        this.indexManager.index = index
-        if (!this.indexManager.index.data) {
-          this.indexManager.index.data = {}
-        }
-      }
+      index && Object.assign(this.indexManager.index, index)
     } catch (e) {
       if(!this.offsets) {
         this.offsets = []
@@ -64,11 +60,10 @@ export class Database extends Serializer {
 
   async save() {
     this.emit('before-save')
-    const index = {data: {}}
+    const index = Object.assign({data: {}}, this.indexManager.index)
     for(const field in this.indexManager.index.data) {
-      if(typeof(index.data[field]) === 'undefined') index.data[field] = {}
+      index.data[field] = {}
       for(const term in this.indexManager.index.data[field]) {
-        if(typeof(index.data[field][term]) === 'undefined') index.data[field][term] = {}
         index.data[field][term] = [...this.indexManager.index.data[field][term]] // set to array 
       }
     }
