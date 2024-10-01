@@ -4,7 +4,7 @@
 
 ## Overview
 
-JexiDB is a lightweight, standalone JavaScript database manager that stores data on disk using JSON format or V8 serialization. It supports indexing and querying capabilities to efficiently handle data operations.
+JexiDB is a lightweight, standalone JavaScript database manager that stores data on disk using JSON format or V8 serialization. It supports indexing and querying capabilities to efficiently handle data operations. Suitable for local projects in Node.js as well as apps made with Electron or NW.js. Does not require compilation.
 
 ## Installation
 
