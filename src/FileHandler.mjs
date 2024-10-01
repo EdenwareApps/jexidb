@@ -16,25 +16,25 @@ export default class FileHandler {
       this.descriptors[key].clients.add(uid)
       return this.descriptors[key].fd
     }
-    this.descriptors[key] = {fd: await fs.promises.open(file, mode), clients: new Set([uid])}
-    this.descriptors[key].fd.origClose = this.descriptors[key].fd.close
-    this.descriptors[key].fd.leave = async immediate => {
-      this.descriptors[key].clients.delete(uid)
-      if (this.descriptors[key].clients.size === 0) {
+    const descriptor = this.descriptors[key] = {fd: await fs.promises.open(file, mode), clients: new Set([uid])}
+    descriptor.fd.origClose = descriptor.fd.close
+    descriptor.fd.leave = async immediate => {
+      descriptor.clients.delete(uid)
+      if (descriptor.clients.size === 0) {
         if (immediate !== true) {
           await new Promise(resolve => setTimeout(resolve, 1000))
         }
-        if (this.descriptors[key] && this.descriptors[key].clients.size === 0) { // is entry still there and no new clients?
-          await this.descriptors[key].fd.close()
+        if (descriptor && descriptor.clients.size === 0) { // is entry still there and no new clients?
+          await descriptor.fd.close()
         }
       }
     }
-    this.descriptors[key].fd.close = async () => {
-      this.descriptors[key].clients.clear()
-      await this.descriptors[key].fd.origClose().catch(console.error)
+    descriptor.fd.close = async () => {
+      descriptor.clients.clear()
+      await descriptor.fd.origClose().catch(console.error)
       delete this.descriptors[key]
     }
-    return this.descriptors[key].fd
+    return descriptor.fd
   }
 
   async truncate(offset) {

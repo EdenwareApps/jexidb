@@ -81,7 +81,11 @@ export default class Serializer extends EventEmitter {
       if(Buffer.isBuffer(data)) {
         data = data.toString('utf-8')
       }
-      line = JSON.parse(data)
+      try {
+        line = JSON.parse(data)
+      } catch(e) {
+        line = null
+      }
     }
     return line
   }
@@ -121,7 +125,12 @@ export default class Serializer extends EventEmitter {
   unpackLineBreaks(buffer) {
     const delimiterIndex = buffer.lastIndexOf(this.delimiter)
     if (delimiterIndex === -1) return buffer
-    const positions = JSON.parse(buffer.subarray(delimiterIndex + this.delimiter.length).toString('utf-8'))
+    let positions
+    try {
+      positions = JSON.parse(buffer.subarray(delimiterIndex + this.delimiter.length).toString('utf-8'))
+    } catch (e) {
+      return buffer // not packed
+    }
     if (positions.length === 0) return buffer.subarray(0, delimiterIndex)
     let offset = delimiterIndex
     let posIndex = positions.length - 1
