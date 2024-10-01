@@ -85,10 +85,10 @@ console.log(`Deleted ${deletedCount} record(s).`);
 
 ### Iterating Through Records
 
-You can iterate through records in the database using the `iterate` method, which returns an async generator.
+You can iterate through records in the database using the `walk` method, which returns an async generator.
 
 ```javascript
-for await (const record of db.iterate()) {
+for await (const record of db.walk()) {
   console.log(record);
 }
 ```

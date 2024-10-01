@@ -17,18 +17,22 @@ export default class FileHandler {
       return this.descriptors[key].fd
     }
     this.descriptors[key] = {fd: await fs.promises.open(file, mode), clients: new Set([uid])}
+    this.descriptors[key].fd.origClose = this.descriptors[key].fd.close
     this.descriptors[key].fd.leave = async immediate => {
       this.descriptors[key].clients.delete(uid)
       if (this.descriptors[key].clients.size === 0) {
         if (immediate !== true) {
           await new Promise(resolve => setTimeout(resolve, 1000))
         }
-        if (this.descriptors[key] && this.descriptors[key].clients.size === 0) {
-          this.descriptors[key].fd.close().catch(() => {}).finally(() => {
-            delete this.descriptors[key]
-          })
+        if (this.descriptors[key] && this.descriptors[key].clients.size === 0) { // is entry still there and no new clients?
+          await this.descriptors[key].fd.close()
         }
       }
+    }
+    this.descriptors[key].fd.close = async () => {
+      this.descriptors[key].clients.clear()
+      await this.descriptors[key].fd.origClose().catch(console.error)
+      delete this.descriptors[key]
     }
     return this.descriptors[key].fd
   }
@@ -37,41 +41,15 @@ export default class FileHandler {
     await fs.promises.truncate(this.filePath, offset)
   }
 
-  async *iterate(map) {
-    if (map) {
-      if (!map.length) {
-        return
-      }
-      map.sort()
+  async *walk(ranges) {
+    const reader = await this.open('r')
+    for (const r of ranges) {
+      const length = r.end - r.start
+      const buffer = Buffer.alloc(length)
+      await reader.read(buffer, 0, length, r.start)
+      yield buffer.toString()
     }
-    let closed, max, i = 0
-    const rl = readline.createInterface({
-      input: fs.createReadStream(this.filePath, { highWaterMark: 1024 * 64 }),
-      crlfDelay: Infinity
-    })
-    max = map ? Math.max(...map) : -1
-    for await (const line of rl) {
-      if (!map || map.includes(i)) {
-        if (!line || !line.startsWith('{')) {
-          if (map || !line.startsWith('[')) {
-            console.error('Bad line readen', this.filePath, i, line)
-          }
-        } else {
-          const ret = await callback(line, i)
-          if (ret === -1) {
-            break
-          } else {
-            yield ret
-          }
-        }
-      }
-      if (i === max) {
-        closed = true
-        rl.close()
-      }
-      i++
-    }
-    closed || rl.close()
+    await reader.leave()
   }
 
   async readRange(start, end) {

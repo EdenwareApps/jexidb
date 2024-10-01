@@ -6,17 +6,16 @@ export class Database extends Serializer {
   constructor(filePath, opts={}) {
     super()
     this.opts = Object.assign({
-      indexes: {},
       v8: false,
+      indexes: {},
+      compress: false,
       compressIndex: false
     }, opts)
     this.shouldSave = false
+    this.serializer = new Serializer(this.opts)
     this.fileHandler = new FileHandler(filePath)
     this.indexManager = new IndexManager(this.opts)
     this.indexOffset = 0
-    if(this.opts.compressIndex) {
-      throw 'compressIndex is not supported yet'
-    }
   }
 
   use(plugin) {
@@ -33,7 +32,7 @@ export class Database extends Serializer {
       if(!lastLine || !lastLine.length) {
         throw new Error('File does not exists or is a empty file')
       }
-      const offsets = await this.deserialize(lastLine)
+      const offsets = await this.serializer.deserialize(lastLine, {compress: this.opts.compressIndex})
       if(!Array.isArray(offsets)) {
         throw new Error('File to parse offsets, expected an array')
       }
@@ -43,7 +42,7 @@ export class Database extends Serializer {
       this.offsets = this.offsets.slice(0, -2)
       this.shouldTruncate = true
       let indexLine = await this.fileHandler.readRange(...ptr)
-      const index = await this.deserialize(indexLine, {compress: this.opts.compressIndex})
+      const index = await this.serializer.deserialize(indexLine, {compress: this.opts.compressIndex})
       if(index) {
         this.indexManager.index = index
         if (!this.indexManager.index.data) {
@@ -74,10 +73,10 @@ export class Database extends Serializer {
       }
     }
     const offsets = this.offsets.slice(0)
-    const indexString = await this.serialize(index, {compress: this.opts.compressIndex})
+    const indexString = await this.serializer.serialize(index, {compress: this.opts.compressIndex})
     offsets.push(this.indexOffset)
     offsets.push(this.indexOffset + indexString.length)
-    const offsetsString = await this.serialize(offsets, {nl: false})
+    const offsetsString = await this.serializer.serialize(offsets, {compress: this.opts.compressIndex, linebreak: false})
     if (this.shouldTruncate) {
         await this.fileHandler.truncate(this.indexOffset)
         this.shouldTruncate = false
@@ -120,7 +119,7 @@ export class Database extends Serializer {
     const lines = await this.fileHandler.readRanges(ranges)
     for(const l of Object.values(lines)) {
       let err
-      const ret = await this.safeDeserialize(l).catch(e => err = e)
+      const ret = await this.serializer.safeDeserialize(l).catch(e => err = e)
       err || results.push(ret)
     }
     return results
@@ -128,7 +127,7 @@ export class Database extends Serializer {
 
   async insert(data) {
     const position = this.offsets.length
-    const line = await this.serialize(data) // using Buffer for offsets accuracy
+    const line = await this.serializer.serialize(data, {compress: this.opts.compress}) // using Buffer for offsets accuracy
     if (this.shouldTruncate) {
         await this.fileHandler.truncate(this.indexOffset)
         this.shouldTruncate = false
@@ -141,15 +140,19 @@ export class Database extends Serializer {
     this.emit('insert', data, position)
   }
 
-  async *iterate(map, options={}) {
+  async *walk(map, options={}) {
     if(this.indexOffset === 0) return
     if(!Array.isArray(map)) {
-      map = this.indexManager.query(map, options.matchAny)
+      if(map && typeof map === 'object') {
+        map = this.indexManager.query(map, options.matchAny)
+      } else {
+        map = [...Array(this.offsets.length).keys()]
+      }
     }
-    const rl = this.fileHandler.iterate(map)
-    for await (const line of rl) {
+    const ranges = this.getRanges(map)
+    for await (const line of this.fileHandler.walk(ranges)) {
       let err
-      const e = await this.safeDeserialize(line).catch(e => err = e)
+      const e = await this.serializer.safeDeserialize(line).catch(e => err = e)
       err || (yield e)
     }
   }
@@ -193,7 +196,7 @@ export class Database extends Serializer {
     for(const entry of entries) {
       let err
       const updated = Object.assign(entry, data)
-      const ret = await this.serialize(updated).catch(e => err = e)
+      const ret = await this.serializer.serialize(updated).catch(e => err = e)
       err || lines.push(ret)
     }
     const offsets = []

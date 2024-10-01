@@ -2,7 +2,7 @@ export default class IndexManager {
   constructor(opts) {
     this.opts = Object.assign({}, opts)
     this.index = this.opts.index || {}
-    if(typeof(this.index.data) == 'object') {
+    if(typeof(this.index.data) != 'object') {
       this.index.data = {}
     }    
     Object.keys(this.opts.indexes).forEach(field => {
@@ -56,9 +56,10 @@ export default class IndexManager {
     }
   }
 
-  async query(criteria, matchAny=false) {
+  query(criteria, matchAny=false) {
+    if (!criteria) throw new Error('No query criteria provided')
     const fields = Object.keys(criteria)
-    if (!fields.length) throw new Error('No query criteria provided')
+    if (!fields.length) throw new Error('No valid query criteria provided')
     let matchingLines = matchAny ? new Set() : null
     for (const field of fields) {
       if (typeof(this.index.data[field]) == 'undefined') continue

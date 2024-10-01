@@ -20,12 +20,14 @@ const runTests = async () => {
     const db = new Database(testFilePath, {
         indexes: {id: 'number'},
         v8: false,
+        compress: false,
         compressIndex: false
     }); // Instantiate the database
     
     // 1. Test if the instance is created correctly
     await db.init(); // Call init() right after instantiation
     console.assert(db.initialized === true, 'Test failed: Database is not loaded.');
+    console.log('Database initialized successfully!', db.index, db.offsets);
 
     // 2. Test data insertion
     await db.insert({ id: 1, name: 'Alice' });
@@ -39,7 +41,6 @@ const runTests = async () => {
     // 4. Test data update
     await db.update({ id: 1 }, { name: 'Alice Updated' });
     results = await db.query([0, 1]);
-    console.log(results)
     console.assert(results[0].name === 'Alice Updated', 'Test failed: First entry name was not updated.');
 
     // 5. Test data deletion
@@ -59,8 +60,24 @@ const runTests = async () => {
     const queryResults = await db.query({ id: { '>': 2 } });
     console.assert(queryResults.length === 2, 'Test failed: Expected 2 entries for id > 2.');
 
+    let i = 0
+    for await (const entry of db.walk()) {
+        i++
+    }
+    console.assert(i === 3, 'Test failed: Expected 3 entries on iterating.');
+
     await db.save();
     await db.destroy();
+
+    const bd = new Database(testFilePath, {
+        indexes: {id: 'number'},
+        v8: false,
+        compress: false,
+        compressIndex: false
+    });
+    await bd.init();
+    console.assert(bd.initialized === true, 'Test failed: Database is not loaded.');
+    console.log('Database initialized successfully!', bd.index, bd.offsets);
     console.log('All tests ran successfully!');
 };
 
