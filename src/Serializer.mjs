@@ -72,11 +72,19 @@ export default class Serializer extends EventEmitter {
         })
       })
     }
-    if(this.opts.v8) {
+    if((this.opts.v8 && !opts.json) || opts.v8 === true) {
       if(removedLineBreak !== true)  {
         data = data.subarray(0, -1)
       }
-      line = v8.deserialize(data)
+      try {
+        line = v8.deserialize(data)
+      } catch(e) {
+        if(opts.v8 === true) { // already retrying
+          throw new Error('Failed to deserialize V8 data')
+        }
+        opts.json = true
+        return await this.deserialize(data, opts)
+      }
     } else {
       if(Buffer.isBuffer(data)) {
         data = data.toString('utf-8')
@@ -84,7 +92,11 @@ export default class Serializer extends EventEmitter {
       try {
         line = JSON.parse(data)
       } catch(e) {
-        line = null
+        if(opts.json === true) {
+          throw new Error('Failed to deserialize JSON data')
+        }
+        opts.v8 = true
+        return await this.deserialize(data, opts)
       }
     }
     return line
