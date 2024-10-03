@@ -23,12 +23,11 @@ const runTests = async () => {
         compress: false,
         compressIndex: false
     }); // Instantiate the database
-    
+
     // 1. Test if the instance is created correctly
     await db.init(); // Call init() right after instantiation
     console.assert(db.initialized === true, 'Test failed: Database is not loaded.');
-    //console.log('Database initialized successfully!', db.index, db.offsets);
-
+    
     // 2. Test data insertion
     await db.insert({ id: 1, name: 'Alice' });
     await db.insert({ id: 2, name: 'Bob' });
@@ -64,21 +63,31 @@ const runTests = async () => {
     for await (const entry of db.walk()) {
         i++
     }
-    console.assert(i === 3, 'Test failed: Expected 3 entries on iterating.');
+    console.assert(i === 3, 'Test failed: Expected 3 entries on walk().');
     db.index.myCustomValue = true
     await db.save();
     await db.destroy();
-
     const bd = new Database(testFilePath, {
         indexes: {id: 'number'},
-        v8: false,
-        compress: false,
-        compressIndex: false
+        v8: true,
+        compress: true,
+        compressIndex: true
     });
     await bd.init();
-    console.assert(bd.initialized === true, 'Test failed: Database is not loaded.');
-    console.assert(bd.index.myCustomValue === true, 'Test failed: Arbitrary value not saved.'); 
-    //console.log('Database initialized successfully!', bd.index, bd.offsets);
+    console.assert(bd.index.myCustomValue === true, 'Test failed: Arbitrary value not saved after reloading database.'); 
+
+    await bd.insert({ id: 5, name: 'Esteon' });
+    
+    results = await bd.query({ id: 5});
+    console.assert(results.length === 1, 'Test failed: Inserted V8 value not found.'); 
+    console.assert(results[0].name === 'Esteon', 'Test failed: Inserted V8 value got corrupted.'); 
+    
+    results = await bd.query({ id: 4});
+    console.assert(results.length === 1, 'Test failed: Previously inserted non-V8 value not found.'); 
+    console.assert(results[0].name === 'Diana', 'Test failed: Previously inserted non-V8 value got corrupted.'); 
+
+
+    // console.log('Database initialized successfully!', bd.index, bd.offsets);
     console.log('All tests ran successfully!');
 };
 

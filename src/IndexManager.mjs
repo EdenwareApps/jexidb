@@ -1,10 +1,7 @@
 export default class IndexManager {
   constructor(opts) {
     this.opts = Object.assign({}, opts)
-    this.index = this.opts.index || {}
-    if(typeof(this.index.data) != 'object') {
-      this.index.data = {}
-    }    
+    this.index = Object.assign({data: {}}, this.opts.index)
     Object.keys(this.opts.indexes).forEach(field => {
       this.index.data[field] = {}
     })    
@@ -144,4 +141,12 @@ export default class IndexManager {
     return matchingLines || new Set();
   }
 
+  load(index) {
+    for(const field in index.data) {
+      for(const term in index.data[field]) {
+        index.data[field][term] = new Set(index.data[field][term]) // set to array 
+      }
+    }
+    this.index = index
+  }
 }

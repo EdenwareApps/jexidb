@@ -20,10 +20,12 @@ export class Database extends Serializer {
   }
 
   use(plugin) {
+    if(this.destroyed) throw new Error('Database is destroyed')
     plugin(this)
   }
 
   async init() {
+    if(this.destroyed) throw new Error('Database is destroyed')
     try {
       if(this.opts.clear) {
         await this.fileHandler.truncate(0).catch(console.error)
@@ -44,7 +46,7 @@ export class Database extends Serializer {
       this.shouldTruncate = true
       let indexLine = await this.fileHandler.readRange(...ptr)
       const index = await this.serializer.deserialize(indexLine, {compress: this.opts.compressIndex})
-      index && Object.assign(this.indexManager.index, index)
+      index && this.indexManager.load(index)
     } catch (e) {
       if(!this.offsets) {
         this.offsets = []
@@ -59,16 +61,23 @@ export class Database extends Serializer {
   }
 
   async save() {
+    if(this.destroyed) throw new Error('Database is destroyed')
     this.emit('before-save')
     const index = Object.assign({data: {}}, this.indexManager.index)
     for(const field in this.indexManager.index.data) {
-      index.data[field] = {}
       for(const term in this.indexManager.index.data[field]) {
         index.data[field][term] = [...this.indexManager.index.data[field][term]] // set to array 
       }
     }
     const offsets = this.offsets.slice(0)
     const indexString = await this.serializer.serialize(index, {compress: this.opts.compressIndex})
+    
+    for(const field in this.indexManager.index.data) {
+      for(const term in this.indexManager.index.data[field]) {
+        this.indexManager.index.data[field][term] = new Set(index.data[field][term]) // set back to set because of serialization
+      }
+    }   
+    
     offsets.push(this.indexOffset)
     offsets.push(this.indexOffset + indexString.length)
     const offsetsString = await this.serializer.serialize(offsets, {compress: this.opts.compressIndex, linebreak: false})
@@ -114,13 +123,14 @@ export class Database extends Serializer {
     const lines = await this.fileHandler.readRanges(ranges)
     for(const l of Object.values(lines)) {
       let err
-      const ret = await this.serializer.safeDeserialize(l).catch(e => err = e)
-      err || results.push(ret)
+      const entry = await this.serializer.deserialize(l).catch(e => console.error(err = e))
+      err || results.push(entry)
     }
     return results
   }
 
   async insert(data) {
+    if(this.destroyed) throw new Error('Database is destroyed')
     const position = this.offsets.length
     const line = await this.serializer.serialize(data, {compress: this.opts.compress}) // using Buffer for offsets accuracy
     if (this.shouldTruncate) {
@@ -136,6 +146,7 @@ export class Database extends Serializer {
   }
 
   async *walk(map, options={}) {
+    if(this.destroyed) throw new Error('Database is destroyed')
     if(this.indexOffset === 0) return
     if(!Array.isArray(map)) {
       if(map && typeof map === 'object') {
@@ -147,12 +158,13 @@ export class Database extends Serializer {
     const ranges = this.getRanges(map)
     for await (const line of this.fileHandler.walk(ranges)) {
       let err
-      const e = await this.serializer.safeDeserialize(line).catch(e => err = e)
-      err || (yield e)
+      const entry = await this.serializer.deserialize(line).catch(e => console.error(err = e))
+      err || (yield entry)
     }
   }
        
   async query(criteria, options={}) {
+    if(this.destroyed) throw new Error('Database is destroyed')
     if(Array.isArray(criteria)) {
       let results = await this.readLines(criteria)
       if (options.orderBy) {
@@ -177,6 +189,7 @@ export class Database extends Serializer {
   }
 
   async update(criteria, data, options={}) {
+    if(this.destroyed) throw new Error('Database is destroyed')
     const matchingLines = await this.indexManager.query(criteria, options.matchAny)
     if (!matchingLines || !matchingLines.size) {
         return []
@@ -214,6 +227,7 @@ export class Database extends Serializer {
   }
 
   async delete(criteria, options={}) {
+    if(this.destroyed) throw new Error('Database is destroyed')
     const matchingLines = await this.indexManager.query(criteria, options.matchAny)
     if (!matchingLines || !matchingLines.size) {
         return 0
@@ -247,6 +261,7 @@ export class Database extends Serializer {
   }
 
   async destroy() {
+    this.destroyed = true
     this.shouldSave && await this.save()
     this.indexOffset = 0
     this.indexManager.index = {}

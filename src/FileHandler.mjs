@@ -47,7 +47,7 @@ export default class FileHandler {
       const length = r.end - r.start
       const buffer = Buffer.alloc(length)
       await reader.read(buffer, 0, length, r.start)
-      yield buffer.toString()
+      yield buffer
     }
     await reader.leave()
   }
@@ -132,13 +132,13 @@ export default class FileHandler {
         }
         const { bytesRead } = await reader.read(buffer, 0, readSize, readPosition)
         if (bytesRead === 0) break
-        const newlineIndex = buffer.lastIndexOf('\n') // 0x0A is the ASCII code for '\n'
+        const newlineIndex = buffer.lastIndexOf(10, size - 4) // 0x0A is the ASCII code for '\n'
         if (newlineIndex !== -1) {
           const start = readPosition + newlineIndex + 1
           const lastLine = Buffer.alloc(size - start)
           await reader.read(lastLine, 0, size - start, start)
           if (!lastLine || !lastLine.length) {
-            throw 'empty file *'
+            throw 'no metadata or empty file'
           }
           return lastLine
         } else {
