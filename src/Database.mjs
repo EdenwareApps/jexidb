@@ -116,17 +116,9 @@ export class Database extends Serializer {
   }
 
   async readLines(map, ranges) {
-    if(!ranges) {
-      ranges = this.getRanges(map)
-    }
-    const results = []
-    const lines = await this.fileHandler.readRanges(ranges)
-    for(const l of Object.values(lines)) {
-      let err
-      const entry = await this.serializer.deserialize(l).catch(e => console.error(err = e))
-      err || results.push(entry)
-    }
-    return results
+    if(!ranges) ranges = this.getRanges(map)
+    const results = await this.fileHandler.readRanges(ranges, this.serializer.deserialize.bind(this.serializer))
+    return Object.values(results).filter(r => r !== undefined)
   }
 
   async insert(data) {

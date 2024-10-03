@@ -1,9 +1,11 @@
 import fs from 'fs'
+import pLimit from 'p-limit'
 
 export default class FileHandler {
   constructor(filePath) {
     this.filePath = filePath
     this.descriptors = {}
+    this.rlimit = pLimit(8)
   }
 
   async open(mode, file='') {
@@ -62,19 +64,18 @@ export default class FileHandler {
     return buffer
   }
 
-  async readRanges(ranges) {
+  async readRanges(ranges, mapper) {
     const lines = {}
     let fd = await this.open('r')
-    for (const r of ranges) {
-      try {
+    const tasks = ranges.map(r => {
+      return async () => {
         const length = r.end - r.start
         let buffer = Buffer.alloc(length)
         await fd.read(buffer, 0, length, r.start)
-        lines[r.start] = buffer
-      } catch (error) {
-        console.error(error)
+        lines[r.start] = mapper ? (await mapper(buffer, r)) : buffer
       }
-    }
+    })
+    await Promise.allSettled(tasks.map(t => this.rlimit(t)))
     await fd.leave()
     return lines
   }
