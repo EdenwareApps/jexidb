@@ -13,7 +13,7 @@ export default class FileHandler {
       file = this.filePath
     }
     const key = file +'-'+ mode
-    const uid = Math.random().toString(36).substr(0, 12)
+    const uid = Math.random().toString(36).substr(0, 18)
     if (this.descriptors[key]) {
       this.descriptors[key].clients.add(uid)
       return this.descriptors[key].fd
@@ -23,9 +23,6 @@ export default class FileHandler {
     descriptor.fd.leave = async immediate => {
       descriptor.clients.delete(uid)
       if (descriptor.clients.size === 0) {
-        if (immediate !== true) {
-          await new Promise(resolve => setTimeout(resolve, 1000))
-        }
         if (descriptor && descriptor.clients.size === 0) { // is entry still there and no new clients?
           await descriptor.fd.close()
         }
