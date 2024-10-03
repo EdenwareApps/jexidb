@@ -153,7 +153,7 @@ export default class FileHandler {
   async destroy() {
     for (const key in this.descriptors) {
       await this.descriptors[key].fd.close().catch(console.error)
-      delete this.descriptors[key]
     }
+    this.descriptors = {}
   }
 }

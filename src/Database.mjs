@@ -253,8 +253,8 @@ export class Database extends Serializer {
   }
 
   async destroy() {
+    this.shouldSave && await this.save().catch(console.error)
     this.destroyed = true
-    this.shouldSave && await this.save()
     this.indexOffset = 0
     this.indexManager.index = {}
     this.initialized = false

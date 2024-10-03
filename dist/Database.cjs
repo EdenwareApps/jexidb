@@ -748,15 +748,15 @@ var Database = exports.Database = /*#__PURE__*/function (_Serializer) {
         return _regeneratorRuntime().wrap(function _callee10$(_context12) {
           while (1) switch (_context12.prev = _context12.next) {
             case 0:
-              this.destroyed = true;
               _context12.t0 = this.shouldSave;
               if (!_context12.t0) {
-                _context12.next = 5;
+                _context12.next = 4;
                 break;
               }
-              _context12.next = 5;
-              return this.save();
-            case 5:
+              _context12.next = 4;
+              return this.save()["catch"](console.error);
+            case 4:
+              this.destroyed = true;
               this.indexOffset = 0;
               this.indexManager.index = {};
               this.initialized = false;

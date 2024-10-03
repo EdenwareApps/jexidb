@@ -26,7 +26,6 @@ export default class Serializer extends EventEmitter {
     } else {
       line = Buffer.from(JSON.stringify(data), 'utf-8')
     }
-
     if (this.opts.compress || opts.compress === true) {
       await new Promise(resolve => {
         zlib.brotliCompress(line, this.brotliOptions, (err, buffer) => {
