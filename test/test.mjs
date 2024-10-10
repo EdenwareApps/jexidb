@@ -30,6 +30,14 @@ const characters = [
         deleteMessage: 'I thought Frost was gone, but she’s still here! Must be that "Ice Shield."',
         signatureMove: 'Ice Daggers', 
         powerType: 'Cryomancy'
+    },
+    {
+        name: 'Frost',
+        missingMessage: 'Did Frost freeze the missing entries?',
+        updateMessage: 'Frost refuses to update. Maybe she’s stuck in an ice block?',
+        deleteMessage: 'I thought Frost was gone, but she’s still here! Must be that "Ice Shield."',
+        signatureMove: 'Ice Daggers', 
+        powerType: 'Cryomancy'
     }    
 ];
 
@@ -127,6 +135,12 @@ async function runAllTests() {
     await runTests(3, 'json-compressed', 'JSON with Brotli compression', {
         indexes: {id: 'number', name: 'string'},
         v8: false,
+        compress: false,
+        compressIndex: true
+    }).catch(e => err = e)
+    await runTests(3, 'v8-compressed', 'V8 with Brotli compression', {
+        indexes: {id: 'number', name: 'string'},
+        v8: true,
         compress: false,
         compressIndex: true
     }).catch(e => err = e)
