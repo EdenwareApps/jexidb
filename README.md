@@ -4,7 +4,7 @@
 
 ## Overview
 
-JexiDB is a lightweight, standalone JavaScript database manager that stores data on disk using JSON format or V8 serialization. It supports indexing and querying capabilities to efficiently handle data operations. Suitable for local projects in Node.js as well as apps made with Electron or NW.js. Does not require compilation.
+JexiDB is a lightweight, standalone JavaScript database manager that stores data on disk using either JSON format or V8 serialization. It supports indexing and querying capabilities for efficient data operations. Ideal for local Node.js projects as well as apps built with Electron or NW.js. Written in pure JavaScript, it requires no compilation and is compatible with both CommonJS and ESM modules.
 
 ## Installation
 
@@ -48,7 +48,7 @@ You can insert data into the database by using the `insert` method. The data sho
 
 ```javascript
 await db.insert({ id: 1, name: 'John Doe' });
-await db.insert({ id: 2, name: 'Jane Doe' });
+await db.insert({ id: 2, name: 'Jane Doe', anyArbitraryField: '1' });
 ```
 
 ### Querying Data
@@ -60,7 +60,7 @@ const results = await db.query({ name: 'John Doe' });
 console.log(results); // [{ id: 1, name: 'John Doe' }]
 ```
 
-Note: For now the query should be limited to using the fields specified in 'indexes' when instantiating the class.
+Note: For now the query should be limited to using the fields specified as 'indexes' when instantiating the class.
 
 #### Querying with Conditions
 

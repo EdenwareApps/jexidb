@@ -6,8 +6,7 @@
 {"id":7,"name":"Mileena","signatureMove":"Sai Throw","powerType":"Teleportation"}
 {"id":8,"name":"Kenshi","signatureMove":"Telekinetic Slash","powerType":"Telekinesis"}
 {"id":9,"name":"D'Vorah","signatureMove":"Swarm","powerType":"Insects"}
-{"id":10,"name":"Scarlet","signatureMove":"Blood Tentacle","powerType":"Blood Manipulation"}
-{"id":11,"name":"Frost","signatureMove":"Ice Daggers","powerType":"Cryomancy"}
-{"id":12,"name":"Shang Tsung","signatureMove":"Soul Steal","powerType":"Soul Manipulation"}
-{"data":{"id":{"2":[0],"3":[1],"4":[2],"5":[3],"6":[4],"7":[5],"8":[6],"9":[7],"10":[8],"11":[9],"12":[10]},"name":{"Sub-Zero":[0],"Raiden":[1],"Jax":[2],"Sindel":[3],"Ermac":[4],"Mileena":[5],"Kenshi":[6],"D'Vorah":[7],"Scarlet":[8],"Frost":[9],"Shang Tsung":[10]}},"myCustomValue":true}
-[0,78,158,234,310,390,472,559,631,724,803,895,1184]
+{"id":10,"name":"Sonya Blade","signatureMove":"Energy Rings","powerType":"Special Forces Technology"}
+{"id":11,"name":"Kotal Kahn","signatureMove":"Sunstone","powerType":"Osh-Tekk Strength"}
+{"data":{"id":{"2":[0],"3":[1],"4":[2],"5":[3],"6":[4],"7":[5],"8":[6],"9":[7],"10":[8],"11":[9]},"name":{"Sub-Zero":[0],"Raiden":[1],"Jax":[2],"Sindel":[3],"Ermac":[4],"Mileena":[5],"Kenshi":[6],"D'Vorah":[7],"Sonya Blade":[8],"Kotal Kahn":[9]}}}
+[0,78,158,234,310,390,472,559,631,733,822,1070]
