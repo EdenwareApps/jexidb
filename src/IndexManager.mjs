@@ -29,16 +29,46 @@ export default class IndexManager {
     }
   }
 
-  remove(lineNumber) {
+  dryRemove(ln) { // remove line numbers from index without adjusting the rest
     for (const field in this.index.data) {
       for (const value in this.index.data[field]) {
-        this.index.data[field][value].delete(lineNumber)
+        if (this.index.data[field][value].has(ln)) {
+          this.index.data[field][value].delete(ln)
+        }
         if (this.index.data[field][value].size === 0) {
           delete this.index.data[field][value]
         }
       }
     }
   }
+
+  remove(lineNumbers) { // remove line numbers from index and adjust the rest
+    lineNumbers.sort((a, b) => a - b) // Sort ascending to make calculations easier
+    for (const field in this.index.data) {
+      for (const value in this.index.data[field]) {
+        const newSet = new Set()  
+        for (const ln of this.index.data[field][value]) {
+          let offset = 0
+          for (const lineNumber of lineNumbers) {
+            if (lineNumber < ln) {
+              offset++
+            } else if (lineNumber === ln) {
+              offset = -1 // Marca para remoção
+              break
+            }
+          }  
+          if (offset >= 0) {
+            newSet.add(ln - offset) // Atualiza o valor
+          }
+        }  
+        if (newSet.size > 0) {
+          this.index.data[field][value] = newSet
+        } else {
+          delete this.index.data[field][value]
+        }
+      }
+    }
+  } 
 
   replace(map) {
     for (const field in this.index.data) {
@@ -148,5 +178,9 @@ export default class IndexManager {
       }
     }
     this.index = index
+  }
+  
+  readColumnIndex(column) {
+    return new Set((this.index.data && this.index.data[column]) ? Object.keys(this.index.data[column]) : [])
   }
 }

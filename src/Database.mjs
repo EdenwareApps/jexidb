@@ -1,8 +1,11 @@
+import { EventEmitter } from 'events'
 import FileHandler from './FileHandler.mjs'
 import IndexManager from './IndexManager.mjs'
-import Serializer from './Serializer.mjs'
+import Serializer from './serializers/Simple.mjs'
+import AdvancedSerializer from './serializers/Advanced.mjs'
+import fs from 'fs'
 
-export class Database extends Serializer {
+export class Database extends EventEmitter {
   constructor(filePath, opts={}) {
     super()
     this.opts = Object.assign({
@@ -10,13 +13,19 @@ export class Database extends Serializer {
       index: {data: {}},
       indexes: {},
       compress: false,
-      compressIndex: false
+      compressIndex: false,
+      maxMemoryUsage: 64 * 1024 // 64KB
     }, opts)
     this.shouldSave = false
-    this.serializer = new Serializer(this.opts)
+    if(this.opts.v8 || this.opts.compress || this.opts.compressIndex) {
+      this.serializer = new AdvancedSerializer(this.opts)
+    } else {
+      this.serializer = new Serializer(this.opts)
+    }
     this.fileHandler = new FileHandler(filePath)
     this.indexManager = new IndexManager(this.opts)
     this.indexOffset = 0
+    this.writeBuffer = []
   }
 
   use(plugin) {
@@ -26,6 +35,9 @@ export class Database extends Serializer {
 
   async init() {
     if(this.destroyed) throw new Error('Database is destroyed')
+    if(this.initialized) return
+    if(this.initlializing) return await new Promise(resolve => this.once('init', resolve))
+    this.initializing = true
     try {
       if(this.opts.clear) {
         await this.fileHandler.truncate(0).catch(console.error)
@@ -55,13 +67,18 @@ export class Database extends Serializer {
       if(!String(e).includes('empty file')) {
         console.error('Error loading database:', e)
       }
+    } finally {
+      this.initializing = false
+      this.initialized = true
+      this.emit('init')
     }
-    this.initialized = true
-    this.emit('init')
   }
 
   async save() {
     if(this.destroyed) throw new Error('Database is destroyed')
+    if(this.saving) return new Promise(resolve => this.once('save', resolve))
+    this.saving = true
+    await this.flush()
     this.emit('before-save')
     const index = Object.assign({data: {}}, this.indexManager.index)
     for(const field in this.indexManager.index.data) {
@@ -71,13 +88,11 @@ export class Database extends Serializer {
     }
     const offsets = this.offsets.slice(0)
     const indexString = await this.serializer.serialize(index, {compress: this.opts.compressIndex})
-    
     for(const field in this.indexManager.index.data) {
       for(const term in this.indexManager.index.data[field]) {
         this.indexManager.index.data[field][term] = new Set(index.data[field][term]) // set back to set because of serialization
       }
-    }   
-    
+    }
     offsets.push(this.indexOffset)
     offsets.push(this.indexOffset + indexString.length)
     const offsetsString = await this.serializer.serialize(offsets, {compress: this.opts.compressIndex, linebreak: false})
@@ -85,10 +100,13 @@ export class Database extends Serializer {
         await this.fileHandler.truncate(this.indexOffset)
         this.shouldTruncate = false
     }
-    await this.fileHandler.writeData(indexString)
-    await this.fileHandler.writeData(offsetsString, true)
+    this.writeBuffer.push(indexString)
+    this.writeBuffer.push(offsetsString)
+    await this.flush() // write the index and offsets
     this.shouldTruncate = true
     this.shouldSave = false
+    this.saving = false
+    this.emit('save')
   }
 
   async ready() {
@@ -109,7 +127,7 @@ export class Database extends Serializer {
   }
   
   getRanges(map) {
-    return map.map(n => {
+    return (map || Array.from(this.offsets.keys())).map(n => {
         const ret = this.locate(n)
         if(ret !== undefined) return {start: ret[0], end: ret[1], index: n}
     }).filter(n => n !== undefined)
@@ -118,27 +136,83 @@ export class Database extends Serializer {
   async readLines(map, ranges) {
     if(!ranges) ranges = this.getRanges(map)
     const results = await this.fileHandler.readRanges(ranges, this.serializer.deserialize.bind(this.serializer))
+    let i = 0
+    for(const start in results) {
+      if(!results[start] || results[start]._ !== undefined) continue
+      while(this.offsets[i] != start && i < map.length) i++ // weak comparison as 'start' is a string
+      results[start]._ = map[i++]
+    }
     return Object.values(results).filter(r => r !== undefined)
   }
 
   async insert(data) {
     if(this.destroyed) throw new Error('Database is destroyed')
-    const position = this.offsets.length
     const line = await this.serializer.serialize(data, {compress: this.opts.compress}) // using Buffer for offsets accuracy
     if (this.shouldTruncate) {
-        await this.fileHandler.truncate(this.indexOffset)
+        this.writeBuffer.push(this.indexOffset)
         this.shouldTruncate = false
     }
-    await this.fileHandler.writeData(line)
+    const position = this.offsets.length
     this.offsets.push(this.indexOffset)
     this.indexOffset += line.length
     this.indexManager.add(data, position)
-    this.shouldSave = true
     this.emit('insert', data, position)
+    this.writeBuffer.push(line)
+    if(!this.flushing && this.currentWriteBufferSize() > this.opts.maxMemoryUsage) {
+      await this.flush()
+    }
+    this.shouldSave = true
+  }
+
+  currentWriteBufferSize(){
+    const lengths = this.writeBuffer.filter(b => Buffer.isBuffer(b)).map(b => b.length)
+    return lengths.reduce((a, b) => a + b, 0)
+  }
+
+  flush() {
+    if(this.flushing) return this.flushing
+    return new Promise((resolve, reject) => {
+      if(this.destroyed) return reject(new Error('Database is destroyed'))
+      if(!this.writeBuffer.length) return resolve()
+      let err
+      this.flushing = this._flush().catch(e => err = e).finally(() => {
+        this.flushing = false
+        err ? reject(err) : resolve()
+      })
+    })
+  }
+
+  async _flush() {
+    let fd = await fs.promises.open(this.fileHandler.filePath, 'a')
+    try {
+      while(this.writeBuffer.length) {
+        let data
+        const pos = this.writeBuffer.findIndex(b => typeof b === 'number')
+        if(pos === 0) {
+          await fd.close()
+          await this.fileHandler.truncate(this.writeBuffer.shift())
+          fd = await fs.promises.open(this.fileHandler.filePath, 'a')
+          continue
+        } else if(pos === -1) {
+          data = Buffer.concat(this.writeBuffer)
+          this.writeBuffer.length = 0
+        } else {
+          data = Buffer.concat(this.writeBuffer.slice(0, pos))
+          this.writeBuffer.splice(0, pos)
+        }
+        await fd.write(data)
+      }
+      this.shouldSave = true
+    } catch(err) {
+      console.error('Error flushing:', err)
+    } finally {
+      await fd.close()
+    }
   }
 
   async *walk(map, options={}) {
     if(this.destroyed) throw new Error('Database is destroyed')
+    this.shouldSave && await this.save().catch(console.error)
     if(this.indexOffset === 0) return
     if(!Array.isArray(map)) {
       if(map && typeof map === 'object') {
@@ -148,15 +222,35 @@ export class Database extends Serializer {
       }
     }
     const ranges = this.getRanges(map)
-    for await (const line of this.fileHandler.walk(ranges)) {
-      let err
-      const entry = await this.serializer.deserialize(line).catch(e => console.error(err = e))
-      err || (yield entry)
+    const partitionedRanges = [], currentPartition = 0
+    for (const line in ranges) {
+      if (partitionedRanges[currentPartition] === undefined) {
+        partitionedRanges[currentPartition] = []
+      }
+      partitionedRanges[currentPartition].push(ranges[line])
+      if (partitionedRanges[currentPartition].length >= this.opts.maxMemoryUsage) {
+        currentPartition++
+      }
+    }
+    let m = 0
+    for (const ranges of partitionedRanges) {
+      const lines = await this.fileHandler.readRanges(ranges)
+      for (const line in lines) {
+        let err
+        const entry = await this.serializer.deserialize(lines[line]).catch(e => console.error(err = e))
+        if (err) continue
+        if (entry._ === undefined) {
+          while(this.offsets[m] != line && m < map.length) m++ // weak comparison as 'start' is a string
+          entry._ = m++
+        }
+        yield entry
+      }
     }
   }
-       
+
   async query(criteria, options={}) {
     if(this.destroyed) throw new Error('Database is destroyed')
+    this.shouldSave && await this.save().catch(console.error)
     if(Array.isArray(criteria)) {
       let results = await this.readLines(criteria)
       if (options.orderBy) {
@@ -182,6 +276,7 @@ export class Database extends Serializer {
 
   async update(criteria, data, options={}) {
     if(this.destroyed) throw new Error('Database is destroyed')
+    this.shouldSave && await this.save().catch(console.error)
     const matchingLines = await this.indexManager.query(criteria, options.matchAny)
     if (!matchingLines || !matchingLines.size) {
         return []
@@ -213,13 +308,17 @@ export class Database extends Serializer {
     this.offsets = offsets
     this.indexOffset += byteOffset
     await this.fileHandler.replaceLines(ranges, lines);
-    [...validMatchingLines].forEach((lineNumber, i) => this.indexManager.add(entries[i], lineNumber))
+    [...validMatchingLines].forEach((lineNumber, i) => {
+      this.indexManager.dryRemove(lineNumber)
+      this.indexManager.add(entries[i], lineNumber)
+    })
     this.shouldSave = true
     return entries
   }
 
   async delete(criteria, options={}) {
     if(this.destroyed) throw new Error('Database is destroyed')
+    this.shouldSave && await this.save().catch(console.error)
     const matchingLines = await this.indexManager.query(criteria, options.matchAny)
     if (!matchingLines || !matchingLines.size) {
         return 0
@@ -227,27 +326,20 @@ export class Database extends Serializer {
     const ranges = this.getRanges([...matchingLines])
     const validMatchingLines = new Set(ranges.map(r => r.index))
     await this.fileHandler.replaceLines(ranges, [])
-    const replaces = new Map()
     const offsets = []
-    let positionOffset = 0, byteOffset = 0, k = 0
+    let byteOffset = 0, k = 0
     this.offsets.forEach((n, i) => {
-      let skip
       if (validMatchingLines.has(i)) {
         const r = ranges[k]
-        positionOffset--
         byteOffset -= (r.end - r.start)
         k++
-        skip = true
       } else {
-        if(positionOffset !== 0) {
-          replaces.set(n, n + positionOffset)
-        }
         offsets.push(n + byteOffset)
       }
     })
     this.offsets = offsets
     this.indexOffset += byteOffset
-    this.indexManager.replace(replaces)
+    this.indexManager.remove([...validMatchingLines])
     this.shouldSave = true
     return ranges.length
   }
@@ -257,6 +349,7 @@ export class Database extends Serializer {
     this.destroyed = true
     this.indexOffset = 0
     this.indexManager.index = {}
+    this.writeBuffer.length = 0
     this.initialized = false
     this.fileHandler.destroy()
   }
