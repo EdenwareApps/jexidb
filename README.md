@@ -25,11 +25,11 @@ To create a new instance of the database, you need to provide a file path where 
 
 import { Database } from 'jexidb'; // ESM
 
-const db = new Database('path/to/database.jdb', {
+const db = new Database('path/to/database.jdb', { // file will be created if it does not already exist
   v8: false, // false by default, set to true to use V8 serialization instead of JSON.
   compress: false, // set to true to compress each entry
   compressIndex: false, // set to true to compress the index only
-  indexes: { // keys to use in queries, only those key values ​​are kept in memory
+  indexes: { // keys to use in queries, only those key values ​​are kept in memory, so fewer specified keys lead to improved performance
     id: 'number',
     name: 'string'
   }
@@ -43,10 +43,12 @@ Before using the database, you need to initialize it. This will load the existin
 ```javascript
 await db.init();
 ```
+Only the values ​​specified as indexes are kept in memory for faster queries. JexiDB will never load the entire file into memory.
+
 
 ### Inserting Data
 
-You can insert data into the database by using the `insert` method. The data should be an object that matches the defined indexes.
+You can insert data into the database by using the `insert` method. The data should be an object that contains the defined indexes. All object values will be saved into database.
 
 ```javascript
 await db.insert({ id: 1, name: 'John Doe' });
