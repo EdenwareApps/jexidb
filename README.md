@@ -22,6 +22,7 @@ To create a new instance of the database, you need to provide a file path where 
 
 ```javascript
 // const { Database } = require('jexidb'); // commonjs
+
 import { Database } from 'jexidb'; // ESM
 
 const db = new Database('path/to/database.jdb', {
