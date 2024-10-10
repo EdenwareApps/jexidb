@@ -35,6 +35,8 @@ const db = new Database('path/to/database.jdb', { // file will be created if it 
   }
 });
 ```
+You can [learn a bit more about these options at this link](https://github.com/EdenwareApps/jexidb/tree/main/test#readme).
+
 
 ### Initializing the Database
 
