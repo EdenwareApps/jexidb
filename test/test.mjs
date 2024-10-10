@@ -45,9 +45,9 @@ const runTests = async (id, name, format, opts) => {
     let results = await db.query({ id: { '<=': 5 } });
     const pass1 = results.length === 5
     const pass2 = results[0].name === 'Scorpion'
-    console.assert(pass1, 'Round 1 - READ: Test failed: Where is everyone? Did Scorpion pull a "GET OVER HERE" on the missing entries?');
-    console.assert(pass2, 'Round 1 - READ: Test failed: Scorpion seems to have teleported out of the database!');
-    if(pass1 && pass2) console.log('Round 1 - READ: Flawless Victory! All characters inserted successfully.');
+    console.assert(pass1, 'Round 2 - READ: Test failed: Where is everyone? Did Scorpion pull a "GET OVER HERE" on the missing entries?');
+    console.assert(pass2, 'Round 2 - READ: Test failed: Scorpion seems to have teleported out of the database!');
+    if(pass1 && pass2) console.log('Round 2 - READ: Flawless Victory! All characters inserted successfully.');
 
     // 4. Test data update
     await db.update({ id: 1 }, { name: 'Scorpion Updated' });
@@ -96,9 +96,9 @@ const runTests = async (id, name, format, opts) => {
     console.assert(results[0].name === 'Sindel', 'Test failed: Sindel’s data got messed up. Did she scream too loud again?');
 
     if(pass1 && pass2 && pass4 && pass5 && pass6) {
-        console.log('Battle #'+ id +' finished: All tests with format "'+ format +'" ran successfully! Fatality avoided this time.\n\n');
+        console.log('\nBattle #'+ id +' finished: All tests with format "'+ format +'" ran successfully! Fatality avoided this time.\n\n');
     } else {
-        throw 'Battle #'+ id +' finished: Some tests failed with format "'+ format +'"! Time to train harder.\n\n';
+        throw '\nBattle #'+ id +' finished: Some tests failed with format "'+ format +'"! Time to train harder.\n\n';
     }
 };
 
