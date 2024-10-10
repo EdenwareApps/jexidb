@@ -21,7 +21,8 @@ npm install EdenwareApps/jexidb
 To create a new instance of the database, you need to provide a file path where the database will be stored and an optional configuration object for indexes.
 
 ```javascript
-import { Database } from 'jexidb';
+// const { Database } = require('jexidb'); // commonjs
+import { Database } from 'jexidb'; // ESM
 
 const db = new Database('path/to/database.jdb', {
   v8: false, // false by default, set to true to use V8 serialization instead of JSON.
