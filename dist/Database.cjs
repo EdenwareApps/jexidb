@@ -7,8 +7,7 @@ exports.Database = void 0;
 var _events = require("events");
 var _FileHandler = _interopRequireDefault(require("./FileHandler.mjs"));
 var _IndexManager = _interopRequireDefault(require("./IndexManager.mjs"));
-var _Simple = _interopRequireDefault(require("./serializers/Simple.mjs"));
-var _Advanced = _interopRequireDefault(require("./serializers/Advanced.mjs"));
+var _Serializer = _interopRequireDefault(require("./Serializer.mjs"));
 var _fs = _interopRequireDefault(require("fs"));
 function _interopRequireDefault(e) { return e && e.__esModule ? e : { "default": e }; }
 function _createForOfIteratorHelper(r, e) { var t = "undefined" != typeof Symbol && r[Symbol.iterator] || r["@@iterator"]; if (!t) { if (Array.isArray(r) || (t = _unsupportedIterableToArray(r)) || e && r && "number" == typeof r.length) { t && (r = t); var _n = 0, F = function F() {}; return { s: F, n: function n() { return _n >= r.length ? { done: !0 } : { done: !1, value: r[_n++] }; }, e: function e(r) { throw r; }, f: F }; } throw new TypeError("Invalid attempt to iterate non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method."); } var o, a = !0, u = !1; return { s: function s() { t = t.call(r); }, n: function n() { var r = t.next(); return a = r.done, r; }, e: function e(r) { u = !0, o = r; }, f: function f() { try { a || null == t["return"] || t["return"](); } finally { if (u) throw o; } } }; }
@@ -45,7 +44,7 @@ function AsyncGenerator(e) { var r, t; function resume(r, t) { try { var n = e[r
 AsyncGenerator.prototype["function" == typeof Symbol && Symbol.asyncIterator || "@@asyncIterator"] = function () { return this; }, AsyncGenerator.prototype.next = function (e) { return this._invoke("next", e); }, AsyncGenerator.prototype["throw"] = function (e) { return this._invoke("throw", e); }, AsyncGenerator.prototype["return"] = function (e) { return this._invoke("return", e); };
 function _OverloadYield(e, d) { this.v = e, this.k = d; }
 var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
-  function Database(filePath) {
+  function Database(file) {
     var _this2;
     var opts = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
     _classCallCheck(this, Database);
@@ -60,13 +59,10 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
       compressIndex: false,
       maxMemoryUsage: 64 * 1024 // 64KB
     }, opts);
+    _this2.offsets = [];
     _this2.shouldSave = false;
-    if (_this2.opts.v8 || _this2.opts.compress || _this2.opts.compressIndex) {
-      _this2.serializer = new _Advanced["default"](_this2.opts);
-    } else {
-      _this2.serializer = new _Simple["default"](_this2.opts);
-    }
-    _this2.fileHandler = new _FileHandler["default"](filePath);
+    _this2.serializer = new _Serializer["default"](_this2.opts);
+    _this2.fileHandler = new _FileHandler["default"](file);
     _this2.indexManager = new _IndexManager["default"](_this2.opts);
     _this2.indexOffset = 0;
     _this2.writeBuffer = [];
@@ -165,7 +161,7 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
             case 38:
               _context.prev = 38;
               _context.t0 = _context["catch"](9);
-              if (!this.offsets) {
+              if (Array.isArray(this.offsets)) {
                 this.offsets = [];
               }
               this.indexOffset = 0;
@@ -204,18 +200,30 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
               }
               throw new Error('Database is destroyed');
             case 2:
-              if (!this.saving) {
+              if (this.initialized) {
                 _context2.next = 4;
+                break;
+              }
+              throw new Error('Database not initialized');
+            case 4:
+              if (!this.saving) {
+                _context2.next = 6;
                 break;
               }
               return _context2.abrupt("return", new Promise(function (resolve) {
                 return _this4.once('save', resolve);
               }));
-            case 4:
+            case 6:
               this.saving = true;
-              _context2.next = 7;
+              _context2.next = 9;
               return this.flush();
-            case 7:
+            case 9:
+              if (this.shouldSave) {
+                _context2.next = 11;
+                break;
+              }
+              return _context2.abrupt("return");
+            case 11:
               this.emit('before-save');
               index = Object.assign({
                 data: {}
@@ -226,12 +234,14 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
                 }
               }
               offsets = this.offsets.slice(0);
-              _context2.next = 13;
+              _context2.next = 17;
               return this.serializer.serialize(index, {
-                compress: this.opts.compressIndex
+                compress: this.opts.compressIndex,
+                linebreak: true
               });
-            case 13:
+            case 17:
               indexString = _context2.sent;
+              // force linebreak here to allow 'init' to read last line as offsets correctly
               for (_field in this.indexManager.index.data) {
                 for (_term in this.indexManager.index.data[_field]) {
                   this.indexManager.index.data[_field][_term] = new Set(index.data[_field][_term]); // set back to set because of serialization
@@ -239,22 +249,15 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
               }
               offsets.push(this.indexOffset);
               offsets.push(this.indexOffset + indexString.length);
-              _context2.next = 19;
+              // save offsets as JSON always to prevent linebreaks on last line, which breaks 'init()'
+              _context2.next = 23;
               return this.serializer.serialize(offsets, {
-                compress: this.opts.compressIndex,
+                json: true,
+                compress: false,
                 linebreak: false
               });
-            case 19:
-              offsetsString = _context2.sent;
-              if (!this.shouldTruncate) {
-                _context2.next = 24;
-                break;
-              }
-              _context2.next = 23;
-              return this.fileHandler.truncate(this.indexOffset);
             case 23:
-              this.shouldTruncate = false;
-            case 24:
+              offsetsString = _context2.sent;
               this.writeBuffer.push(indexString);
               this.writeBuffer.push(offsetsString);
               _context2.next = 28;
@@ -390,17 +393,24 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
               }
               throw new Error('Database is destroyed');
             case 2:
-              _context5.next = 4;
-              return this.serializer.serialize(data, {
-                compress: this.opts.compress
-              });
-            case 4:
-              line = _context5.sent;
-              // using Buffer for offsets accuracy
+              if (this.initialized) {
+                _context5.next = 5;
+                break;
+              }
+              _context5.next = 5;
+              return this.init();
+            case 5:
               if (this.shouldTruncate) {
                 this.writeBuffer.push(this.indexOffset);
                 this.shouldTruncate = false;
               }
+              _context5.next = 8;
+              return this.serializer.serialize(data, {
+                compress: this.opts.compress
+              });
+            case 8:
+              line = _context5.sent;
+              // using Buffer for offsets accuracy
               position = this.offsets.length;
               this.offsets.push(this.indexOffset);
               this.indexOffset += line.length;
@@ -408,14 +418,14 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
               this.emit('insert', data, position);
               this.writeBuffer.push(line);
               if (!(!this.flushing && this.currentWriteBufferSize() > this.opts.maxMemoryUsage)) {
-                _context5.next = 15;
+                _context5.next = 18;
                 break;
               }
-              _context5.next = 15;
+              _context5.next = 18;
               return this.flush();
-            case 15:
+            case 18:
               this.shouldSave = true;
-            case 16:
+            case 19:
             case "end":
               return _context5.stop();
           }
@@ -442,16 +452,18 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
     key: "flush",
     value: function flush() {
       var _this7 = this;
-      if (this.flushing) return this.flushing;
-      return new Promise(function (resolve, reject) {
+      if (this.flushing) {
+        return this.flushing;
+      }
+      return this.flushing = new Promise(function (resolve, reject) {
         if (_this7.destroyed) return reject(new Error('Database is destroyed'));
         if (!_this7.writeBuffer.length) return resolve();
         var err;
-        _this7.flushing = _this7._flush()["catch"](function (e) {
+        _this7._flush()["catch"](function (e) {
           return err = e;
         })["finally"](function () {
-          _this7.flushing = false;
           err ? reject(err) : resolve();
+          _this7.flushing = false;
         });
       });
     }
@@ -464,7 +476,7 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
           while (1) switch (_context6.prev = _context6.next) {
             case 0:
               _context6.next = 2;
-              return _fs["default"].promises.open(this.fileHandler.filePath, 'a');
+              return _fs["default"].promises.open(this.fileHandler.file, 'a');
             case 2:
               fd = _context6.sent;
               _context6.prev = 3;
@@ -488,7 +500,7 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
               return this.fileHandler.truncate(this.writeBuffer.shift());
             case 12:
               _context6.next = 14;
-              return _fs["default"].promises.open(this.fileHandler.filePath, 'a');
+              return _fs["default"].promises.open(this.fileHandler.file, 'a');
             case 14:
               fd = _context6.sent;
               return _context6.abrupt("continue", 4);
@@ -547,20 +559,27 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
               }
               throw new Error('Database is destroyed');
             case 2:
-              _context8.t0 = _this.shouldSave;
-              if (!_context8.t0) {
-                _context8.next = 6;
+              if (_this.initialized) {
+                _context8.next = 5;
                 break;
               }
-              _context8.next = 6;
+              _context8.next = 5;
+              return _awaitAsyncGenerator(_this.init());
+            case 5:
+              _context8.t0 = _this.shouldSave;
+              if (!_context8.t0) {
+                _context8.next = 9;
+                break;
+              }
+              _context8.next = 9;
               return _awaitAsyncGenerator(_this.save()["catch"](console.error));
-            case 6:
+            case 9:
               if (!(_this.indexOffset === 0)) {
-                _context8.next = 8;
+                _context8.next = 11;
                 break;
               }
               return _context8.abrupt("return");
-            case 8:
+            case 11:
               if (!Array.isArray(map)) {
                 if (map && _typeof(map) === 'object') {
                   map = _this.indexManager.query(map, options.matchAny);
@@ -581,15 +600,15 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
               }
               m = 0;
               _i = 0, _partitionedRanges = partitionedRanges;
-            case 14:
+            case 17:
               if (!(_i < _partitionedRanges.length)) {
-                _context8.next = 31;
+                _context8.next = 34;
                 break;
               }
               _ranges = _partitionedRanges[_i];
-              _context8.next = 18;
+              _context8.next = 21;
               return _awaitAsyncGenerator(_this.fileHandler.readRanges(_ranges));
-            case 18:
+            case 21:
               lines = _context8.sent;
               _loop = /*#__PURE__*/_regeneratorRuntime().mark(function _loop() {
                 var err, entry;
@@ -621,27 +640,27 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
                 }, _loop);
               });
               _context8.t1 = _regeneratorRuntime().keys(lines);
-            case 21:
+            case 24:
               if ((_context8.t2 = _context8.t1()).done) {
-                _context8.next = 28;
+                _context8.next = 31;
                 break;
               }
               _line = _context8.t2.value;
-              return _context8.delegateYield(_loop(), "t3", 24);
-            case 24:
+              return _context8.delegateYield(_loop(), "t3", 27);
+            case 27:
               if (!_context8.t3) {
-                _context8.next = 26;
+                _context8.next = 29;
                 break;
               }
-              return _context8.abrupt("continue", 21);
-            case 26:
-              _context8.next = 21;
-              break;
-            case 28:
-              _i++;
-              _context8.next = 14;
+              return _context8.abrupt("continue", 24);
+            case 29:
+              _context8.next = 24;
               break;
             case 31:
+              _i++;
+              _context8.next = 17;
+              break;
+            case 34:
             case "end":
               return _context8.stop();
           }
@@ -671,21 +690,28 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
               }
               throw new Error('Database is destroyed');
             case 3:
-              _context9.t0 = this.shouldSave;
-              if (!_context9.t0) {
-                _context9.next = 7;
+              if (this.initialized) {
+                _context9.next = 6;
                 break;
               }
-              _context9.next = 7;
-              return this.save()["catch"](console.error);
-            case 7:
-              if (!Array.isArray(criteria)) {
-                _context9.next = 16;
+              _context9.next = 6;
+              return this.init();
+            case 6:
+              _context9.t0 = this.shouldSave;
+              if (!_context9.t0) {
+                _context9.next = 10;
                 break;
               }
               _context9.next = 10;
-              return this.readLines(criteria);
+              return this.save()["catch"](console.error);
             case 10:
+              if (!Array.isArray(criteria)) {
+                _context9.next = 19;
+                break;
+              }
+              _context9.next = 13;
+              return this.readLines(criteria);
+            case 13:
               results = _context9.sent;
               if (options.orderBy) {
                 _options$orderBy$spli = options.orderBy.split(' '), _options$orderBy$spli2 = _slicedToArray(_options$orderBy$spli, 2), field = _options$orderBy$spli2[0], _options$orderBy$spli3 = _options$orderBy$spli2[1], direction = _options$orderBy$spli3 === void 0 ? 'asc' : _options$orderBy$spli3;
@@ -699,22 +725,22 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
                 results = results.slice(0, options.limit);
               }
               return _context9.abrupt("return", results);
-            case 16:
-              _context9.next = 18;
+            case 19:
+              _context9.next = 21;
               return this.indexManager.query(criteria, options.matchAny);
-            case 18:
+            case 21:
               matchingLines = _context9.sent;
               if (!(!matchingLines || !matchingLines.size)) {
-                _context9.next = 21;
+                _context9.next = 24;
                 break;
               }
               return _context9.abrupt("return", []);
-            case 21:
-              _context9.next = 23;
-              return this.query(_toConsumableArray(matchingLines), options);
-            case 23:
-              return _context9.abrupt("return", _context9.sent);
             case 24:
+              _context9.next = 26;
+              return this.query(_toConsumableArray(matchingLines), options);
+            case 26:
+              return _context9.abrupt("return", _context9.sent);
+            case 27:
             case "end":
               return _context9.stop();
           }
@@ -747,47 +773,58 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
           while (1) switch (_context11.prev = _context11.next) {
             case 0:
               options = _args11.length > 2 && _args11[2] !== undefined ? _args11[2] : {};
+              if (this.shouldTruncate) {
+                this.writeBuffer.push(this.indexOffset);
+                this.shouldTruncate = false;
+              }
               if (!this.destroyed) {
-                _context11.next = 3;
+                _context11.next = 4;
                 break;
               }
               throw new Error('Database is destroyed');
-            case 3:
-              _context11.t0 = this.shouldSave;
-              if (!_context11.t0) {
+            case 4:
+              if (this.initialized) {
                 _context11.next = 7;
                 break;
               }
               _context11.next = 7;
-              return this.save()["catch"](console.error);
+              return this.init();
             case 7:
-              _context11.next = 9;
-              return this.indexManager.query(criteria, options.matchAny);
-            case 9:
-              matchingLines = _context11.sent;
-              if (!(!matchingLines || !matchingLines.size)) {
-                _context11.next = 12;
+              _context11.t0 = this.shouldSave;
+              if (!_context11.t0) {
+                _context11.next = 11;
                 break;
               }
-              return _context11.abrupt("return", []);
-            case 12:
-              ranges = this.getRanges(_toConsumableArray(matchingLines));
-              validMatchingLines = new Set(ranges.map(function (r) {
-                return r.index;
-              }));
-              if (validMatchingLines.size) {
+              _context11.next = 11;
+              return this.save()["catch"](console.error);
+            case 11:
+              _context11.next = 13;
+              return this.indexManager.query(criteria, options.matchAny);
+            case 13:
+              matchingLines = _context11.sent;
+              if (!(!matchingLines || !matchingLines.size)) {
                 _context11.next = 16;
                 break;
               }
               return _context11.abrupt("return", []);
             case 16:
-              _context11.next = 18;
+              ranges = this.getRanges(_toConsumableArray(matchingLines));
+              validMatchingLines = new Set(ranges.map(function (r) {
+                return r.index;
+              }));
+              if (validMatchingLines.size) {
+                _context11.next = 20;
+                break;
+              }
+              return _context11.abrupt("return", []);
+            case 20:
+              _context11.next = 22;
               return this.readLines(_toConsumableArray(validMatchingLines), ranges);
-            case 18:
+            case 22:
               entries = _context11.sent;
               lines = [];
               _iterator = _createForOfIteratorHelper(entries);
-              _context11.prev = 21;
+              _context11.prev = 25;
               _loop2 = /*#__PURE__*/_regeneratorRuntime().mark(function _loop2() {
                 var entry, err, updated, ret;
                 return _regeneratorRuntime().wrap(function _loop2$(_context10) {
@@ -809,27 +846,27 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
                 }, _loop2);
               });
               _iterator.s();
-            case 24:
+            case 28:
               if ((_step = _iterator.n()).done) {
-                _context11.next = 28;
+                _context11.next = 32;
                 break;
               }
-              return _context11.delegateYield(_loop2(), "t1", 26);
-            case 26:
-              _context11.next = 24;
-              break;
-            case 28:
-              _context11.next = 33;
-              break;
+              return _context11.delegateYield(_loop2(), "t1", 30);
             case 30:
-              _context11.prev = 30;
-              _context11.t2 = _context11["catch"](21);
+              _context11.next = 28;
+              break;
+            case 32:
+              _context11.next = 37;
+              break;
+            case 34:
+              _context11.prev = 34;
+              _context11.t2 = _context11["catch"](25);
               _iterator.e(_context11.t2);
-            case 33:
-              _context11.prev = 33;
+            case 37:
+              _context11.prev = 37;
               _iterator.f();
-              return _context11.finish(33);
-            case 36:
+              return _context11.finish(37);
+            case 40:
               offsets = [];
               byteOffset = 0, k = 0;
               this.offsets.forEach(function (n, i) {
@@ -843,20 +880,20 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
               });
               this.offsets = offsets;
               this.indexOffset += byteOffset;
-              _context11.next = 43;
+              _context11.next = 47;
               return this.fileHandler.replaceLines(ranges, lines);
-            case 43:
+            case 47:
               _toConsumableArray(validMatchingLines).forEach(function (lineNumber, i) {
                 _this8.indexManager.dryRemove(lineNumber);
                 _this8.indexManager.add(entries[i], lineNumber);
               });
               this.shouldSave = true;
               return _context11.abrupt("return", entries);
-            case 46:
+            case 50:
             case "end":
               return _context11.stop();
           }
-        }, _callee9, this, [[21, 30, 33, 36]]);
+        }, _callee9, this, [[25, 34, 37, 40]]);
       }));
       function update(_x5, _x6) {
         return _update.apply(this, arguments);
@@ -879,37 +916,48 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
           while (1) switch (_context12.prev = _context12.next) {
             case 0:
               options = _args12.length > 1 && _args12[1] !== undefined ? _args12[1] : {};
+              if (this.shouldTruncate) {
+                this.writeBuffer.push(this.indexOffset);
+                this.shouldTruncate = false;
+              }
               if (!this.destroyed) {
-                _context12.next = 3;
+                _context12.next = 4;
                 break;
               }
               throw new Error('Database is destroyed');
-            case 3:
-              _context12.t0 = this.shouldSave;
-              if (!_context12.t0) {
+            case 4:
+              if (this.initialized) {
                 _context12.next = 7;
                 break;
               }
               _context12.next = 7;
-              return this.save()["catch"](console.error);
+              return this.init();
             case 7:
-              _context12.next = 9;
+              _context12.t0 = this.shouldSave;
+              if (!_context12.t0) {
+                _context12.next = 11;
+                break;
+              }
+              _context12.next = 11;
+              return this.save()["catch"](console.error);
+            case 11:
+              _context12.next = 13;
               return this.indexManager.query(criteria, options.matchAny);
-            case 9:
+            case 13:
               matchingLines = _context12.sent;
               if (!(!matchingLines || !matchingLines.size)) {
-                _context12.next = 12;
+                _context12.next = 16;
                 break;
               }
               return _context12.abrupt("return", 0);
-            case 12:
+            case 16:
               ranges = this.getRanges(_toConsumableArray(matchingLines));
               validMatchingLines = new Set(ranges.map(function (r) {
                 return r.index;
               }));
-              _context12.next = 16;
+              _context12.next = 20;
               return this.fileHandler.replaceLines(ranges, []);
-            case 16:
+            case 20:
               offsets = [];
               byteOffset = 0, k = 0;
               this.offsets.forEach(function (n, i) {
@@ -926,7 +974,7 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
               this.indexManager.remove(_toConsumableArray(validMatchingLines));
               this.shouldSave = true;
               return _context12.abrupt("return", ranges.length);
-            case 24:
+            case 28:
             case "end":
               return _context12.stop();
           }
@@ -972,7 +1020,8 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
   }, {
     key: "length",
     get: function get() {
-      return this.offsets.length;
+      var _this$offsets;
+      return (this === null || this === void 0 || (_this$offsets = this.offsets) === null || _this$offsets === void 0 ? void 0 : _this$offsets.length) || 0;
     }
   }, {
     key: "index",

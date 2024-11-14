@@ -1,12 +1,11 @@
 import { EventEmitter } from 'events'
 import FileHandler from './FileHandler.mjs'
 import IndexManager from './IndexManager.mjs'
-import Serializer from './serializers/Simple.mjs'
-import AdvancedSerializer from './serializers/Advanced.mjs'
+import Serializer from './Serializer.mjs'
 import fs from 'fs'
 
 export class Database extends EventEmitter {
-  constructor(filePath, opts={}) {
+  constructor(file, opts={}) {
     super()
     this.opts = Object.assign({
       v8: false,
@@ -16,13 +15,10 @@ export class Database extends EventEmitter {
       compressIndex: false,
       maxMemoryUsage: 64 * 1024 // 64KB
     }, opts)
+    this.offsets = []
     this.shouldSave = false
-    if(this.opts.v8 || this.opts.compress || this.opts.compressIndex) {
-      this.serializer = new AdvancedSerializer(this.opts)
-    } else {
-      this.serializer = new Serializer(this.opts)
-    }
-    this.fileHandler = new FileHandler(filePath)
+    this.serializer = new Serializer(this.opts)
+    this.fileHandler = new FileHandler(file)
     this.indexManager = new IndexManager(this.opts)
     this.indexOffset = 0
     this.writeBuffer = []
@@ -60,7 +56,7 @@ export class Database extends EventEmitter {
       const index = await this.serializer.deserialize(indexLine, {compress: this.opts.compressIndex})
       index && this.indexManager.load(index)
     } catch (e) {
-      if(!this.offsets) {
+      if(Array.isArray(this.offsets)) {
         this.offsets = []
       }
       this.indexOffset = 0
@@ -76,9 +72,11 @@ export class Database extends EventEmitter {
 
   async save() {
     if(this.destroyed) throw new Error('Database is destroyed')
+    if(!this.initialized) throw new Error('Database not initialized')
     if(this.saving) return new Promise(resolve => this.once('save', resolve))
     this.saving = true
     await this.flush()
+    if (!this.shouldSave) return
     this.emit('before-save')
     const index = Object.assign({data: {}}, this.indexManager.index)
     for(const field in this.indexManager.index.data) {
@@ -87,7 +85,7 @@ export class Database extends EventEmitter {
       }
     }
     const offsets = this.offsets.slice(0)
-    const indexString = await this.serializer.serialize(index, {compress: this.opts.compressIndex})
+    const indexString = await this.serializer.serialize(index, {compress: this.opts.compressIndex, linebreak: true}) // force linebreak here to allow 'init' to read last line as offsets correctly
     for(const field in this.indexManager.index.data) {
       for(const term in this.indexManager.index.data[field]) {
         this.indexManager.index.data[field][term] = new Set(index.data[field][term]) // set back to set because of serialization
@@ -95,11 +93,8 @@ export class Database extends EventEmitter {
     }
     offsets.push(this.indexOffset)
     offsets.push(this.indexOffset + indexString.length)
-    const offsetsString = await this.serializer.serialize(offsets, {compress: this.opts.compressIndex, linebreak: false})
-    if (this.shouldTruncate) {
-        await this.fileHandler.truncate(this.indexOffset)
-        this.shouldTruncate = false
-    }
+    // save offsets as JSON always to prevent linebreaks on last line, which breaks 'init()'
+    const offsetsString = await this.serializer.serialize(offsets, {json: true, compress: false, linebreak: false})
     this.writeBuffer.push(indexString)
     this.writeBuffer.push(offsetsString)
     await this.flush() // write the index and offsets
@@ -122,7 +117,7 @@ export class Database extends EventEmitter {
       }
       return
     }
-    let end = this.offsets[n + 1] || this.indexOffset || Number.MAX_SAFE_INTEGER
+    let end = (this.offsets[n + 1] || this.indexOffset || Number.MAX_SAFE_INTEGER)
     return [this.offsets[n], end]
   }
   
@@ -147,11 +142,12 @@ export class Database extends EventEmitter {
 
   async insert(data) {
     if(this.destroyed) throw new Error('Database is destroyed')
-    const line = await this.serializer.serialize(data, {compress: this.opts.compress}) // using Buffer for offsets accuracy
+    if(!this.initialized) await this.init()
     if (this.shouldTruncate) {
         this.writeBuffer.push(this.indexOffset)
         this.shouldTruncate = false
     }
+    const line = await this.serializer.serialize(data, {compress: this.opts.compress}) // using Buffer for offsets accuracy
     const position = this.offsets.length
     this.offsets.push(this.indexOffset)
     this.indexOffset += line.length
@@ -170,20 +166,22 @@ export class Database extends EventEmitter {
   }
 
   flush() {
-    if(this.flushing) return this.flushing
-    return new Promise((resolve, reject) => {
+    if(this.flushing) {
+      return this.flushing
+    }
+    return this.flushing = new Promise((resolve, reject) => {
       if(this.destroyed) return reject(new Error('Database is destroyed'))
       if(!this.writeBuffer.length) return resolve()
       let err
-      this.flushing = this._flush().catch(e => err = e).finally(() => {
-        this.flushing = false
+      this._flush().catch(e => err = e).finally(() => {
         err ? reject(err) : resolve()
+        this.flushing = false
       })
     })
   }
 
   async _flush() {
-    let fd = await fs.promises.open(this.fileHandler.filePath, 'a')
+    let fd = await fs.promises.open(this.fileHandler.file, 'a')
     try {
       while(this.writeBuffer.length) {
         let data
@@ -191,7 +189,7 @@ export class Database extends EventEmitter {
         if(pos === 0) {
           await fd.close()
           await this.fileHandler.truncate(this.writeBuffer.shift())
-          fd = await fs.promises.open(this.fileHandler.filePath, 'a')
+          fd = await fs.promises.open(this.fileHandler.file, 'a')
           continue
         } else if(pos === -1) {
           data = Buffer.concat(this.writeBuffer)
@@ -212,6 +210,7 @@ export class Database extends EventEmitter {
 
   async *walk(map, options={}) {
     if(this.destroyed) throw new Error('Database is destroyed')
+    if(!this.initialized) await this.init()
     this.shouldSave && await this.save().catch(console.error)
     if(this.indexOffset === 0) return
     if(!Array.isArray(map)) {
@@ -250,6 +249,7 @@ export class Database extends EventEmitter {
 
   async query(criteria, options={}) {
     if(this.destroyed) throw new Error('Database is destroyed')
+    if(!this.initialized) await this.init()
     this.shouldSave && await this.save().catch(console.error)
     if(Array.isArray(criteria)) {
       let results = await this.readLines(criteria)
@@ -275,7 +275,12 @@ export class Database extends EventEmitter {
   }
 
   async update(criteria, data, options={}) {
+    if (this.shouldTruncate) {
+        this.writeBuffer.push(this.indexOffset)
+        this.shouldTruncate = false
+    }
     if(this.destroyed) throw new Error('Database is destroyed')
+    if(!this.initialized) await this.init()
     this.shouldSave && await this.save().catch(console.error)
     const matchingLines = await this.indexManager.query(criteria, options.matchAny)
     if (!matchingLines || !matchingLines.size) {
@@ -317,7 +322,12 @@ export class Database extends EventEmitter {
   }
 
   async delete(criteria, options={}) {
+    if (this.shouldTruncate) {
+        this.writeBuffer.push(this.indexOffset)
+        this.shouldTruncate = false
+    }
     if(this.destroyed) throw new Error('Database is destroyed')
+    if(!this.initialized) await this.init()
     this.shouldSave && await this.save().catch(console.error)
     const matchingLines = await this.indexManager.query(criteria, options.matchAny)
     if (!matchingLines || !matchingLines.size) {
@@ -355,7 +365,7 @@ export class Database extends EventEmitter {
   }
 
   get length() {
-    return this.offsets.length
+    return this?.offsets?.length || 0
   }
 
   get index() {

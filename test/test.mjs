@@ -50,13 +50,8 @@ const runTests = async (id, name, format, opts) => {
     // Path to the test file
     const testFilePath = path.join(__dirname, 'test-' + name + '.jdb');
     
-    // Function to clear the test file before each run
-    const clearTestFile = () => {
-        fs.writeFileSync(testFilePath, '', { encoding: null });
-    }
-
     console.log('Battle #' + id + ' (' + format + ') is starting...\n');
-    clearTestFile(); // Clear the file before starting the tests
+    fs.writeFileSync(testFilePath, '', { encoding: null }); // Clear the file before starting the tests
     const start = Date.now()
     const db = new Database(testFilePath, opts); // Instantiate the database
 
@@ -97,7 +92,6 @@ const runTests = async (id, name, format, opts) => {
 
     // 5. Test data deletion
     await db.delete({ name: character.name + ' Updated' });
-    
     results = await db.query({ id: { '<=': 2 } });
     const pass5 = results.length === 1;
     const pass6 = results[0].name === 'Sub-Zero';
@@ -108,43 +102,65 @@ const runTests = async (id, name, format, opts) => {
     // End the battle and log the result
     if(pass1 && pass2 && pass4 && pass5 && pass6) {
         let err, elapsed = Date.now() - start;
-        elapsed = elapsed < 1000 ? elapsed + 'ms' : (elapsed / 1000).toFixed(3) + 's';
         const { size } = await fs.promises.stat(testFilePath);
-        benchmarks[format] = { elapsed, size };
+        if(!benchmarks[format]) {
+            benchmarks[format] = { elapsed, size }
+        } else {
+            benchmarks[format].elapsed = (elapsed + benchmarks[format].elapsed)
+            benchmarks[format].size = (size + benchmarks[format].size)
+        }
         console.log(`\nBattle #${id} ended: All tests with format "${format}" ran successfully! Fatality avoided this time.\n\n`);
+        global.gc()
     } else {
         benchmarks[format] = { elapsed: 'Error', size: 'Error' };
+        global.gc();
         throw `\nBattle #${id} ended: Some tests failed with format "${format}"! Time to train harder.\n\n`;
     }
 }
 
 async function runAllTests() {
-    let err
-    await runTests(1, 'json', 'JSON', {
-        indexes: {id: 'number', name: 'string'},
-        v8: false,
-        compress: false,
-        compressIndex: false
-    }).catch(e => err = e)
-    await runTests(2, 'v8', 'V8 serialization', {
-        indexes: {id: 'number', name: 'string'},
-        v8: true,
-        compress: false,
-        compressIndex: false
-    }).catch(e => err = e)
-    await runTests(3, 'json-compressed', 'JSON with Brotli compression', {
-        indexes: {id: 'number', name: 'string'},
-        v8: false,
-        compress: false,
-        compressIndex: true
-    }).catch(e => err = e)
-    await runTests(3, 'v8-compressed', 'V8 with Brotli compression', {
-        indexes: {id: 'number', name: 'string'},
-        v8: true,
-        compress: false,
-        compressIndex: true
-    }).catch(e => err = e)
+    const depth = 100
+    let err, i = 1
+    let tests = [
+        ['json', 'JSON', { indexes: { id: 'number', name: 'string' }, v8: false, compress: false, compressIndex: false }],
+        ['v8', 'V8 serialization', { indexes: { id: 'number', name: 'string' }, v8: true, compress: false, compressIndex: false }],
+        ['json-compressed', 'JSON with Brotli compression', { indexes: { id: 'number', name: 'string' }, v8: false, compress: false, compressIndex: true }],
+        ['v8-compressed', 'V8 with Deflate compression', { indexes: { id: 'number', name: 'string' }, v8: true, compress: false, compressIndex: true }]
+    ]
+    tests = Array(depth).fill(tests).flat()
+    tests = tests.map(value => ({ value, sort: Math.random() })).sort((a, b) => a.sort - b.sort).map(({ value }) => value)
+    for(const test of tests) {
+        await runTests(i++, test[0], test[1], test[2]).catch(e => {
+            benchmarks[test[1]] = { elapsed: 'Error', size: 'Error' };
+            console.error(e)
+            err = e
+        })
+    }
+    const winners = {}
+    for (const [format, result] of Object.entries(benchmarks)) {
+        if (result.elapsed !== 'Error' && result.size !== 'Error') {
+            if (typeof(winners.elapsed) === 'undefined' || result.elapsed < winners.elapsed) {
+                winners.elapsed = result.elapsed
+                winners.format = format
+            }
+            if (typeof(winners.size) === 'undefined' || result.size < winners.size) {
+                winners.size = result.size
+                winners.format = format
+            }
+        }
+    }
+    for(const format in benchmarks) {
+        for(const prop of ['elapsed', 'size']) {
+            if(benchmarks[format][prop] === winners[prop]) {
+                benchmarks[format][prop] += ' \uD83C\uDFC6'
+            }
+        }
+    }
+    console.log('Benchmarks results after '+ tests.length +' battles:')
     console.table(benchmarks)
+    // setInterval(() => {}, 1000)
+    // global.Database = Database
+    // global.__dirname = __dirname
     process.exit(err ? 1 : 0)
 }
 

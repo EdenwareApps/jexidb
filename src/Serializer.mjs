@@ -6,9 +6,6 @@ export default class Serializer extends EventEmitter {
   constructor(opts = {}) {
     super()
     this.opts = Object.assign({}, opts)
-    this.linebreak = Buffer.from([0x0A])
-    this.delimiter = Buffer.from([0xFF, 0xFF, 0xFF, 0xFF])
-    this.defaultBuffer = Buffer.alloc(4096)
     this.brotliOptions = {
       params: {
         [zlib.constants.BROTLI_PARAM_QUALITY]: 4
@@ -19,56 +16,54 @@ export default class Serializer extends EventEmitter {
   async serialize(data, opts={}) {
     let line
     let header = 0x00 // 1 byte de header
-    const useV8 = this.opts.v8 || opts.v8 === true
-    const compress = this.opts.compress || opts.compress === true
+    const useV8 = (this.opts.v8 && opts.json !== true) || opts.v8 === true
+    const compress = (this.opts.compress && opts.compress !== false) || opts.compress === true
+    const addLinebreak = opts.linebreak !== false || (!useV8 && !compress && opts.linebreak !== false)
     if (useV8) {
       header |= 0x02 // set V8
       line = v8.serialize(data)
     } else {
-      if(compress) {
-        line = Buffer.from(JSON.stringify(data), 'utf-8')
-      } else {
-        return Buffer.from(JSON.stringify(data) + (opts.linebreak !== false ? '\n' : ''), 'utf-8')
-      }
+      let json = JSON.stringify(data)
+      line = Buffer.from(json, 'utf-8')
     }
     if (compress) {
       let err
-      const buffer = await this.compress(line).catch(e => err = e)
-      if(!err) {
+      const compressionType = useV8 ? 'deflate' : 'brotli'
+      const buffer = await this.compress(line, compressionType).catch(e => err = e)
+      if(!err && buffer.length && buffer.length < line.length) {
         header |= 0x01
         line = buffer
       }
     }
-    const totalLength = 1 + line.length + (opts.linebreak !== false ? 1 : 0)
+    const totalLength = 1 + line.length + (addLinebreak ? 1 : 0)
     const result = Buffer.alloc(totalLength)
     result[0] = header
-    line.copy(result, 1)
-    if (opts.linebreak !== false) {
-      result[totalLength - 1] = 0x0A
+    line.copy(result, 1, 0, line.length)
+    if(addLinebreak) {
+      result[result.length - 1] = 0x0A
     }
     return result
   }  
 
-  async deserialize(data, opts={}) {
-    let line
+  async deserialize(data) {
+    let line, isCompressed, isV8
     const header = data.readUInt8(0)
     const valid = header === 0x00 || header === 0x01 || header === 0x02 || header === 0x03
-    let isCompressed, isV8, decompresssed
     if(valid) {
       isCompressed = (header & 0x01) === 0x01
       isV8 = (header & 0x02) === 0x02
       line = data.subarray(1) // remove byte header
     } else {
       isCompressed = isV8 = false
-      line = data
+      try {
+        return JSON.parse(data.toString('utf-8').trim())
+      } catch (e) {
+        throw new Error('Failed to deserialize legacy JSON data')
+      }
     }
     if (isCompressed) {
-      let err
-      const buffer = await this.decompress(line).catch(e => err = e)
-      if(!err) {
-        decompresssed = true
-        line = buffer
-      }
+      const compressionType = isV8 ? 'deflate' : 'brotli'
+      line = await this.decompress(line, compressionType).catch(e => err = e)
     }
     if (isV8) {
       try {
@@ -80,41 +75,43 @@ export default class Serializer extends EventEmitter {
       try {
         return JSON.parse(line.toString('utf-8').trim())
       } catch (e) {
-        console.error('Failed to deserialize', header, line.toString('utf-8').trim())
         throw new Error('Failed to deserialize JSON data')
       }
     }
   }
 
-  compress(data) {
+  compress(data, type) {
     return new Promise((resolve, reject) => {
-      zlib.brotliCompress(data, this.brotliOptions, (err, buffer) => {
+      const callback = (err, buffer) => {
         if (err) {
           reject(err)
         } else {
           resolve(buffer)
         }
-      })
+      }
+      if(type === 'brotli') {
+        zlib.brotliCompress(data, this.brotliOptions, callback)
+      } else {
+        zlib.deflate(data, callback)
+      }
     })
   }
 
-  decompress(data) {
+  decompress(data, type) {
     return new Promise((resolve, reject) => {
-      zlib.brotliDecompress(data, (err, buffer) => {
+      const callback = (err, buffer) => {
         if (err) {
           reject(err)
         } else {
           resolve(buffer)
         }
-      })
+      }
+      if(type === 'brotli') {
+        zlib.brotliDecompress(data, callback)
+      } else {
+        zlib.inflate(data, callback)
+      }
     })
   }
-
-  async safeDeserialize(json) {
-    try {
-      return await this.deserialize(json)
-    } catch (e) {
-      return null
-    }
-  }
+  
 }

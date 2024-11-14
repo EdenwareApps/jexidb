@@ -1,6 +1,6 @@
 {
   "name": "jexidb",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "JexiDB is a pure JS NPM library for managing data on disk using JSONL efficiently, without the need for a server.",
   "main": "./dist/Database.cjs",
   "module": "./src/Database.mjs",
@@ -11,7 +11,7 @@
     }
   },
   "scripts": {
-    "test": "node test/test.mjs && exit 1",
+    "test": "node --expose-gc test/test.mjs && exit 1",
     "build": "npx babel src/Database.mjs --plugins @babel/plugin-transform-async-generator-functions --out-file-extension .cjs --out-dir dist"
   },
   "author": "EdenwareApps",
@@ -24,5 +24,35 @@
   },
   "dependencies": {
     "p-limit": "^6.1.0"
-  }
+  },
+  "directories": {
+    "test": "test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EdenwareApps/jexidb.git"
+  },
+  "keywords": [
+    "couchdb",
+    "database",
+    "nosql",
+    "pouchdb",
+    "local-storage",
+    "db",
+    "persistent-storage",
+    "dexiejs",
+    "embedded-database",
+    "data-management",
+    "nedb",
+    "lowdb",
+    "dexie",
+    "offline-database",
+    "simple-database",
+    "fast-database",
+    "jexidb"
+  ],
+  "bugs": {
+    "url": "https://github.com/EdenwareApps/jexidb/issues"
+  },
+  "homepage": "https://github.com/EdenwareApps/jexidb#readme"
 }

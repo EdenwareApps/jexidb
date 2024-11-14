@@ -2,21 +2,21 @@ import fs from 'fs'
 import pLimit from 'p-limit'
 
 export default class FileHandler {
-  constructor(filePath) {
-    this.filePath = filePath
+  constructor(file) {
+    this.file = file
   }
 
   async truncate(offset) {
     try {
-      await fs.promises.access(this.filePath, fs.constants.F_OK)
-      await fs.promises.truncate(this.filePath, offset)
+      await fs.promises.access(this.file, fs.constants.F_OK)
+      await fs.promises.truncate(this.file, offset)
     } catch (err) {
-      await fs.promises.writeFile(this.filePath, '')
+      await fs.promises.writeFile(this.file, '')
     }
   }
 
   async readRange(start, end) {
-    let fd = await fs.promises.open(this.filePath, 'r')
+    let fd = await fs.promises.open(this.file, 'r')
     const length = end - start
     let buffer = Buffer.alloc(length)
     const { bytesRead } = await fd.read(buffer, 0, length, start).catch(console.error)    
@@ -27,7 +27,7 @@ export default class FileHandler {
 
   async readRanges(ranges, mapper) {
     const lines = {}, limit = pLimit(4)
-    const fd = await fs.promises.open(this.filePath, 'r')
+    const fd = await fs.promises.open(this.file, 'r')
     try {
       const tasks = ranges.map(r => {
         return async () => {
@@ -50,9 +50,9 @@ export default class FileHandler {
 
   async replaceLines(ranges, lines) {
     let closed
-    const tmpFile = this.filePath + '.tmp'
+    const tmpFile = this.file + '.tmp'
     const writer = await fs.promises.open(tmpFile, 'w+')
-    const reader = await fs.promises.open(this.filePath, 'r')
+    const reader = await fs.promises.open(this.file, 'r')
     try {
       let i = 0, start = 0
       for (const r of ranges) {
@@ -74,7 +74,7 @@ export default class FileHandler {
       await reader.close()
       await writer.close()
       closed = true
-      await fs.promises.copyFile(tmpFile, this.filePath)
+      await fs.promises.copyFile(tmpFile, this.file)
     } catch (e) {
       console.error('Error replacing lines:', e)
     } finally {
@@ -90,11 +90,11 @@ export default class FileHandler {
   }
 
   writeDataSync(data) {
-    fs.writeFileSync(this.filePath, data, { flag: 'a' })
+    fs.writeFileSync(this.file, data, { flag: 'a' })
   }
 
   async readLastLine() {
-    const reader = await fs.promises.open(this.filePath, 'r')
+    const reader = await fs.promises.open(this.file, 'r')
     try {
       const { size } = await reader.stat()
       if (size < 1) throw 'empty file'
