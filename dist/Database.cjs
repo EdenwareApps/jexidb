@@ -581,8 +581,10 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
               return _context8.abrupt("return");
             case 11:
               if (!Array.isArray(map)) {
-                if (map && _typeof(map) === 'object') {
-                  map = _this.indexManager.query(map, options.matchAny);
+                if (map instanceof Set) {
+                  map = _toConsumableArray(map);
+                } else if (map && _typeof(map) === 'object') {
+                  map = _toConsumableArray(_this.indexManager.query(map, options.matchAny));
                 } else {
                   map = _toConsumableArray(Array(_this.offsets.length).keys());
                 }

@@ -214,8 +214,10 @@ export class Database extends EventEmitter {
     this.shouldSave && await this.save().catch(console.error)
     if(this.indexOffset === 0) return
     if(!Array.isArray(map)) {
-      if(map && typeof map === 'object') {
-        map = this.indexManager.query(map, options.matchAny)
+      if (map instanceof Set) {
+        map = [...map]
+      } else if(map && typeof map === 'object') {
+        map = [...this.indexManager.query(map, options.matchAny)]
       } else {
         map = [...Array(this.offsets.length).keys()]
       }
