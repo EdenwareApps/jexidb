@@ -29,6 +29,19 @@ export class Database extends EventEmitter {
     plugin(this)
   }
 
+  async check() {
+    if(this.destroyed) throw new Error('Database is destroyed')
+    const lastLine = await this.fileHandler.readLastLine()
+    if(!lastLine || !lastLine.length) {
+      throw new Error('File does not exists or is a empty file')
+    }
+    const offsets = await this.serializer.deserialize(lastLine, {compress: this.opts.compressIndex})
+    if(!Array.isArray(offsets)) {
+      throw new Error('File to parse offsets, expected an array')
+    }
+    return offsets.length
+  }
+
   async init() {
     if(this.destroyed) throw new Error('Database is destroyed')
     if(this.initialized) return
@@ -222,8 +235,9 @@ export class Database extends EventEmitter {
         map = [...Array(this.offsets.length).keys()]
       }
     }
+    let currentPartition = 0
     const ranges = this.getRanges(map)
-    const partitionedRanges = [], currentPartition = 0
+    const partitionedRanges = []
     for (const line in ranges) {
       if (partitionedRanges[currentPartition] === undefined) {
         partitionedRanges[currentPartition] = []
