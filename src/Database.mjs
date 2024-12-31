@@ -4,6 +4,60 @@ import IndexManager from './IndexManager.mjs'
 import Serializer from './Serializer.mjs'
 import fs from 'fs'
 
+class RangeDeserializer {
+  constructor(notJson, serializer) {
+    this.maxBatchSize = 128
+    this.buffers = []
+    this.isJSON = !notJson
+    this.serializer = serializer
+  }
+  has() {
+    return this.ended ? this.buffers.length : this.buffers.length >= this.maxBatchSize
+  }
+  push(line) {
+    this.buffers.push(line)
+    if(this.buffers.length >= this.maxBatchSize) {
+      this.flush().catch(console.error)
+    }
+  }
+  async flush() {
+    let entries
+    const lines = this.buffers
+    this.buffers = []
+    if(this.isJSON) {
+      const data = '['+ lines.join(',') +']'
+      let entries = []
+      try {
+        entries = JSON.parse(data)
+      } catch(e) {
+        console.error('Error parsing JSON:', data, e)
+      }
+    }
+    if(!entries) {
+      for(let i = 0; i < lines.length; i++) {
+        try {
+          let entry = await this.serializer.deserialize(lines[i])
+          entries.push(entry)
+        } catch(e) {
+          console.error('Error deserializing:', e)
+        }
+      }
+    }
+    this.buffers = entries
+    return data
+  }
+  async *entries() {
+    if(!this.has()) return
+    const entries = await this.flush()
+    for(const entry of entries) {
+      yield entry
+    }
+  }
+  end() {
+    this.ended = true
+  }
+}
+
 export class Database extends EventEmitter {
   constructor(file, opts={}) {
     super()
@@ -248,18 +302,29 @@ export class Database extends EventEmitter {
       }
     }
     let m = 0
-    for (const ranges of partitionedRanges) {
-      const lines = await this.fileHandler.readRanges(ranges)
-      for (const line in lines) {
-        let err
-        const entry = await this.serializer.deserialize(lines[line]).catch(e => console.error(err = e))
-        if (err) continue
-        if (entry._ === undefined) {
-          while(this.offsets[m] != line && m < map.length) m++ // weak comparison as 'start' is a string
-          entry._ = m++
+    const pool = new RangeDeserializer(this.opts.compress || this.opts.v8)
+    const process = async function* () {
+      for await (const ret of pool.entries()) {
+        if (ret.entry._ === undefined) {
+          while(this.offsets[m] != ret.start && m < map.length) m++ // weak comparison as 'start' is a string
+          ret.entry._ = m++
         }
-        yield entry
+        yield ret.entry
       }
+    }
+    for (const ranges of partitionedRanges) {
+      for await (const line of this.fileHandler.readRangesEach(ranges)) {
+        pool.push(line)
+        if(pool.has()) {
+          for(const entry of process()) {
+            yield entry
+          }
+        }
+      }
+    }
+    pool.end()
+    for await (const entry of process()) {
+      yield entry
     }
   }
 

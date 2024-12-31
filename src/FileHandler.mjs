@@ -48,6 +48,61 @@ export default class FileHandler {
     return lines
   }
 
+  async *readRangesEach(ranges, mapper) {
+    const lines = {};
+    const bufferPoolSize = 512 * 1024; // 512 KB
+    
+    // order ranges by start
+    ranges.sort((a, b) => a.start - b.start);
+  
+    // group ranges by bufferPoolSize and sequential ranges
+    const groups = [];
+    let currentGroup = { start: ranges[0].start, end: ranges[0].end, items: [ranges[0]], size: ranges[0].end - ranges[0].start };
+  
+    for (let i = 1; i < ranges.length; i++) {
+      const range = ranges[i];
+      const rangeSize = range.end - range.start;
+  
+      if (currentGroup.size + rangeSize <= bufferPoolSize && range.start <= currentGroup.end) {
+        currentGroup.end = Math.max(currentGroup.end, range.end);
+        currentGroup.items.push(range);
+        currentGroup.size += rangeSize;
+      } else {
+        groups.push(currentGroup);
+        currentGroup = { start: range.start, end: range.end, items: [range], size: rangeSize };
+      }
+    }
+    groups.push(currentGroup);
+  
+    const fd = await fs.promises.open(this.file, 'r');
+    try {
+      for (const group of groups) {
+        let err;
+        const length = group.end - group.start;
+        const buffer = Buffer.alloc(Math.min(length, bufferPoolSize));
+        
+        await fd.read(buffer, 0, length, group.start).catch(e => (err = e));
+        if (err) throw err;
+  
+        // split buffer into ranges
+        for (const range of group.items) {
+          const offset = range.start - group.start;
+          const rangeLength = range.end - range.start;
+          const subBuffer = buffer.subarray(offset, offset + rangeLength);
+  
+          const content = mapper ? await mapper(subBuffer, range) : subBuffer;
+          yield {content, start: range.start};
+        }
+      }
+    } catch (e) {
+      console.error('Error reading ranges:', e);
+    } finally {
+      await fd.close();
+    }
+  
+    return lines;
+  } 
+
   async replaceLines(ranges, lines) {
     let closed
     const tmpFile = this.file + '.tmp'
