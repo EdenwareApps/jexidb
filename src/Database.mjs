@@ -1,62 +1,8 @@
 import { EventEmitter } from 'events'
 import FileHandler from './FileHandler.mjs'
 import IndexManager from './IndexManager.mjs'
-import Serializer from './Serializer.mjs'
+import { StreamDeserializer, Serializer } from './Serializer.mjs'
 import fs from 'fs'
-
-class RangeDeserializer {
-  constructor(notJson, serializer) {
-    this.maxBatchSize = 128
-    this.buffers = []
-    this.isJSON = !notJson
-    this.serializer = serializer
-  }
-  has() {
-    return this.ended ? this.buffers.length : this.buffers.length >= this.maxBatchSize
-  }
-  push(line) {
-    this.buffers.push(line)
-    if(this.buffers.length >= this.maxBatchSize) {
-      this.flush().catch(console.error)
-    }
-  }
-  async flush() {
-    let entries
-    const lines = this.buffers
-    this.buffers = []
-    if(this.isJSON) {
-      const data = '['+ lines.join(',') +']'
-      let entries = []
-      try {
-        entries = JSON.parse(data)
-      } catch(e) {
-        console.error('Error parsing JSON:', data, e)
-      }
-    }
-    if(!entries) {
-      for(let i = 0; i < lines.length; i++) {
-        try {
-          let entry = await this.serializer.deserialize(lines[i])
-          entries.push(entry)
-        } catch(e) {
-          console.error('Error deserializing:', e)
-        }
-      }
-    }
-    this.buffers = entries
-    return data
-  }
-  async *entries() {
-    if(!this.has()) return
-    const entries = await this.flush()
-    for(const entry of entries) {
-      yield entry
-    }
-  }
-  end() {
-    this.ended = true
-  }
-}
 
 export class Database extends EventEmitter {
   constructor(file, opts={}) {
@@ -99,11 +45,13 @@ export class Database extends EventEmitter {
   async init() {
     if(this.destroyed) throw new Error('Database is destroyed')
     if(this.initialized) return
-    if(this.initlializing) return await new Promise(resolve => this.once('init', resolve))
+    if(this.initializing) return await new Promise(resolve => this.once('init', resolve))
     this.initializing = true
     try {
       if(this.opts.clear) {
-        await this.fileHandler.truncate(0).catch(console.error)
+        await this.fileHandler.truncate(0).catch(err => {
+          console.error('[jexidb]', err)
+        })
         throw new Error('Cleared, empty file')
       }
       const lastLine = await this.fileHandler.readLastLine()
@@ -128,7 +76,7 @@ export class Database extends EventEmitter {
       }
       this.indexOffset = 0
       if(!String(e).includes('empty file')) {
-        console.error('Error loading database:', e)
+        console.error('[jexidb] Error loading database:', e)
       }
     } finally {
       this.initializing = false
@@ -236,7 +184,7 @@ export class Database extends EventEmitter {
     if(this.flushing) {
       return this.flushing
     }
-    return this.flushing = new Promise((resolve, reject) => {
+    this.flushing = new Promise((resolve, reject) => {
       if(this.destroyed) return reject(new Error('Database is destroyed'))
       if(!this.writeBuffer.length) return resolve()
       let err
@@ -245,6 +193,7 @@ export class Database extends EventEmitter {
         this.flushing = false
       })
     })
+    return this.flushing
   }
 
   async _flush() {
@@ -269,7 +218,7 @@ export class Database extends EventEmitter {
       }
       this.shouldSave = true
     } catch(err) {
-      console.error('Error flushing:', err)
+      console.error('[jexidb] Error flushing:', err)
     } finally {
       await fd.close()
     }
@@ -278,7 +227,9 @@ export class Database extends EventEmitter {
   async *walk(map, options={}) {
     if(this.destroyed) throw new Error('Database is destroyed')
     if(!this.initialized) await this.init()
-    this.shouldSave && await this.save().catch(console.error)
+    this.shouldSave && await this.save().catch(err => {
+      console.error('[jexidb]', err)
+    })
     if(this.indexOffset === 0) return
     if(!Array.isArray(map)) {
       if (map instanceof Set) {
@@ -289,41 +240,15 @@ export class Database extends EventEmitter {
         map = [...Array(this.offsets.length).keys()]
       }
     }
-    let currentPartition = 0
-    const ranges = this.getRanges(map)
-    const partitionedRanges = []
-    for (const line in ranges) {
-      if (partitionedRanges[currentPartition] === undefined) {
-        partitionedRanges[currentPartition] = []
-      }
-      partitionedRanges[currentPartition].push(ranges[line])
-      if (partitionedRanges[currentPartition].length >= this.opts.maxMemoryUsage) {
-        currentPartition++
-      }
-    }
     let m = 0
-    const pool = new RangeDeserializer(this.opts.compress || this.opts.v8)
-    const process = async function* () {
-      for await (const ret of pool.entries()) {
-        if (ret.entry._ === undefined) {
-          while(this.offsets[m] != ret.start && m < map.length) m++ // weak comparison as 'start' is a string
-          ret.entry._ = m++
-        }
-        yield ret.entry
+    const pool = new StreamDeserializer(this.opts.compress || this.opts.v8, this.serializer, this.offsets)
+    const ranges = this.getRanges(map)
+    for await (const line of this.fileHandler.readRangesEach(ranges)) {     
+      for await (const entry of pool.push(line)) {
+        yield entry
       }
-    }
-    for (const ranges of partitionedRanges) {
-      for await (const line of this.fileHandler.readRangesEach(ranges)) {
-        pool.push(line)
-        if(pool.has()) {
-          for(const entry of process()) {
-            yield entry
-          }
-        }
-      }
-    }
-    pool.end()
-    for await (const entry of process()) {
+    }    
+    for await (const entry of pool.end()) {
       yield entry
     }
   }
@@ -331,28 +256,14 @@ export class Database extends EventEmitter {
   async query(criteria, options={}) {
     if(this.destroyed) throw new Error('Database is destroyed')
     if(!this.initialized) await this.init()
-    this.shouldSave && await this.save().catch(console.error)
-    if(Array.isArray(criteria)) {
-      let results = await this.readLines(criteria)
-      if (options.orderBy) {
-          const [field, direction = 'asc'] = options.orderBy.split(' ')
-          results.sort((a, b) => {
-              if (a[field] > b[field]) return direction === 'asc' ? 1 : -1
-              if (a[field] < b[field]) return direction === 'asc' ? -1 : 1
-              return 0;
-          })
-      }
-      if (options.limit) {
-          results = results.slice(0, options.limit);
-      }
-      return results
-    } else {
-      const matchingLines = await this.indexManager.query(criteria, options.matchAny)
-      if (!matchingLines || !matchingLines.size) {
-          return []
-      }
-      return await this.query([...matchingLines], options)
+    this.shouldSave && await this.save().catch(err => {
+      console.error('[jexidb]', err)
+    })
+    let entries = []
+    for await (const entry of this.walk(criteria, options)) {
+      entries.push(entry)
     }
+    return entries
   }
 
   async update(criteria, data, options={}) {
@@ -362,7 +273,9 @@ export class Database extends EventEmitter {
     }
     if(this.destroyed) throw new Error('Database is destroyed')
     if(!this.initialized) await this.init()
-    this.shouldSave && await this.save().catch(console.error)
+    this.shouldSave && await this.save().catch(err => {
+      console.error('[jexidb]', err)
+    })
     const matchingLines = await this.indexManager.query(criteria, options.matchAny)
     if (!matchingLines || !matchingLines.size) {
         return []
@@ -409,7 +322,9 @@ export class Database extends EventEmitter {
     }
     if(this.destroyed) throw new Error('Database is destroyed')
     if(!this.initialized) await this.init()
-    this.shouldSave && await this.save().catch(console.error)
+    this.shouldSave && await this.save().catch(err => {
+      console.error('[jexidb]', err)
+    })
     const matchingLines = await this.indexManager.query(criteria, options.matchAny)
     if (!matchingLines || !matchingLines.size) {
         return 0
@@ -436,7 +351,9 @@ export class Database extends EventEmitter {
   }
 
   async destroy() {
-    this.shouldSave && await this.save().catch(console.error)
+    this.shouldSave && await this.save().catch(err => {
+      console.error('[jexidb]', err)
+    })
     this.destroyed = true
     this.indexOffset = 0
     this.indexManager.index = {}

@@ -19,7 +19,9 @@ export default class FileHandler {
     let fd = await fs.promises.open(this.file, 'r')
     const length = end - start
     let buffer = Buffer.alloc(length)
-    const { bytesRead } = await fd.read(buffer, 0, length, start).catch(console.error)    
+    const { bytesRead } = await fd.read(buffer, 0, length, start).catch(err => {
+      console.error('[jexidb]', err)
+    })
     await fd.close()
     if(buffer.length > bytesRead) return buffer.subarray(0, bytesRead)
     return buffer
@@ -41,7 +43,7 @@ export default class FileHandler {
       })
       await Promise.allSettled(tasks.map(limit))
     } catch (e) {
-      console.error('Error reading ranges:', e)
+      console.error('[jexidb] Error reading ranges:', e)
     } finally {
       await fd.close()
     }
@@ -49,7 +51,8 @@ export default class FileHandler {
   }
 
   async *readRangesEach(ranges, mapper) {
-    const lines = {};
+    if(!ranges.length) return;
+
     const bufferPoolSize = 512 * 1024; // 512 KB
     
     // order ranges by start
@@ -95,12 +98,10 @@ export default class FileHandler {
         }
       }
     } catch (e) {
-      console.error('Error reading ranges:', e);
+      console.error('[jexidb] Error reading ranges:', e);
     } finally {
       await fd.close();
     }
-  
-    return lines;
   } 
 
   async replaceLines(ranges, lines) {
@@ -131,7 +132,7 @@ export default class FileHandler {
       closed = true
       await fs.promises.copyFile(tmpFile, this.file)
     } catch (e) {
-      console.error('Error replacing lines:', e)
+      console.error('[jexidb] Error replacing lines:', e)
     } finally {
       if(!closed) {
         await reader.close()
@@ -178,7 +179,7 @@ export default class FileHandler {
         }
       }
     } catch (e) {
-      String(e).includes('empty file') || console.error('Error reading last line:', e)
+      String(e).includes('empty file') || console.error('[jexidb] Error reading last line:', e)
     } finally {
       reader.close()
     }
