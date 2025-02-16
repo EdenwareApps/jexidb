@@ -19,9 +19,7 @@ export default class FileHandler {
     let fd = await fs.promises.open(this.file, 'r')
     const length = end - start
     let buffer = Buffer.alloc(length)
-    const { bytesRead } = await fd.read(buffer, 0, length, start).catch(err => {
-      console.error('[jexidb]', err)
-    })
+    const { bytesRead } = await fd.read(buffer, 0, length, start).catch(console.error)    
     await fd.close()
     if(buffer.length > bytesRead) return buffer.subarray(0, bytesRead)
     return buffer
@@ -43,66 +41,12 @@ export default class FileHandler {
       })
       await Promise.allSettled(tasks.map(limit))
     } catch (e) {
-      console.error('[jexidb] Error reading ranges:', e)
+      console.error('Error reading ranges:', e)
     } finally {
       await fd.close()
     }
     return lines
   }
-
-  async *readRangesEach(ranges, mapper) {
-    if(!ranges.length) return;
-
-    const bufferPoolSize = 512 * 1024; // 512 KB
-    
-    // order ranges by start
-    ranges.sort((a, b) => a.start - b.start);
-  
-    // group ranges by bufferPoolSize and sequential ranges
-    const groups = [];
-    let currentGroup = { start: ranges[0].start, end: ranges[0].end, items: [ranges[0]], size: ranges[0].end - ranges[0].start };
-  
-    for (let i = 1; i < ranges.length; i++) {
-      const range = ranges[i];
-      const rangeSize = range.end - range.start;
-  
-      if (currentGroup.size + rangeSize <= bufferPoolSize && range.start <= currentGroup.end) {
-        currentGroup.end = Math.max(currentGroup.end, range.end);
-        currentGroup.items.push(range);
-        currentGroup.size += rangeSize;
-      } else {
-        groups.push(currentGroup);
-        currentGroup = { start: range.start, end: range.end, items: [range], size: rangeSize };
-      }
-    }
-    groups.push(currentGroup);
-  
-    const fd = await fs.promises.open(this.file, 'r');
-    try {
-      for (const group of groups) {
-        let err;
-        const length = group.end - group.start;
-        const buffer = Buffer.alloc(Math.min(length, bufferPoolSize));
-        
-        await fd.read(buffer, 0, length, group.start).catch(e => (err = e));
-        if (err) throw err;
-  
-        // split buffer into ranges
-        for (const range of group.items) {
-          const offset = range.start - group.start;
-          const rangeLength = range.end - range.start;
-          const subBuffer = buffer.subarray(offset, offset + rangeLength);
-  
-          const content = mapper ? await mapper(subBuffer, range) : subBuffer;
-          yield {content, start: range.start};
-        }
-      }
-    } catch (e) {
-      console.error('[jexidb] Error reading ranges:', e);
-    } finally {
-      await fd.close();
-    }
-  } 
 
   async replaceLines(ranges, lines) {
     let closed
@@ -132,7 +76,7 @@ export default class FileHandler {
       closed = true
       await fs.promises.copyFile(tmpFile, this.file)
     } catch (e) {
-      console.error('[jexidb] Error replacing lines:', e)
+      console.error('Error replacing lines:', e)
     } finally {
       if(!closed) {
         await reader.close()
@@ -179,7 +123,7 @@ export default class FileHandler {
         }
       }
     } catch (e) {
-      String(e).includes('empty file') || console.error('[jexidb] Error reading last line:', e)
+      String(e).includes('empty file') || console.error('Error reading last line:', e)
     } finally {
       reader.close()
     }

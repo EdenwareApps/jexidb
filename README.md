@@ -62,7 +62,7 @@ await db.insert({ id: 2, name: 'Jane Doe', anyArbitraryField: '1' });
 The `query` method allows you to retrieve data based on specific criteria. You can specify criteria for multiple fields.
 
 ```javascript
-const results = await db.query({ name: 'John Doe' });
+const results = await db.query({ name: 'John Doe' }, { caseInsensitive: true });
 console.log(results); // [{ id: 1, name: 'John Doe' }]
 ```
 

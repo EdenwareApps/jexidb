@@ -83,23 +83,29 @@ export default class IndexManager {
     }
   }
 
-  query(criteria, matchAny=false) {
-    if (!criteria) throw new Error('No query criteria provided')
-    const fields = Object.keys(criteria)
-    if (!fields.length) throw new Error('No valid query criteria provided')
-    let matchingLines = matchAny ? new Set() : null
+  query(criteria, options = {}) {
+    if (typeof options === 'boolean') {
+      options = { matchAny: options };
+    }
+    const { matchAny = false, caseInsensitive = false } = options;
+    if (!criteria) throw new Error('No query criteria provided');
+    const fields = Object.keys(criteria);
+    if (!fields.length) throw new Error('No valid query criteria provided');
+    let matchingLines = matchAny ? new Set() : null;
+  
     for (const field of fields) {
-      if (typeof(this.index.data[field]) == 'undefined') continue
-      const criteriaValue = criteria[field]
-      let lineNumbersForField = new Set()
-      const isNumericField = this.opts.indexes[field] === 'number'
-      if (typeof(criteriaValue) === 'object' && !Array.isArray(criteriaValue)) {
+      if (typeof this.index.data[field] === 'undefined') continue;
+      const criteriaValue = criteria[field];
+      let lineNumbersForField = new Set();
+      const isNumericField = this.opts.indexes[field] === 'number';
+  
+      if (typeof criteriaValue === 'object' && !Array.isArray(criteriaValue)) {
         const fieldIndex = this.index.data[field];
         for (const value in fieldIndex) {
-          let includeValue = true
+          let includeValue = true;
           if (isNumericField) {
             const numericValue = parseFloat(value);
-            if (!isNaN(numericValue)) { 
+            if (!isNaN(numericValue)) {
               if (criteriaValue['>'] !== undefined && numericValue <= criteriaValue['>']) {
                 includeValue = false;
               }
@@ -113,7 +119,9 @@ export default class IndexManager {
                 includeValue = false;
               }
               if (criteriaValue['!='] !== undefined) {
-                const excludeValues = Array.isArray(criteriaValue['!=']) ? criteriaValue['!='] : [criteriaValue['!=']];
+                const excludeValues = Array.isArray(criteriaValue['!='])
+                  ? criteriaValue['!=']
+                  : [criteriaValue['!=']];
                 if (excludeValues.includes(numericValue)) {
                   includeValue = false;
                 }
@@ -121,24 +129,45 @@ export default class IndexManager {
             }
           } else {
             if (criteriaValue['contains'] !== undefined && typeof value === 'string') {
-              if (!value.includes(criteriaValue['contains'])) {
-                includeValue = false;
+              const term = String(criteriaValue['contains']);
+              if (caseInsensitive) {
+                if (!value.toLowerCase().includes(term.toLowerCase())) {
+                  includeValue = false;
+                }
+              } else {
+                if (!value.includes(term)) {
+                  includeValue = false;
+                }
               }
             }
-            if (criteriaValue['regex'] !== undefined && typeof value === 'string') {
-              const regex = new RegExp(criteriaValue['regex']);
-              if (!regex.test(value)) {
+            if (criteriaValue['regex'] !== undefined) {
+              let regex;
+              if (typeof criteriaValue['regex'] === 'string') {
+                regex = new RegExp(criteriaValue['regex'], caseInsensitive ? 'i' : '');
+              } else if (criteriaValue['regex'] instanceof RegExp) {
+                if (caseInsensitive && !criteriaValue['regex'].ignoreCase) {
+                  const flags = criteriaValue['regex'].flags.includes('i')
+                    ? criteriaValue['regex'].flags
+                    : criteriaValue['regex'].flags + 'i';
+                  regex = new RegExp(criteriaValue['regex'].source, flags);
+                } else {
+                  regex = criteriaValue['regex'];
+                }
+              }
+              if (regex && !regex.test(value)) {
                 includeValue = false;
               }
             }
             if (criteriaValue['!='] !== undefined) {
-              const excludeValues = Array.isArray(criteriaValue['!=']) ? criteriaValue['!='] : [criteriaValue['!=']];
+              const excludeValues = Array.isArray(criteriaValue['!='])
+                ? criteriaValue['!=']
+                : [criteriaValue['!=']];
               if (excludeValues.includes(value)) {
                 includeValue = false;
               }
             }
           }
-
+  
           if (includeValue) {
             for (const lineNumber of fieldIndex[value]) {
               lineNumbersForField.add(lineNumber);
@@ -146,31 +175,46 @@ export default class IndexManager {
           }
         }
       } else {
+        // Comparação simples de igualdade
         const values = Array.isArray(criteriaValue) ? criteriaValue : [criteriaValue];
-        for (const value of values) {
-          if (this.index.data[field][value]) {
-            for (const lineNumber of this.index.data[field][value]) {
-              lineNumbersForField.add(lineNumber);
+        const fieldData = this.index.data[field];
+        for (const searchValue of values) {
+          for (const key in fieldData) {
+            let match = false;
+            if (isNumericField) {
+              // Converter ambas as partes para número
+              match = Number(key) === Number(searchValue);
+            } else {
+              match = caseInsensitive
+                ? key.toLowerCase() === String(searchValue).toLowerCase()
+                : key === searchValue;
+            }
+            if (match) {
+              for (const lineNumber of fieldData[key]) {
+                lineNumbersForField.add(lineNumber);
+              }
             }
           }
         }
       }
+  
+      // Consolida os resultados de cada campo
       if (matchAny) {
         matchingLines = new Set([...matchingLines, ...lineNumbersForField]);
       } else {
         if (matchingLines === null) {
-          matchingLines = lineNumbersForField
+          matchingLines = lineNumbersForField;
         } else {
           matchingLines = new Set([...matchingLines].filter(n => lineNumbersForField.has(n)));
         }
         if (!matchingLines.size) {
-          return new Set()
+          return new Set();
         }
       }
     }
     return matchingLines || new Set();
-  }
-
+  } 
+ 
   load(index) {
     for(const field in index.data) {
       for(const term in index.data[field]) {

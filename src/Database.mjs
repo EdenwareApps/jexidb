@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events'
 import FileHandler from './FileHandler.mjs'
 import IndexManager from './IndexManager.mjs'
-import { StreamDeserializer, Serializer } from './Serializer.mjs'
+import Serializer from './Serializer.mjs'
 import fs from 'fs'
 
 export class Database extends EventEmitter {
@@ -29,29 +29,14 @@ export class Database extends EventEmitter {
     plugin(this)
   }
 
-  async check() {
-    if(this.destroyed) throw new Error('Database is destroyed')
-    const lastLine = await this.fileHandler.readLastLine()
-    if(!lastLine || !lastLine.length) {
-      throw new Error('File does not exists or is a empty file')
-    }
-    const offsets = await this.serializer.deserialize(lastLine, {compress: this.opts.compressIndex})
-    if(!Array.isArray(offsets)) {
-      throw new Error('File to parse offsets, expected an array')
-    }
-    return offsets.length
-  }
-
   async init() {
     if(this.destroyed) throw new Error('Database is destroyed')
     if(this.initialized) return
-    if(this.initializing) return await new Promise(resolve => this.once('init', resolve))
+    if(this.initlializing) return await new Promise(resolve => this.once('init', resolve))
     this.initializing = true
     try {
       if(this.opts.clear) {
-        await this.fileHandler.truncate(0).catch(err => {
-          console.error('[jexidb]', err)
-        })
+        await this.fileHandler.truncate(0).catch(console.error)
         throw new Error('Cleared, empty file')
       }
       const lastLine = await this.fileHandler.readLastLine()
@@ -76,7 +61,7 @@ export class Database extends EventEmitter {
       }
       this.indexOffset = 0
       if(!String(e).includes('empty file')) {
-        console.error('[jexidb] Error loading database:', e)
+        console.error('Error loading database:', e)
       }
     } finally {
       this.initializing = false
@@ -184,7 +169,7 @@ export class Database extends EventEmitter {
     if(this.flushing) {
       return this.flushing
     }
-    this.flushing = new Promise((resolve, reject) => {
+    return this.flushing = new Promise((resolve, reject) => {
       if(this.destroyed) return reject(new Error('Database is destroyed'))
       if(!this.writeBuffer.length) return resolve()
       let err
@@ -193,7 +178,6 @@ export class Database extends EventEmitter {
         this.flushing = false
       })
     })
-    return this.flushing
   }
 
   async _flush() {
@@ -218,7 +202,7 @@ export class Database extends EventEmitter {
       }
       this.shouldSave = true
     } catch(err) {
-      console.error('[jexidb] Error flushing:', err)
+      console.error('Error flushing:', err)
     } finally {
       await fd.close()
     }
@@ -227,43 +211,69 @@ export class Database extends EventEmitter {
   async *walk(map, options={}) {
     if(this.destroyed) throw new Error('Database is destroyed')
     if(!this.initialized) await this.init()
-    this.shouldSave && await this.save().catch(err => {
-      console.error('[jexidb]', err)
-    })
+    this.shouldSave && await this.save().catch(console.error)
     if(this.indexOffset === 0) return
     if(!Array.isArray(map)) {
       if (map instanceof Set) {
         map = [...map]
       } else if(map && typeof map === 'object') {
-        map = [...this.indexManager.query(map, options.matchAny)]
+        map = [...this.indexManager.query(map, options)]
       } else {
         map = [...Array(this.offsets.length).keys()]
       }
     }
-    let m = 0
-    const pool = new StreamDeserializer(this.opts.compress || this.opts.v8, this.serializer, this.offsets)
     const ranges = this.getRanges(map)
-    for await (const line of this.fileHandler.readRangesEach(ranges)) {     
-      for await (const entry of pool.push(line)) {
+    const partitionedRanges = [], currentPartition = 0
+    for (const line in ranges) {
+      if (partitionedRanges[currentPartition] === undefined) {
+        partitionedRanges[currentPartition] = []
+      }
+      partitionedRanges[currentPartition].push(ranges[line])
+      if (partitionedRanges[currentPartition].length >= this.opts.maxMemoryUsage) {
+        currentPartition++
+      }
+    }
+    let m = 0
+    for (const ranges of partitionedRanges) {
+      const lines = await this.fileHandler.readRanges(ranges)
+      for (const line in lines) {
+        let err
+        const entry = await this.serializer.deserialize(lines[line]).catch(e => console.error(err = e))
+        if (err) continue
+        if (entry._ === undefined) {
+          while(this.offsets[m] != line && m < map.length) m++ // weak comparison as 'start' is a string
+          entry._ = m++
+        }
         yield entry
       }
-    }    
-    for await (const entry of pool.end()) {
-      yield entry
     }
   }
 
   async query(criteria, options={}) {
     if(this.destroyed) throw new Error('Database is destroyed')
     if(!this.initialized) await this.init()
-    this.shouldSave && await this.save().catch(err => {
-      console.error('[jexidb]', err)
-    })
-    let entries = []
-    for await (const entry of this.walk(criteria, options)) {
-      entries.push(entry)
+    this.shouldSave && await this.save().catch(console.error)
+    if(Array.isArray(criteria)) {
+      let results = await this.readLines(criteria)
+      if (options.orderBy) {
+          const [field, direction = 'asc'] = options.orderBy.split(' ')
+          results.sort((a, b) => {
+              if (a[field] > b[field]) return direction === 'asc' ? 1 : -1
+              if (a[field] < b[field]) return direction === 'asc' ? -1 : 1
+              return 0;
+          })
+      }
+      if (options.limit) {
+          results = results.slice(0, options.limit);
+      }
+      return results
+    } else {
+      const matchingLines = await this.indexManager.query(criteria, options)
+      if (!matchingLines || !matchingLines.size) {
+          return []
+      }
+      return await this.query([...matchingLines], options)
     }
-    return entries
   }
 
   async update(criteria, data, options={}) {
@@ -273,10 +283,8 @@ export class Database extends EventEmitter {
     }
     if(this.destroyed) throw new Error('Database is destroyed')
     if(!this.initialized) await this.init()
-    this.shouldSave && await this.save().catch(err => {
-      console.error('[jexidb]', err)
-    })
-    const matchingLines = await this.indexManager.query(criteria, options.matchAny)
+    this.shouldSave && await this.save().catch(console.error)
+    const matchingLines = await this.indexManager.query(criteria, options)
     if (!matchingLines || !matchingLines.size) {
         return []
     }
@@ -322,10 +330,8 @@ export class Database extends EventEmitter {
     }
     if(this.destroyed) throw new Error('Database is destroyed')
     if(!this.initialized) await this.init()
-    this.shouldSave && await this.save().catch(err => {
-      console.error('[jexidb]', err)
-    })
-    const matchingLines = await this.indexManager.query(criteria, options.matchAny)
+    this.shouldSave && await this.save().catch(console.error)
+    const matchingLines = await this.indexManager.query(criteria, options)
     if (!matchingLines || !matchingLines.size) {
         return 0
     }
@@ -351,9 +357,7 @@ export class Database extends EventEmitter {
   }
 
   async destroy() {
-    this.shouldSave && await this.save().catch(err => {
-      console.error('[jexidb]', err)
-    })
+    this.shouldSave && await this.save().catch(console.error)
     this.destroyed = true
     this.indexOffset = 0
     this.indexManager.index = {}

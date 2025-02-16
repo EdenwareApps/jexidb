@@ -2,91 +2,7 @@ import { EventEmitter } from 'events'
 import zlib from 'zlib'
 import v8 from 'v8'
 
-export class StreamDeserializer {
-  constructor(notJson, serializer, offsets) {
-    this.maxBatchSize = 128;
-    this.buffers = [];
-    this.isJSON = !notJson;
-    this.offsets = offsets;
-    this.serializer = serializer;
-  }
-
-  has() {
-    return this.ended ? this.buffers.length : (this.buffers.length >= this.maxBatchSize);
-  }
-
-  async flush() {
-    let entries;
-    const lines = this.buffers;
-    this.buffers = [];
-
-    if (this.isJSON) {
-      let data;
-      try {
-        data = '[' + lines.map(b => {
-          let ret = b.content.toString('utf8');
-          if (ret.startsWith('\0')) {
-            ret = ret.slice(1);
-          }
-          if (!ret.startsWith('{')) {
-            console.error('[jexidb] invalid entry', { ret, isBuffer: Buffer.isBuffer(b.content) });
-          }
-          return ret;
-        }).join(',') + ']';
-        entries = JSON.parse(data);
-        for(let i=0; i<entries.length; i++) {
-          if(typeof(entries[i]._) !== 'number') {
-            const n = lines[i].start == 0 ? 0 : this.offsets.indexOf(lines[i].start);
-            if(n !== -1) {
-              entries[i]._ = n;
-            }
-          }
-        }
-      } catch (e) {
-        console.error('[jexidb] Error parsing JSON:', data, e);
-      }
-    }
-
-    if (!Array.isArray(entries)) {
-      entries = [];
-      for (let i = 0; i < lines.length; i++) {
-        try {
-          let entry = await this.serializer.deserialize(lines[i].content);
-          if(typeof(entry._) !== 'number') {
-            const n = lines[i].start == 0 ? 0 : this.offsets.indexOf(lines[i].start);
-            if(n !== -1) {
-              entry._ = n;
-            }
-          }
-          entries.push(entry);
-        } catch (e) {
-          console.error('[jexidb] Error deserializing:', e);
-        }
-      }
-    }
-
-    return entries;
-  }
-
-  async *push(line) {
-    this.buffers.push(line);
-    if (this.has()) {
-      for (const entry of (await this.flush())) {
-        yield entry;
-      }
-    }
-  }
-
-  async *end() {
-    if (this.ended) return;
-    this.ended = true;
-    for (const entry of (await this.flush())) {
-      yield entry;
-    }
-  }
-}
-
-export class Serializer extends EventEmitter {
+export default class Serializer extends EventEmitter {
   constructor(opts = {}) {
     super()
     this.opts = Object.assign({}, opts)
@@ -97,7 +13,7 @@ export class Serializer extends EventEmitter {
     }
   }
 
-  async serialize(data, opts = {}) {
+  async serialize(data, opts={}) {
     let line
     let header = 0x00 // 1 byte de header
     const useV8 = (this.opts.v8 && opts.json !== true) || opts.v8 === true
@@ -107,14 +23,14 @@ export class Serializer extends EventEmitter {
       header |= 0x02 // set V8
       line = v8.serialize(data)
     } else {
-      let json = JSON.stringify(data)
+      const json = JSON.stringify(data)
       line = Buffer.from(json, 'utf-8')
     }
     if (compress) {
       let err
       const compressionType = useV8 ? 'deflate' : 'brotli'
       const buffer = await this.compress(line, compressionType).catch(e => err = e)
-      if (!err && buffer.length && buffer.length < line.length) {
+      if(!err && buffer.length && buffer.length < line.length) {
         header |= 0x01
         line = buffer
       }
@@ -123,24 +39,24 @@ export class Serializer extends EventEmitter {
     const result = Buffer.alloc(totalLength)
     result[0] = header
     line.copy(result, 1, 0, line.length)
-    if (addLinebreak) {
+    if(addLinebreak) {
       result[result.length - 1] = 0x0A
     }
     return result
-  }
+  }  
 
   async deserialize(data) {
     let line, isCompressed, isV8
-    const header = Buffer.isBuffer(data) ? data.readUInt8(0) : null
-    const valid = header !== null && (header === 0x00 || header === 0x01 || header === 0x02 || header === 0x03)
-    if (valid) {
+    const header = data.readUInt8(0)
+    const valid = header === 0x00 || header === 0x01 || header === 0x02 || header === 0x03
+    if(valid) {
       isCompressed = (header & 0x01) === 0x01
       isV8 = (header & 0x02) === 0x02
       line = data.subarray(1) // remove byte header
     } else {
       isCompressed = isV8 = false
       try {
-        return JSON.parse(header === null ? data : data.toString('utf8'))
+        return JSON.parse(data.toString('utf-8').trim())
       } catch (e) {
         throw new Error('Failed to deserialize legacy JSON data')
       }
@@ -157,7 +73,7 @@ export class Serializer extends EventEmitter {
       }
     } else {
       try {
-        return JSON.parse(header === null ? line : line.toString('utf-8'))
+        return JSON.parse(line.toString('utf-8').trim())
       } catch (e) {
         throw new Error('Failed to deserialize JSON data')
       }
@@ -173,7 +89,7 @@ export class Serializer extends EventEmitter {
           resolve(buffer)
         }
       }
-      if (type === 'brotli') {
+      if(type === 'brotli') {
         zlib.brotliCompress(data, this.brotliOptions, callback)
       } else {
         zlib.deflate(data, callback)
@@ -190,12 +106,12 @@ export class Serializer extends EventEmitter {
           resolve(buffer)
         }
       }
-      if (type === 'brotli') {
+      if(type === 'brotli') {
         zlib.brotliDecompress(data, callback)
       } else {
         zlib.inflate(data, callback)
       }
     })
   }
-
+  
 }
