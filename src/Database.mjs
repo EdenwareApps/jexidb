@@ -223,30 +223,20 @@ export class Database extends EventEmitter {
       }
     }
     const ranges = this.getRanges(map)
-    const partitionedRanges = [], currentPartition = 0
-    for (const line in ranges) {
-      if (partitionedRanges[currentPartition] === undefined) {
-        partitionedRanges[currentPartition] = []
-      }
-      partitionedRanges[currentPartition].push(ranges[line])
-      if (partitionedRanges[currentPartition].length >= this.opts.maxMemoryUsage) {
-        currentPartition++
-      }
-    }
-    let m = 0
-    for (const ranges of partitionedRanges) {
-      const lines = await this.fileHandler.readRanges(ranges)
-      for (const line in lines) {
-        let err
-        const entry = await this.serializer.deserialize(lines[line]).catch(e => console.error(err = e))
-        if (err) continue
-        if (entry._ === undefined) {
-          while(this.offsets[m] != line && m < map.length) m++ // weak comparison as 'start' is a string
-          entry._ = m++
+    const readSize = 512 * 1024 // 512KB
+    const groupedRanges = await this.fileHandler.groupedRanges(ranges)
+    const fd = await fs.promises.open(this.fileHandler.file, 'r')
+    for(const groupedRange of groupedRanges) {
+      for await (const row of this.fileHandler.readGroupedRange(groupedRange, fd)) {
+        const entry = await this.serializer.deserialize(row.line, {compress: this.opts.compress})
+        if(options.includeOffsets) {
+          yield {entry, start: row.start}
+        } else {
+          yield entry
         }
-        yield entry
       }
     }
+    await fd.close() 
   }
 
   async query(criteria, options={}) {

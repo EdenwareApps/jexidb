@@ -10,12 +10,11 @@ var _IndexManager = _interopRequireDefault(require("./IndexManager.mjs"));
 var _Serializer = _interopRequireDefault(require("./Serializer.mjs"));
 var _fs = _interopRequireDefault(require("fs"));
 function _interopRequireDefault(e) { return e && e.__esModule ? e : { "default": e }; }
-function _createForOfIteratorHelper(r, e) { var t = "undefined" != typeof Symbol && r[Symbol.iterator] || r["@@iterator"]; if (!t) { if (Array.isArray(r) || (t = _unsupportedIterableToArray(r)) || e && r && "number" == typeof r.length) { t && (r = t); var _n = 0, F = function F() {}; return { s: F, n: function n() { return _n >= r.length ? { done: !0 } : { done: !1, value: r[_n++] }; }, e: function e(r) { throw r; }, f: F }; } throw new TypeError("Invalid attempt to iterate non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method."); } var o, a = !0, u = !1; return { s: function s() { t = t.call(r); }, n: function n() { var r = t.next(); return a = r.done, r; }, e: function e(r) { u = !0, o = r; }, f: function f() { try { a || null == t["return"] || t["return"](); } finally { if (u) throw o; } } }; }
 function _slicedToArray(r, e) { return _arrayWithHoles(r) || _iterableToArrayLimit(r, e) || _unsupportedIterableToArray(r, e) || _nonIterableRest(); }
 function _nonIterableRest() { throw new TypeError("Invalid attempt to destructure non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method."); }
 function _iterableToArrayLimit(r, l) { var t = null == r ? null : "undefined" != typeof Symbol && r[Symbol.iterator] || r["@@iterator"]; if (null != t) { var e, n, i, u, a = [], f = !0, o = !1; try { if (i = (t = t.call(r)).next, 0 === l) { if (Object(t) !== t) return; f = !1; } else for (; !(f = (e = i.call(t)).done) && (a.push(e.value), a.length !== l); f = !0); } catch (r) { o = !0, n = r; } finally { try { if (!f && null != t["return"] && (u = t["return"](), Object(u) !== u)) return; } finally { if (o) throw n; } } return a; } }
 function _arrayWithHoles(r) { if (Array.isArray(r)) return r; }
-function _readOnlyError(r) { throw new TypeError('"' + r + '" is read-only'); }
+function _createForOfIteratorHelper(r, e) { var t = "undefined" != typeof Symbol && r[Symbol.iterator] || r["@@iterator"]; if (!t) { if (Array.isArray(r) || (t = _unsupportedIterableToArray(r)) || e && r && "number" == typeof r.length) { t && (r = t); var _n = 0, F = function F() {}; return { s: F, n: function n() { return _n >= r.length ? { done: !0 } : { done: !1, value: r[_n++] }; }, e: function e(r) { throw r; }, f: F }; } throw new TypeError("Invalid attempt to iterate non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method."); } var o, a = !0, u = !1; return { s: function s() { t = t.call(r); }, n: function n() { var r = t.next(); return a = r.done, r; }, e: function e(r) { u = !0, o = r; }, f: function f() { try { a || null == t["return"] || t["return"](); } finally { if (u) throw o; } } }; }
 function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == typeof Symbol && "symbol" == typeof Symbol.iterator ? function (o) { return typeof o; } : function (o) { return o && "function" == typeof Symbol && o.constructor === Symbol && o !== Symbol.prototype ? "symbol" : typeof o; }, _typeof(o); }
 function _regeneratorRuntime() { "use strict"; /*! regenerator-runtime -- Copyright (c) 2014-present, Facebook, Inc. -- license (MIT): https://github.com/facebook/regenerator/blob/main/LICENSE */ _regeneratorRuntime = function _regeneratorRuntime() { return e; }; var t, e = {}, r = Object.prototype, n = r.hasOwnProperty, o = Object.defineProperty || function (t, e, r) { t[e] = r.value; }, i = "function" == typeof Symbol ? Symbol : {}, a = i.iterator || "@@iterator", c = i.asyncIterator || "@@asyncIterator", u = i.toStringTag || "@@toStringTag"; function define(t, e, r) { return Object.defineProperty(t, e, { value: r, enumerable: !0, configurable: !0, writable: !0 }), t[e]; } try { define({}, ""); } catch (t) { define = function define(t, e, r) { return t[e] = r; }; } function wrap(t, e, r, n) { var i = e && e.prototype instanceof Generator ? e : Generator, a = Object.create(i.prototype), c = new Context(n || []); return o(a, "_invoke", { value: makeInvokeMethod(t, r, c) }), a; } function tryCatch(t, e, r) { try { return { type: "normal", arg: t.call(e, r) }; } catch (t) { return { type: "throw", arg: t }; } } e.wrap = wrap; var h = "suspendedStart", l = "suspendedYield", f = "executing", s = "completed", y = {}; function Generator() {} function GeneratorFunction() {} function GeneratorFunctionPrototype() {} var p = {}; define(p, a, function () { return this; }); var d = Object.getPrototypeOf, v = d && d(d(values([]))); v && v !== r && n.call(v, a) && (p = v); var g = GeneratorFunctionPrototype.prototype = Generator.prototype = Object.create(p); function defineIteratorMethods(t) { ["next", "throw", "return"].forEach(function (e) { define(t, e, function (t) { return this._invoke(e, t); }); }); } function AsyncIterator(t, e) { function invoke(r, o, i, a) { var c = tryCatch(t[r], t, o); if ("throw" !== c.type) { var u = c.arg, h = u.value; return h && "object" == _typeof(h) && n.call(h, "__await") ? e.resolve(h.__await).then(function (t) { invoke("next", t, i, a); }, function (t) { invoke("throw", t, i, a); }) : e.resolve(h).then(function (t) { u.value = t, i(u); }, function (t) { return invoke("throw", t, i, a); }); } a(c.arg); } var r; o(this, "_invoke", { value: function value(t, n) { function callInvokeWithMethodAndArg() { return new e(function (e, r) { invoke(t, n, e, r); }); } return r = r ? r.then(callInvokeWithMethodAndArg, callInvokeWithMethodAndArg) : callInvokeWithMethodAndArg(); } }); } function makeInvokeMethod(e, r, n) { var o = h; return function (i, a) { if (o === f) throw Error("Generator is already running"); if (o === s) { if ("throw" === i) throw a; return { value: t, done: !0 }; } for (n.method = i, n.arg = a;;) { var c = n.delegate; if (c) { var u = maybeInvokeDelegate(c, n); if (u) { if (u === y) continue; return u; } } if ("next" === n.method) n.sent = n._sent = n.arg;else if ("throw" === n.method) { if (o === h) throw o = s, n.arg; n.dispatchException(n.arg); } else "return" === n.method && n.abrupt("return", n.arg); o = f; var p = tryCatch(e, r, n); if ("normal" === p.type) { if (o = n.done ? s : l, p.arg === y) continue; return { value: p.arg, done: n.done }; } "throw" === p.type && (o = s, n.method = "throw", n.arg = p.arg); } }; } function maybeInvokeDelegate(e, r) { var n = r.method, o = e.iterator[n]; if (o === t) return r.delegate = null, "throw" === n && e.iterator["return"] && (r.method = "return", r.arg = t, maybeInvokeDelegate(e, r), "throw" === r.method) || "return" !== n && (r.method = "throw", r.arg = new TypeError("The iterator does not provide a '" + n + "' method")), y; var i = tryCatch(o, e.iterator, r.arg); if ("throw" === i.type) return r.method = "throw", r.arg = i.arg, r.delegate = null, y; var a = i.arg; return a ? a.done ? (r[e.resultName] = a.value, r.next = e.nextLoc, "return" !== r.method && (r.method = "next", r.arg = t), r.delegate = null, y) : a : (r.method = "throw", r.arg = new TypeError("iterator result is not an object"), r.delegate = null, y); } function pushTryEntry(t) { var e = { tryLoc: t[0] }; 1 in t && (e.catchLoc = t[1]), 2 in t && (e.finallyLoc = t[2], e.afterLoc = t[3]), this.tryEntries.push(e); } function resetTryEntry(t) { var e = t.completion || {}; e.type = "normal", delete e.arg, t.completion = e; } function Context(t) { this.tryEntries = [{ tryLoc: "root" }], t.forEach(pushTryEntry, this), this.reset(!0); } function values(e) { if (e || "" === e) { var r = e[a]; if (r) return r.call(e); if ("function" == typeof e.next) return e; if (!isNaN(e.length)) { var o = -1, i = function next() { for (; ++o < e.length;) if (n.call(e, o)) return next.value = e[o], next.done = !1, next; return next.value = t, next.done = !0, next; }; return i.next = i; } } throw new TypeError(_typeof(e) + " is not iterable"); } return GeneratorFunction.prototype = GeneratorFunctionPrototype, o(g, "constructor", { value: GeneratorFunctionPrototype, configurable: !0 }), o(GeneratorFunctionPrototype, "constructor", { value: GeneratorFunction, configurable: !0 }), GeneratorFunction.displayName = define(GeneratorFunctionPrototype, u, "GeneratorFunction"), e.isGeneratorFunction = function (t) { var e = "function" == typeof t && t.constructor; return !!e && (e === GeneratorFunction || "GeneratorFunction" === (e.displayName || e.name)); }, e.mark = function (t) { return Object.setPrototypeOf ? Object.setPrototypeOf(t, GeneratorFunctionPrototype) : (t.__proto__ = GeneratorFunctionPrototype, define(t, u, "GeneratorFunction")), t.prototype = Object.create(g), t; }, e.awrap = function (t) { return { __await: t }; }, defineIteratorMethods(AsyncIterator.prototype), define(AsyncIterator.prototype, c, function () { return this; }), e.AsyncIterator = AsyncIterator, e.async = function (t, r, n, o, i) { void 0 === i && (i = Promise); var a = new AsyncIterator(wrap(t, r, n, o), i); return e.isGeneratorFunction(r) ? a : a.next().then(function (t) { return t.done ? t.value : a.next(); }); }, defineIteratorMethods(g), define(g, u, "Generator"), define(g, a, function () { return this; }), define(g, "toString", function () { return "[object Generator]"; }), e.keys = function (t) { var e = Object(t), r = []; for (var n in e) r.push(n); return r.reverse(), function next() { for (; r.length;) { var t = r.pop(); if (t in e) return next.value = t, next.done = !1, next; } return next.done = !0, next; }; }, e.values = values, Context.prototype = { constructor: Context, reset: function reset(e) { if (this.prev = 0, this.next = 0, this.sent = this._sent = t, this.done = !1, this.delegate = null, this.method = "next", this.arg = t, this.tryEntries.forEach(resetTryEntry), !e) for (var r in this) "t" === r.charAt(0) && n.call(this, r) && !isNaN(+r.slice(1)) && (this[r] = t); }, stop: function stop() { this.done = !0; var t = this.tryEntries[0].completion; if ("throw" === t.type) throw t.arg; return this.rval; }, dispatchException: function dispatchException(e) { if (this.done) throw e; var r = this; function handle(n, o) { return a.type = "throw", a.arg = e, r.next = n, o && (r.method = "next", r.arg = t), !!o; } for (var o = this.tryEntries.length - 1; o >= 0; --o) { var i = this.tryEntries[o], a = i.completion; if ("root" === i.tryLoc) return handle("end"); if (i.tryLoc <= this.prev) { var c = n.call(i, "catchLoc"), u = n.call(i, "finallyLoc"); if (c && u) { if (this.prev < i.catchLoc) return handle(i.catchLoc, !0); if (this.prev < i.finallyLoc) return handle(i.finallyLoc); } else if (c) { if (this.prev < i.catchLoc) return handle(i.catchLoc, !0); } else { if (!u) throw Error("try statement without catch or finally"); if (this.prev < i.finallyLoc) return handle(i.finallyLoc); } } } }, abrupt: function abrupt(t, e) { for (var r = this.tryEntries.length - 1; r >= 0; --r) { var o = this.tryEntries[r]; if (o.tryLoc <= this.prev && n.call(o, "finallyLoc") && this.prev < o.finallyLoc) { var i = o; break; } } i && ("break" === t || "continue" === t) && i.tryLoc <= e && e <= i.finallyLoc && (i = null); var a = i ? i.completion : {}; return a.type = t, a.arg = e, i ? (this.method = "next", this.next = i.finallyLoc, y) : this.complete(a); }, complete: function complete(t, e) { if ("throw" === t.type) throw t.arg; return "break" === t.type || "continue" === t.type ? this.next = t.arg : "return" === t.type ? (this.rval = this.arg = t.arg, this.method = "return", this.next = "end") : "normal" === t.type && e && (this.next = e), y; }, finish: function finish(t) { for (var e = this.tryEntries.length - 1; e >= 0; --e) { var r = this.tryEntries[e]; if (r.finallyLoc === t) return this.complete(r.completion, r.afterLoc), resetTryEntry(r), y; } }, "catch": function _catch(t) { for (var e = this.tryEntries.length - 1; e >= 0; --e) { var r = this.tryEntries[e]; if (r.tryLoc === t) { var n = r.completion; if ("throw" === n.type) { var o = n.arg; resetTryEntry(r); } return o; } } throw Error("illegal catch attempt"); }, delegateYield: function delegateYield(e, r, n) { return this.delegate = { iterator: values(e), resultName: r, nextLoc: n }, "next" === this.method && (this.arg = t), y; } }, e; }
 function _toConsumableArray(r) { return _arrayWithoutHoles(r) || _iterableToArray(r) || _unsupportedIterableToArray(r) || _nonIterableSpread(); }
@@ -43,6 +42,8 @@ function _wrapAsyncGenerator(e) { return function () { return new AsyncGenerator
 function AsyncGenerator(e) { var r, t; function resume(r, t) { try { var n = e[r](t), o = n.value, u = o instanceof _OverloadYield; Promise.resolve(u ? o.v : o).then(function (t) { if (u) { var i = "return" === r ? "return" : "next"; if (!o.k || t.done) return resume(i, t); t = e[i](t).value; } settle(n.done ? "return" : "normal", t); }, function (e) { resume("throw", e); }); } catch (e) { settle("throw", e); } } function settle(e, n) { switch (e) { case "return": r.resolve({ value: n, done: !0 }); break; case "throw": r.reject(n); break; default: r.resolve({ value: n, done: !1 }); } (r = r.next) ? resume(r.key, r.arg) : t = null; } this._invoke = function (e, n) { return new Promise(function (o, u) { var i = { key: e, arg: n, resolve: o, reject: u, next: null }; t ? t = t.next = i : (r = t = i, resume(e, n)); }); }, "function" != typeof e["return"] && (this["return"] = void 0); }
 AsyncGenerator.prototype["function" == typeof Symbol && Symbol.asyncIterator || "@@asyncIterator"] = function () { return this; }, AsyncGenerator.prototype.next = function (e) { return this._invoke("next", e); }, AsyncGenerator.prototype["throw"] = function (e) { return this._invoke("throw", e); }, AsyncGenerator.prototype["return"] = function (e) { return this._invoke("return", e); };
 function _OverloadYield(e, d) { this.v = e, this.k = d; }
+function _asyncIterator(r) { var n, t, o, e = 2; for ("undefined" != typeof Symbol && (t = Symbol.asyncIterator, o = Symbol.iterator); e--;) { if (t && null != (n = r[t])) return n.call(r); if (o && null != (n = r[o])) return new AsyncFromSyncIterator(n.call(r)); t = "@@asyncIterator", o = "@@iterator"; } throw new TypeError("Object is not async iterable"); }
+function AsyncFromSyncIterator(r) { function AsyncFromSyncIteratorContinuation(r) { if (Object(r) !== r) return Promise.reject(new TypeError(r + " is not an object.")); var n = r.done; return Promise.resolve(r.value).then(function (r) { return { value: r, done: n }; }); } return AsyncFromSyncIterator = function AsyncFromSyncIterator(r) { this.s = r, this.n = r.next; }, AsyncFromSyncIterator.prototype = { s: null, n: null, next: function next() { return AsyncFromSyncIteratorContinuation(this.n.apply(this.s, arguments)); }, "return": function _return(r) { var n = this.s["return"]; return void 0 === n ? Promise.resolve({ value: r, done: !0 }) : AsyncFromSyncIteratorContinuation(n.apply(this.s, arguments)); }, "throw": function _throw(r) { var n = this.s["return"]; return void 0 === n ? Promise.reject(r) : AsyncFromSyncIteratorContinuation(n.apply(this.s, arguments)); } }, new AsyncFromSyncIterator(r); }
 var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
   function Database(file) {
     var _this2;
@@ -549,36 +550,36 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
       var _this = this;
       var options = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
       return _wrapAsyncGenerator(/*#__PURE__*/_regeneratorRuntime().mark(function _callee7() {
-        var ranges, partitionedRanges, currentPartition, line, m, _i, _partitionedRanges, _ranges, lines, _loop, _line;
-        return _regeneratorRuntime().wrap(function _callee7$(_context8) {
-          while (1) switch (_context8.prev = _context8.next) {
+        var ranges, readSize, groupedRanges, fd, _iterator2, _step2, groupedRange, _iteratorAbruptCompletion, _didIteratorError, _iteratorError, _iterator, _step, row, entry;
+        return _regeneratorRuntime().wrap(function _callee7$(_context7) {
+          while (1) switch (_context7.prev = _context7.next) {
             case 0:
               if (!_this.destroyed) {
-                _context8.next = 2;
+                _context7.next = 2;
                 break;
               }
               throw new Error('Database is destroyed');
             case 2:
               if (_this.initialized) {
-                _context8.next = 5;
+                _context7.next = 5;
                 break;
               }
-              _context8.next = 5;
+              _context7.next = 5;
               return _awaitAsyncGenerator(_this.init());
             case 5:
-              _context8.t0 = _this.shouldSave;
-              if (!_context8.t0) {
-                _context8.next = 9;
+              _context7.t0 = _this.shouldSave;
+              if (!_context7.t0) {
+                _context7.next = 9;
                 break;
               }
-              _context8.next = 9;
+              _context7.next = 9;
               return _awaitAsyncGenerator(_this.save()["catch"](console.error));
             case 9:
               if (!(_this.indexOffset === 0)) {
-                _context8.next = 11;
+                _context7.next = 11;
                 break;
               }
-              return _context8.abrupt("return");
+              return _context7.abrupt("return");
             case 11:
               if (!Array.isArray(map)) {
                 if (map instanceof Set) {
@@ -590,83 +591,112 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
                 }
               }
               ranges = _this.getRanges(map);
-              partitionedRanges = [], currentPartition = 0;
-              for (line in ranges) {
-                if (partitionedRanges[currentPartition] === undefined) {
-                  partitionedRanges[currentPartition] = [];
-                }
-                partitionedRanges[currentPartition].push(ranges[line]);
-                if (partitionedRanges[currentPartition].length >= _this.opts.maxMemoryUsage) {
-                  +currentPartition, _readOnlyError("currentPartition");
-                }
-              }
-              m = 0;
-              _i = 0, _partitionedRanges = partitionedRanges;
-            case 17:
-              if (!(_i < _partitionedRanges.length)) {
-                _context8.next = 34;
+              readSize = 512 * 1024; // 512KB
+              _context7.next = 16;
+              return _awaitAsyncGenerator(_this.fileHandler.groupedRanges(ranges));
+            case 16:
+              groupedRanges = _context7.sent;
+              _context7.next = 19;
+              return _awaitAsyncGenerator(_fs["default"].promises.open(_this.fileHandler.file, 'r'));
+            case 19:
+              fd = _context7.sent;
+              _iterator2 = _createForOfIteratorHelper(groupedRanges);
+              _context7.prev = 21;
+              _iterator2.s();
+            case 23:
+              if ((_step2 = _iterator2.n()).done) {
+                _context7.next = 64;
                 break;
               }
-              _ranges = _partitionedRanges[_i];
-              _context8.next = 21;
-              return _awaitAsyncGenerator(_this.fileHandler.readRanges(_ranges));
-            case 21:
-              lines = _context8.sent;
-              _loop = /*#__PURE__*/_regeneratorRuntime().mark(function _loop() {
-                var err, entry;
-                return _regeneratorRuntime().wrap(function _loop$(_context7) {
-                  while (1) switch (_context7.prev = _context7.next) {
-                    case 0:
-                      _context7.next = 2;
-                      return _awaitAsyncGenerator(_this.serializer.deserialize(lines[_line])["catch"](function (e) {
-                        return console.error(err = e);
-                      }));
-                    case 2:
-                      entry = _context7.sent;
-                      if (!err) {
-                        _context7.next = 5;
-                        break;
-                      }
-                      return _context7.abrupt("return", 1);
-                    case 5:
-                      if (entry._ === undefined) {
-                        while (_this.offsets[m] != _line && m < map.length) m++; // weak comparison as 'start' is a string
-                        entry._ = m++;
-                      }
-                      _context7.next = 8;
-                      return entry;
-                    case 8:
-                    case "end":
-                      return _context7.stop();
-                  }
-                }, _loop);
-              });
-              _context8.t1 = _regeneratorRuntime().keys(lines);
-            case 24:
-              if ((_context8.t2 = _context8.t1()).done) {
-                _context8.next = 31;
-                break;
-              }
-              _line = _context8.t2.value;
-              return _context8.delegateYield(_loop(), "t3", 27);
-            case 27:
-              if (!_context8.t3) {
-                _context8.next = 29;
-                break;
-              }
-              return _context8.abrupt("continue", 24);
+              groupedRange = _step2.value;
+              _iteratorAbruptCompletion = false;
+              _didIteratorError = false;
+              _context7.prev = 27;
+              _iterator = _asyncIterator(_this.fileHandler.readGroupedRange(groupedRange, fd));
             case 29:
-              _context8.next = 24;
-              break;
+              _context7.next = 31;
+              return _awaitAsyncGenerator(_iterator.next());
             case 31:
-              _i++;
-              _context8.next = 17;
+              if (!(_iteratorAbruptCompletion = !(_step = _context7.sent).done)) {
+                _context7.next = 46;
+                break;
+              }
+              row = _step.value;
+              _context7.next = 35;
+              return _awaitAsyncGenerator(_this.serializer.deserialize(row.line, {
+                compress: _this.opts.compress
+              }));
+            case 35:
+              entry = _context7.sent;
+              if (!options.includeOffsets) {
+                _context7.next = 41;
+                break;
+              }
+              _context7.next = 39;
+              return {
+                entry: entry,
+                start: row.start
+              };
+            case 39:
+              _context7.next = 43;
               break;
-            case 34:
+            case 41:
+              _context7.next = 43;
+              return entry;
+            case 43:
+              _iteratorAbruptCompletion = false;
+              _context7.next = 29;
+              break;
+            case 46:
+              _context7.next = 52;
+              break;
+            case 48:
+              _context7.prev = 48;
+              _context7.t1 = _context7["catch"](27);
+              _didIteratorError = true;
+              _iteratorError = _context7.t1;
+            case 52:
+              _context7.prev = 52;
+              _context7.prev = 53;
+              if (!(_iteratorAbruptCompletion && _iterator["return"] != null)) {
+                _context7.next = 57;
+                break;
+              }
+              _context7.next = 57;
+              return _awaitAsyncGenerator(_iterator["return"]());
+            case 57:
+              _context7.prev = 57;
+              if (!_didIteratorError) {
+                _context7.next = 60;
+                break;
+              }
+              throw _iteratorError;
+            case 60:
+              return _context7.finish(57);
+            case 61:
+              return _context7.finish(52);
+            case 62:
+              _context7.next = 23;
+              break;
+            case 64:
+              _context7.next = 69;
+              break;
+            case 66:
+              _context7.prev = 66;
+              _context7.t2 = _context7["catch"](21);
+              _iterator2.e(_context7.t2);
+            case 69:
+              _context7.prev = 69;
+              _iterator2.f();
+              return _context7.finish(69);
+            case 72:
+              _context7.next = 74;
+              return _awaitAsyncGenerator(fd.close());
+            case 74:
             case "end":
-              return _context8.stop();
+              return _context7.stop();
           }
-        }, _callee7);
+        }, _callee7, null, [[21, 66, 69, 72], [27, 48, 52, 62], [53,, 57, 61]]);
       }))();
     }
   }, {
@@ -681,40 +711,40 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
           _options$orderBy$spli3,
           direction,
           matchingLines,
-          _args9 = arguments;
-        return _regeneratorRuntime().wrap(function _callee8$(_context9) {
-          while (1) switch (_context9.prev = _context9.next) {
+          _args8 = arguments;
+        return _regeneratorRuntime().wrap(function _callee8$(_context8) {
+          while (1) switch (_context8.prev = _context8.next) {
             case 0:
-              options = _args9.length > 1 && _args9[1] !== undefined ? _args9[1] : {};
+              options = _args8.length > 1 && _args8[1] !== undefined ? _args8[1] : {};
               if (!this.destroyed) {
-                _context9.next = 3;
+                _context8.next = 3;
                 break;
               }
               throw new Error('Database is destroyed');
             case 3:
               if (this.initialized) {
-                _context9.next = 6;
+                _context8.next = 6;
                 break;
               }
-              _context9.next = 6;
+              _context8.next = 6;
               return this.init();
             case 6:
-              _context9.t0 = this.shouldSave;
-              if (!_context9.t0) {
-                _context9.next = 10;
+              _context8.t0 = this.shouldSave;
+              if (!_context8.t0) {
+                _context8.next = 10;
                 break;
               }
-              _context9.next = 10;
+              _context8.next = 10;
               return this.save()["catch"](console.error);
             case 10:
               if (!Array.isArray(criteria)) {
-                _context9.next = 19;
+                _context8.next = 19;
                 break;
               }
-              _context9.next = 13;
+              _context8.next = 13;
               return this.readLines(criteria);
             case 13:
-              results = _context9.sent;
+              results = _context8.sent;
               if (options.orderBy) {
                 _options$orderBy$spli = options.orderBy.split(' '), _options$orderBy$spli2 = _slicedToArray(_options$orderBy$spli, 2), field = _options$orderBy$spli2[0], _options$orderBy$spli3 = _options$orderBy$spli2[1], direction = _options$orderBy$spli3 === void 0 ? 'asc' : _options$orderBy$spli3;
                 results.sort(function (a, b) {
@@ -726,25 +756,25 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
               if (options.limit) {
                 results = results.slice(0, options.limit);
               }
-              return _context9.abrupt("return", results);
+              return _context8.abrupt("return", results);
             case 19:
-              _context9.next = 21;
+              _context8.next = 21;
               return this.indexManager.query(criteria, options);
             case 21:
-              matchingLines = _context9.sent;
+              matchingLines = _context8.sent;
               if (!(!matchingLines || !matchingLines.size)) {
-                _context9.next = 24;
+                _context8.next = 24;
                 break;
               }
-              return _context9.abrupt("return", []);
+              return _context8.abrupt("return", []);
             case 24:
-              _context9.next = 26;
+              _context8.next = 26;
               return this.query(_toConsumableArray(matchingLines), options);
             case 26:
-              return _context9.abrupt("return", _context9.sent);
+              return _context8.abrupt("return", _context8.sent);
             case 27:
             case "end":
-              return _context9.stop();
+              return _context8.stop();
           }
         }, _callee8, this);
       }));
@@ -764,17 +794,160 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
           validMatchingLines,
           entries,
           lines,
-          _iterator,
-          _step,
-          _loop2,
+          _iterator3,
+          _step3,
+          _loop,
+          offsets,
+          byteOffset,
+          k,
+          _args10 = arguments;
+        return _regeneratorRuntime().wrap(function _callee9$(_context10) {
+          while (1) switch (_context10.prev = _context10.next) {
+            case 0:
+              options = _args10.length > 2 && _args10[2] !== undefined ? _args10[2] : {};
+              if (this.shouldTruncate) {
+                this.writeBuffer.push(this.indexOffset);
+                this.shouldTruncate = false;
+              }
+              if (!this.destroyed) {
+                _context10.next = 4;
+                break;
+              }
+              throw new Error('Database is destroyed');
+            case 4:
+              if (this.initialized) {
+                _context10.next = 7;
+                break;
+              }
+              _context10.next = 7;
+              return this.init();
+            case 7:
+              _context10.t0 = this.shouldSave;
+              if (!_context10.t0) {
+                _context10.next = 11;
+                break;
+              }
+              _context10.next = 11;
+              return this.save()["catch"](console.error);
+            case 11:
+              _context10.next = 13;
+              return this.indexManager.query(criteria, options);
+            case 13:
+              matchingLines = _context10.sent;
+              if (!(!matchingLines || !matchingLines.size)) {
+                _context10.next = 16;
+                break;
+              }
+              return _context10.abrupt("return", []);
+            case 16:
+              ranges = this.getRanges(_toConsumableArray(matchingLines));
+              validMatchingLines = new Set(ranges.map(function (r) {
+                return r.index;
+              }));
+              if (validMatchingLines.size) {
+                _context10.next = 20;
+                break;
+              }
+              return _context10.abrupt("return", []);
+            case 20:
+              _context10.next = 22;
+              return this.readLines(_toConsumableArray(validMatchingLines), ranges);
+            case 22:
+              entries = _context10.sent;
+              lines = [];
+              _iterator3 = _createForOfIteratorHelper(entries);
+              _context10.prev = 25;
+              _loop = /*#__PURE__*/_regeneratorRuntime().mark(function _loop() {
+                var entry, err, updated, ret;
+                return _regeneratorRuntime().wrap(function _loop$(_context9) {
+                  while (1) switch (_context9.prev = _context9.next) {
+                    case 0:
+                      entry = _step3.value;
+                      updated = Object.assign(entry, data);
+                      _context9.next = 4;
+                      return _this8.serializer.serialize(updated)["catch"](function (e) {
+                        return err = e;
+                      });
+                    case 4:
+                      ret = _context9.sent;
+                      err || lines.push(ret);
+                    case 6:
+                    case "end":
+                      return _context9.stop();
+                  }
+                }, _loop);
+              });
+              _iterator3.s();
+            case 28:
+              if ((_step3 = _iterator3.n()).done) {
+                _context10.next = 32;
+                break;
+              }
+              return _context10.delegateYield(_loop(), "t1", 30);
+            case 30:
+              _context10.next = 28;
+              break;
+            case 32:
+              _context10.next = 37;
+              break;
+            case 34:
+              _context10.prev = 34;
+              _context10.t2 = _context10["catch"](25);
+              _iterator3.e(_context10.t2);
+            case 37:
+              _context10.prev = 37;
+              _iterator3.f();
+              return _context10.finish(37);
+            case 40:
+              offsets = [];
+              byteOffset = 0, k = 0;
+              this.offsets.forEach(function (n, i) {
+                var prevByteOffset = byteOffset;
+                if (validMatchingLines.has(i) && ranges[k]) {
+                  var r = ranges[k];
+                  byteOffset += lines[k].length - (r.end - r.start);
+                  k++;
+                }
+                offsets.push(n + prevByteOffset);
+              });
+              this.offsets = offsets;
+              this.indexOffset += byteOffset;
+              _context10.next = 47;
+              return this.fileHandler.replaceLines(ranges, lines);
+            case 47:
+              _toConsumableArray(validMatchingLines).forEach(function (lineNumber, i) {
+                _this8.indexManager.dryRemove(lineNumber);
+                _this8.indexManager.add(entries[i], lineNumber);
+              });
+              this.shouldSave = true;
+              return _context10.abrupt("return", entries);
+            case 50:
+            case "end":
+              return _context10.stop();
+          }
+        }, _callee9, this, [[25, 34, 37, 40]]);
+      }));
+      function update(_x5, _x6) {
+        return _update.apply(this, arguments);
+      }
+      return update;
+    }()
+  }, {
+    key: "delete",
+    value: function () {
+      var _delete2 = _asyncToGenerator(/*#__PURE__*/_regeneratorRuntime().mark(function _callee10(criteria) {
+        var options,
+          matchingLines,
+          ranges,
+          validMatchingLines,
           offsets,
           byteOffset,
           k,
           _args11 = arguments;
-        return _regeneratorRuntime().wrap(function _callee9$(_context11) {
+        return _regeneratorRuntime().wrap(function _callee10$(_context11) {
           while (1) switch (_context11.prev = _context11.next) {
             case 0:
-              options = _args11.length > 2 && _args11[2] !== undefined ? _args11[2] : {};
+              options = _args11.length > 1 && _args11[1] !== undefined ? _args11[1] : {};
               if (this.shouldTruncate) {
                 this.writeBuffer.push(this.indexOffset);
                 this.shouldTruncate = false;
@@ -808,156 +981,13 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
                 _context11.next = 16;
                 break;
               }
-              return _context11.abrupt("return", []);
+              return _context11.abrupt("return", 0);
             case 16:
               ranges = this.getRanges(_toConsumableArray(matchingLines));
               validMatchingLines = new Set(ranges.map(function (r) {
                 return r.index;
               }));
-              if (validMatchingLines.size) {
-                _context11.next = 20;
-                break;
-              }
-              return _context11.abrupt("return", []);
-            case 20:
-              _context11.next = 22;
-              return this.readLines(_toConsumableArray(validMatchingLines), ranges);
-            case 22:
-              entries = _context11.sent;
-              lines = [];
-              _iterator = _createForOfIteratorHelper(entries);
-              _context11.prev = 25;
-              _loop2 = /*#__PURE__*/_regeneratorRuntime().mark(function _loop2() {
-                var entry, err, updated, ret;
-                return _regeneratorRuntime().wrap(function _loop2$(_context10) {
-                  while (1) switch (_context10.prev = _context10.next) {
-                    case 0:
-                      entry = _step.value;
-                      updated = Object.assign(entry, data);
-                      _context10.next = 4;
-                      return _this8.serializer.serialize(updated)["catch"](function (e) {
-                        return err = e;
-                      });
-                    case 4:
-                      ret = _context10.sent;
-                      err || lines.push(ret);
-                    case 6:
-                    case "end":
-                      return _context10.stop();
-                  }
-                }, _loop2);
-              });
-              _iterator.s();
-            case 28:
-              if ((_step = _iterator.n()).done) {
-                _context11.next = 32;
-                break;
-              }
-              return _context11.delegateYield(_loop2(), "t1", 30);
-            case 30:
-              _context11.next = 28;
-              break;
-            case 32:
-              _context11.next = 37;
-              break;
-            case 34:
-              _context11.prev = 34;
-              _context11.t2 = _context11["catch"](25);
-              _iterator.e(_context11.t2);
-            case 37:
-              _context11.prev = 37;
-              _iterator.f();
-              return _context11.finish(37);
-            case 40:
-              offsets = [];
-              byteOffset = 0, k = 0;
-              this.offsets.forEach(function (n, i) {
-                var prevByteOffset = byteOffset;
-                if (validMatchingLines.has(i) && ranges[k]) {
-                  var r = ranges[k];
-                  byteOffset += lines[k].length - (r.end - r.start);
-                  k++;
-                }
-                offsets.push(n + prevByteOffset);
-              });
-              this.offsets = offsets;
-              this.indexOffset += byteOffset;
-              _context11.next = 47;
-              return this.fileHandler.replaceLines(ranges, lines);
-            case 47:
-              _toConsumableArray(validMatchingLines).forEach(function (lineNumber, i) {
-                _this8.indexManager.dryRemove(lineNumber);
-                _this8.indexManager.add(entries[i], lineNumber);
-              });
-              this.shouldSave = true;
-              return _context11.abrupt("return", entries);
-            case 50:
-            case "end":
-              return _context11.stop();
-          }
-        }, _callee9, this, [[25, 34, 37, 40]]);
-      }));
-      function update(_x5, _x6) {
-        return _update.apply(this, arguments);
-      }
-      return update;
-    }()
-  }, {
-    key: "delete",
-    value: function () {
-      var _delete2 = _asyncToGenerator(/*#__PURE__*/_regeneratorRuntime().mark(function _callee10(criteria) {
-        var options,
-          matchingLines,
-          ranges,
-          validMatchingLines,
-          offsets,
-          byteOffset,
-          k,
-          _args12 = arguments;
-        return _regeneratorRuntime().wrap(function _callee10$(_context12) {
-          while (1) switch (_context12.prev = _context12.next) {
-            case 0:
-              options = _args12.length > 1 && _args12[1] !== undefined ? _args12[1] : {};
-              if (this.shouldTruncate) {
-                this.writeBuffer.push(this.indexOffset);
-                this.shouldTruncate = false;
-              }
-              if (!this.destroyed) {
-                _context12.next = 4;
-                break;
-              }
-              throw new Error('Database is destroyed');
-            case 4:
-              if (this.initialized) {
-                _context12.next = 7;
-                break;
-              }
-              _context12.next = 7;
-              return this.init();
-            case 7:
-              _context12.t0 = this.shouldSave;
-              if (!_context12.t0) {
-                _context12.next = 11;
-                break;
-              }
-              _context12.next = 11;
-              return this.save()["catch"](console.error);
-            case 11:
-              _context12.next = 13;
-              return this.indexManager.query(criteria, options);
-            case 13:
-              matchingLines = _context12.sent;
-              if (!(!matchingLines || !matchingLines.size)) {
-                _context12.next = 16;
-                break;
-              }
-              return _context12.abrupt("return", 0);
-            case 16:
-              ranges = this.getRanges(_toConsumableArray(matchingLines));
-              validMatchingLines = new Set(ranges.map(function (r) {
-                return r.index;
-              }));
-              _context12.next = 20;
+              _context11.next = 20;
               return this.fileHandler.replaceLines(ranges, []);
             case 20:
               offsets = [];
@@ -975,10 +1005,10 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
               this.indexOffset += byteOffset;
               this.indexManager.remove(_toConsumableArray(validMatchingLines));
               this.shouldSave = true;
-              return _context12.abrupt("return", ranges.length);
+              return _context11.abrupt("return", ranges.length);
             case 28:
             case "end":
-              return _context12.stop();
+              return _context11.stop();
           }
         }, _callee10, this);
       }));
@@ -991,15 +1021,15 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
     key: "destroy",
     value: function () {
       var _destroy = _asyncToGenerator(/*#__PURE__*/_regeneratorRuntime().mark(function _callee11() {
-        return _regeneratorRuntime().wrap(function _callee11$(_context13) {
-          while (1) switch (_context13.prev = _context13.next) {
+        return _regeneratorRuntime().wrap(function _callee11$(_context12) {
+          while (1) switch (_context12.prev = _context12.next) {
             case 0:
-              _context13.t0 = this.shouldSave;
-              if (!_context13.t0) {
-                _context13.next = 4;
+              _context12.t0 = this.shouldSave;
+              if (!_context12.t0) {
+                _context12.next = 4;
                 break;
               }
-              _context13.next = 4;
+              _context12.next = 4;
               return this.save()["catch"](console.error);
             case 4:
               this.destroyed = true;
@@ -1010,7 +1040,7 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
               this.fileHandler.destroy();
             case 10:
             case "end":
-              return _context13.stop();
+              return _context12.stop();
           }
         }, _callee11, this);
       }));

@@ -28,24 +28,74 @@ export default class FileHandler {
   async readRanges(ranges, mapper) {
     const lines = {}, limit = pLimit(4)
     const fd = await fs.promises.open(this.file, 'r')
+    const groupedRanges = await this.groupedRanges(ranges)
     try {
-      const tasks = ranges.map(r => {
-        return async () => {
-          let err
-          const length = r.end - r.start
-          let buffer = Buffer.alloc(length)
-          const { bytesRead } = await fd.read(buffer, 0, length, r.start).catch(e => err = e)
-          if (buffer.length > bytesRead) buffer = buffer.subarray(0, bytesRead)
-          lines[r.start] = mapper ? (await mapper(buffer, r)) : buffer
+      for(const groupedRange of groupedRanges) {
+        for await (const row of this.readGroupedRange(groupedRange, fd)) {
+          lines[row.start] = mapper ? (await mapper(row.line, groupedRange)) : row.line
         }
-      })
-      await Promise.allSettled(tasks.map(limit))
+      }
     } catch (e) {
       console.error('Error reading ranges:', e)
     } finally {
       await fd.close()
     }
     return lines
+  }
+
+  async groupedRanges(ranges) {
+    const readSize = 512 * 1024 // 512KB  
+    const groupedRanges = []
+    let currentGroup = []
+    let currentSize = 0
+
+    // each range is a {start: number, end: number} object
+    for(const range of ranges) {
+      const rangeSize = range.end - range.start
+      
+      if(currentGroup.length > 0) {
+        const lastRange = currentGroup[currentGroup.length - 1]
+        if(lastRange.end !== range.start || currentSize + rangeSize > readSize) {
+          groupedRanges.push(currentGroup)
+          currentGroup = []
+          currentSize = 0
+        }
+      }
+    
+      currentGroup.push(range)
+      currentSize += rangeSize
+    }
+
+    if(currentGroup.length > 0) {
+      groupedRanges.push(currentGroup)
+    }
+
+    return groupedRanges
+  }
+
+  async *readGroupedRange(groupedRange, fd) {
+    const options = {start: groupedRange[0].start, end: groupedRange[groupedRange.length - 1].end}
+    
+    let i = 0, buffer = Buffer.alloc(options.end - options.start)
+    const results = {}, { bytesRead } = await fd.read(buffer, 0, options.end - options.start, options.start)
+    if(buffer.length > bytesRead) buffer = buffer.subarray(0, bytesRead)
+    for(const range of groupedRange) {
+      const line = buffer.subarray(range.start, range.end)
+      yield {line, start: range.start}
+    }
+
+    return results
+  }
+
+  async *walk(ranges, options={}) {
+    const fd = await fs.promises.open(this.file, 'r')
+    const groupedRanges = await this.groupedRanges(ranges)
+    for(const groupedRange of groupedRanges) {
+      for await (const row of this.readGroupedRange(groupedRange, fd)) {
+        yield row
+      }
+    }
+    await fd.close()
   }
 
   async replaceLines(ranges, lines) {
