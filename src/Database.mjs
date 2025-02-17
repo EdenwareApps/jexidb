@@ -129,7 +129,7 @@ export class Database extends EventEmitter {
   }
 
   async readLines(map, ranges) {
-    if(!ranges) ranges = this.getRanges(map)
+    if(!Array.isArray(ranges)) ranges = this.getRanges(map)
     const results = await this.fileHandler.readRanges(ranges, this.serializer.deserialize.bind(this.serializer))
     let i = 0
     for(const start in results) {
@@ -222,8 +222,7 @@ export class Database extends EventEmitter {
         map = [...Array(this.offsets.length).keys()]
       }
     }
-    const ranges = this.getRanges(map)
-    const readSize = 512 * 1024 // 512KB
+    const ranges = await this.getRangesWithOptions(map, options)
     const groupedRanges = await this.fileHandler.groupedRanges(ranges)
     const fd = await fs.promises.open(this.fileHandler.file, 'r')
     for(const groupedRange of groupedRanges) {
@@ -239,31 +238,69 @@ export class Database extends EventEmitter {
     await fd.close() 
   }
 
+  async getRangesWithOptions(map, options={}) {
+    if(this.destroyed) throw new Error('Database is destroyed')
+    if(!this.initialized) await this.init()
+    this.shouldSave && await this.save().catch(console.error)
+    if(this.indexOffset === 0) return
+    if(!Array.isArray(map)) {
+      if (map instanceof Set) {
+        map = [...map]
+      } else if(map && typeof map === 'object') {
+        map = [...this.indexManager.query(map, options)]
+      } else {
+        map = [...Array(this.offsets.length).keys()]
+      }
+    }
+    const results = [], ranges = this.getRanges(map)
+    if(!options.scanTerms || !options.scanTerms.length) return ranges
+    const groupedRanges = await this.fileHandler.groupedRanges(ranges)
+    const fd = await fs.promises.open(this.fileHandler.file, 'r')
+    for(const groupedRange of groupedRanges) {
+      for await (const row of this.fileHandler.readGroupedRange(groupedRange, fd)) {
+        let added = !options.matchAny
+        const lcLine = String(row.line).toLowerCase()
+        for(const term of options.scanTerms) {
+          const hasTerm = lcLine.includes(term)
+          if(options.matchAny) {
+            if(hasTerm) {
+              added = true
+              break
+            }
+          } else {
+            if(!hasTerm) {
+              added = false
+              break              
+            }
+          }
+        }
+        if(added) {
+          results.push({start: row.start, end: row.end})
+        }
+      }
+    }
+    await fd.close()
+    return results
+  }
+
   async query(criteria, options={}) {
     if(this.destroyed) throw new Error('Database is destroyed')
     if(!this.initialized) await this.init()
     this.shouldSave && await this.save().catch(console.error)
-    if(Array.isArray(criteria)) {
-      let results = await this.readLines(criteria)
-      if (options.orderBy) {
-          const [field, direction = 'asc'] = options.orderBy.split(' ')
-          results.sort((a, b) => {
-              if (a[field] > b[field]) return direction === 'asc' ? 1 : -1
-              if (a[field] < b[field]) return direction === 'asc' ? -1 : 1
-              return 0;
-          })
-      }
-      if (options.limit) {
-          results = results.slice(0, options.limit);
-      }
-      return results
-    } else {
-      const matchingLines = await this.indexManager.query(criteria, options)
-      if (!matchingLines || !matchingLines.size) {
-          return []
-      }
-      return await this.query([...matchingLines], options)
+    const ranges = await this.getRangesWithOptions(criteria, options)
+    const entries = await this.readLines(criteria, ranges)
+    if(options.orderBy) {
+      const [field, direction = 'asc'] = options.orderBy.split(' ')
+      entries.sort((a, b) => {
+        if(a[field] > b[field]) return direction === 'asc' ? 1 : -1
+        if(a[field] < b[field]) return direction === 'asc' ? -1 : 1
+        return 0
+      })
     }
+    if(options.limit) {
+      return entries.slice(0, options.limit)
+    }
+    return entries
   }
 
   async update(criteria, data, options={}) {
