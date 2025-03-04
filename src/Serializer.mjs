@@ -46,6 +46,9 @@ export default class Serializer extends EventEmitter {
   }  
 
   async deserialize(data) {
+    if(data.length === 0) {
+      return null
+    }
     let line, isCompressed, isV8
     const header = data.readUInt8(0)
     const valid = header === 0x00 || header === 0x01 || header === 0x02 || header === 0x03
@@ -58,7 +61,7 @@ export default class Serializer extends EventEmitter {
       try {
         return JSON.parse(data.toString('utf-8').trim())
       } catch (e) {
-        throw new Error('Failed to deserialize legacy JSON data')
+        throw new Error('Failed to deserialize JSON data')
       }
     }
     if (isCompressed) {

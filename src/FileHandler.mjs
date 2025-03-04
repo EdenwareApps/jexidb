@@ -24,17 +24,19 @@ export default class FileHandler {
     if(buffer.length > bytesRead) return buffer.subarray(0, bytesRead)
     return buffer
   }
-
+  
   async readRanges(ranges, mapper) {
     const lines = {}, limit = pLimit(4)
     const fd = await fs.promises.open(this.file, 'r')
     const groupedRanges = await this.groupedRanges(ranges)
     try {
-      for(const groupedRange of groupedRanges) {
-        for await (const row of this.readGroupedRange(groupedRange, fd)) {
-          lines[row.start] = mapper ? (await mapper(row.line, groupedRange)) : row.line
-        }
-      }
+      await Promise.allSettled(groupedRanges.map(async (groupedRange) => {
+        await limit(async () => {
+          for await (const row of this.readGroupedRange(groupedRange, fd)) {
+            lines[row.start] = mapper ? (await mapper(row.line, groupedRange)) : row.line
+          }
+        })
+      }))
     } catch (e) {
       console.error('Error reading ranges:', e)
     } finally {
@@ -43,7 +45,7 @@ export default class FileHandler {
     return lines
   }
 
-  async groupedRanges(ranges) {
+  async groupedRanges(ranges) { // expects ordered ranges from Database.getRanges()
     const readSize = 512 * 1024 // 512KB  
     const groupedRanges = []
     let currentGroup = []
@@ -79,27 +81,41 @@ export default class FileHandler {
     let i = 0, buffer = Buffer.alloc(options.end - options.start)
     const results = {}, { bytesRead } = await fd.read(buffer, 0, options.end - options.start, options.start)
     if(buffer.length > bytesRead) buffer = buffer.subarray(0, bytesRead)
-    for(const range of groupedRange) {
-      const line = buffer.subarray(range.start, range.end)
-      yield {line, start: range.start}
+
+    for (const range of groupedRange) {
+      const startOffset = range.start - options.start;
+      let endOffset = range.end - options.start;
+      if (endOffset > buffer.length) {
+        endOffset = buffer.length;
+      }
+      if (startOffset >= buffer.length) {
+        continue;
+      }
+      const line = buffer.subarray(startOffset, endOffset);
+      if (line.length === 0) continue;
+      yield { line, start: range.start };
     }
+
 
     return results
   }
 
   async *walk(ranges, options={}) {
     const fd = await fs.promises.open(this.file, 'r')
-    const groupedRanges = await this.groupedRanges(ranges)
-    for(const groupedRange of groupedRanges) {
-      for await (const row of this.readGroupedRange(groupedRange, fd)) {
-        yield row
+    try {
+      const groupedRanges = await this.groupedRanges(ranges)
+      for(const groupedRange of groupedRanges) {
+        for await (const row of this.readGroupedRange(groupedRange, fd)) {
+          yield row
+        }
       }
+    } finally {
+      await fd.close()
     }
-    await fd.close()
   }
 
   async replaceLines(ranges, lines) {
-    let closed
+    let closed, renamed
     const tmpFile = this.file + '.tmp'
     const writer = await fs.promises.open(tmpFile, 'w+')
     const reader = await fs.promises.open(this.file, 'r')
@@ -124,7 +140,11 @@ export default class FileHandler {
       await reader.close()
       await writer.close()
       closed = true
-      await fs.promises.copyFile(tmpFile, this.file)
+      try {
+        renamed = await fs.promises.rename(tmpFile, this.file)
+      } catch (e) {
+        await fs.promises.copyFile(tmpFile, this.file)
+      }
     } catch (e) {
       console.error('Error replacing lines:', e)
     } finally {
@@ -132,7 +152,7 @@ export default class FileHandler {
         await reader.close()
         await writer.close()
       }
-      await fs.promises.unlink(tmpFile).catch(() => {})
+      renamed || await fs.promises.unlink(tmpFile).catch(() => {})
     }
   }
   async writeData(data, immediate, fd) {
@@ -150,18 +170,19 @@ export default class FileHandler {
       if (size < 1) throw 'empty file'
       this.size = size
       const bufferSize = 16384
-      let buffer, lastReadSize, readPosition = Math.max(size - bufferSize, 0)
+      let buffer, isFirstRead = true, lastReadSize, readPosition = Math.max(size - bufferSize, 0)
       while (readPosition >= 0) {
         const readSize = Math.min(bufferSize, size - readPosition)
         if (readSize !== lastReadSize) {
           lastReadSize = readSize
           buffer = Buffer.alloc(readSize)
         }
-        const { bytesRead } = await reader.read(buffer, 0, readSize, readPosition)
+        const { bytesRead } = await reader.read(buffer, 0, isFirstRead ? (readSize - 1) : readSize, readPosition)
+        if (isFirstRead) isFirstRead = false
         if (bytesRead === 0) break
-        const newlineIndex = buffer.lastIndexOf(10, size - 4) // 0x0A is the ASCII code for '\n'
+        const newlineIndex = buffer.lastIndexOf(10)
+        const start = readPosition + newlineIndex + 1
         if (newlineIndex !== -1) {
-          const start = readPosition + newlineIndex + 1
           const lastLine = Buffer.alloc(size - start)
           await reader.read(lastLine, 0, size - start, start)
           if (!lastLine || !lastLine.length) {

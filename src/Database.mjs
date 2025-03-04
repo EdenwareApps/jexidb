@@ -2,14 +2,15 @@ import { EventEmitter } from 'events'
 import FileHandler from './FileHandler.mjs'
 import IndexManager from './IndexManager.mjs'
 import Serializer from './Serializer.mjs'
+import { Mutex } from 'async-mutex'
 import fs from 'fs'
 
 export class Database extends EventEmitter {
-  constructor(file, opts={}) {
+  constructor(file, opts = {}) {
     super()
     this.opts = Object.assign({
       v8: false,
-      index: {data: {}},
+      index: { data: {} },
       indexes: {},
       compress: false,
       compressIndex: false,
@@ -22,29 +23,30 @@ export class Database extends EventEmitter {
     this.indexManager = new IndexManager(this.opts)
     this.indexOffset = 0
     this.writeBuffer = []
+    this.mutex = new Mutex()
   }
 
   use(plugin) {
-    if(this.destroyed) throw new Error('Database is destroyed')
+    if (this.destroyed) throw new Error('Database is destroyed')
     plugin(this)
   }
 
   async init() {
-    if(this.destroyed) throw new Error('Database is destroyed')
-    if(this.initialized) return
-    if(this.initlializing) return await new Promise(resolve => this.once('init', resolve))
+    if (this.destroyed) throw new Error('Database is destroyed')
+    if (this.initialized) return
+    if (this.initlializing) return await new Promise(resolve => this.once('init', resolve))
     this.initializing = true
     try {
-      if(this.opts.clear) {
+      if (this.opts.clear) {
         await this.fileHandler.truncate(0).catch(console.error)
         throw new Error('Cleared, empty file')
       }
       const lastLine = await this.fileHandler.readLastLine()
-      if(!lastLine || !lastLine.length) {
+      if (!lastLine || !lastLine.length) {
         throw new Error('File does not exists or is a empty file')
       }
-      const offsets = await this.serializer.deserialize(lastLine, {compress: this.opts.compressIndex})
-      if(!Array.isArray(offsets)) {
+      const offsets = await this.serializer.deserialize(lastLine, { compress: this.opts.compressIndex })
+      if (!Array.isArray(offsets)) {
         throw new Error('File to parse offsets, expected an array')
       }
       this.indexOffset = offsets[offsets.length - 2]
@@ -53,14 +55,14 @@ export class Database extends EventEmitter {
       this.offsets = this.offsets.slice(0, -2)
       this.shouldTruncate = true
       let indexLine = await this.fileHandler.readRange(...ptr)
-      const index = await this.serializer.deserialize(indexLine, {compress: this.opts.compressIndex})
+      const index = await this.serializer.deserialize(indexLine, { compress: this.opts.compressIndex })
       index && this.indexManager.load(index)
     } catch (e) {
-      if(Array.isArray(this.offsets)) {
+      if (Array.isArray(this.offsets)) {
         this.offsets = []
       }
       this.indexOffset = 0
-      if(!String(e).includes('empty file')) {
+      if (!String(e).includes('empty file')) {
         console.error('Error loading database:', e)
       }
     } finally {
@@ -71,30 +73,30 @@ export class Database extends EventEmitter {
   }
 
   async save() {
-    if(this.destroyed) throw new Error('Database is destroyed')
-    if(!this.initialized) throw new Error('Database not initialized')
-    if(this.saving) return new Promise(resolve => this.once('save', resolve))
+    if (this.destroyed) throw new Error('Database is destroyed')
+    if (!this.initialized) throw new Error('Database not initialized')
+    if (this.saving) return new Promise(resolve => this.once('save', resolve))
     this.saving = true
     await this.flush()
     if (!this.shouldSave) return
     this.emit('before-save')
-    const index = Object.assign({data: {}}, this.indexManager.index)
-    for(const field in this.indexManager.index.data) {
-      for(const term in this.indexManager.index.data[field]) {
+    const index = Object.assign({ data: {} }, this.indexManager.index)
+    for (const field in this.indexManager.index.data) {
+      for (const term in this.indexManager.index.data[field]) {
         index.data[field][term] = [...this.indexManager.index.data[field][term]] // set to array 
       }
     }
     const offsets = this.offsets.slice(0)
-    const indexString = await this.serializer.serialize(index, {compress: this.opts.compressIndex, linebreak: true}) // force linebreak here to allow 'init' to read last line as offsets correctly
-    for(const field in this.indexManager.index.data) {
-      for(const term in this.indexManager.index.data[field]) {
+    const indexString = await this.serializer.serialize(index, { compress: this.opts.compressIndex, linebreak: true }) // force linebreak here to allow 'init' to read last line as offsets correctly
+    for (const field in this.indexManager.index.data) {
+      for (const term in this.indexManager.index.data[field]) {
         this.indexManager.index.data[field][term] = new Set(index.data[field][term]) // set back to set because of serialization
       }
     }
     offsets.push(this.indexOffset)
     offsets.push(this.indexOffset + indexString.length)
     // save offsets as JSON always to prevent linebreaks on last line, which breaks 'init()'
-    const offsetsString = await this.serializer.serialize(offsets, {json: true, compress: false, linebreak: false})
+    const offsetsString = await this.serializer.serialize(offsets, { json: true, compress: false, linebreak: false })
     this.writeBuffer.push(indexString)
     this.writeBuffer.push(offsetsString)
     await this.flush() // write the index and offsets
@@ -112,7 +114,7 @@ export class Database extends EventEmitter {
 
   locate(n) {
     if (this.offsets[n] === undefined) {
-      if(this.offsets[n - 1]) {
+      if (this.offsets[n - 1]) {
         return [this.indexOffset, Number.MAX_SAFE_INTEGER]
       }
       return
@@ -120,58 +122,58 @@ export class Database extends EventEmitter {
     let end = (this.offsets[n + 1] || this.indexOffset || Number.MAX_SAFE_INTEGER)
     return [this.offsets[n], end]
   }
-  
+
   getRanges(map) {
     return (map || Array.from(this.offsets.keys())).map(n => {
-        const ret = this.locate(n)
-        if(ret !== undefined) return {start: ret[0], end: ret[1], index: n}
+      const ret = this.locate(n)
+      if (ret !== undefined) return { start: ret[0], end: ret[1], index: n }
     }).filter(n => n !== undefined)
   }
 
   async readLines(map, ranges) {
-    if(!Array.isArray(ranges)) ranges = this.getRanges(map)
+    if (!ranges) ranges = this.getRanges(map)
     const results = await this.fileHandler.readRanges(ranges, this.serializer.deserialize.bind(this.serializer))
     let i = 0
-    for(const start in results) {
-      if(!results[start] || results[start]._ !== undefined) continue
-      while(this.offsets[i] != start && i < map.length) i++ // weak comparison as 'start' is a string
+    for (const start in results) {
+      if (!results[start] || results[start]._ !== undefined) continue
+      while (this.offsets[i] != start && i < map.length) i++ // weak comparison as 'start' is a string
       results[start]._ = map[i++]
     }
     return Object.values(results).filter(r => r !== undefined)
   }
 
   async insert(data) {
-    if(this.destroyed) throw new Error('Database is destroyed')
-    if(!this.initialized) await this.init()
+    if (this.destroyed) throw new Error('Database is destroyed')
+    if (!this.initialized) await this.init()
     if (this.shouldTruncate) {
-        this.writeBuffer.push(this.indexOffset)
-        this.shouldTruncate = false
+      this.writeBuffer.push(this.indexOffset)
+      this.shouldTruncate = false
     }
-    const line = await this.serializer.serialize(data, {compress: this.opts.compress}) // using Buffer for offsets accuracy
+    const line = await this.serializer.serialize(data, { compress: this.opts.compress }) // using Buffer for offsets accuracy
     const position = this.offsets.length
     this.offsets.push(this.indexOffset)
     this.indexOffset += line.length
-    this.indexManager.add(data, position)
     this.emit('insert', data, position)
     this.writeBuffer.push(line)
-    if(!this.flushing && this.currentWriteBufferSize() > this.opts.maxMemoryUsage) {
+    if (!this.flushing && this.currentWriteBufferSize() > this.opts.maxMemoryUsage) {
       await this.flush()
     }
+    this.indexManager.add(data, position)
     this.shouldSave = true
   }
 
-  currentWriteBufferSize(){
+  currentWriteBufferSize() {
     const lengths = this.writeBuffer.filter(b => Buffer.isBuffer(b)).map(b => b.length)
     return lengths.reduce((a, b) => a + b, 0)
   }
 
   flush() {
-    if(this.flushing) {
+    if (this.flushing) {
       return this.flushing
     }
     return this.flushing = new Promise((resolve, reject) => {
-      if(this.destroyed) return reject(new Error('Database is destroyed'))
-      if(!this.writeBuffer.length) return resolve()
+      if (this.destroyed) return reject(new Error('Database is destroyed'))
+      if (!this.writeBuffer.length) return resolve()
       let err
       this._flush().catch(e => err = e).finally(() => {
         err ? reject(err) : resolve()
@@ -181,17 +183,18 @@ export class Database extends EventEmitter {
   }
 
   async _flush() {
+    const release = await this.mutex.acquire()
     let fd = await fs.promises.open(this.fileHandler.file, 'a')
     try {
-      while(this.writeBuffer.length) {
+      while (this.writeBuffer.length) {
         let data
         const pos = this.writeBuffer.findIndex(b => typeof b === 'number')
-        if(pos === 0) {
+        if (pos === 0) {
           await fd.close()
           await this.fileHandler.truncate(this.writeBuffer.shift())
           fd = await fs.promises.open(this.fileHandler.file, 'a')
           continue
-        } else if(pos === -1) {
+        } else if (pos === -1) {
           data = Buffer.concat(this.writeBuffer)
           this.writeBuffer.length = 0
         } else {
@@ -201,166 +204,149 @@ export class Database extends EventEmitter {
         await fd.write(data)
       }
       this.shouldSave = true
-    } catch(err) {
+    } catch (err) {
       console.error('Error flushing:', err)
+    } finally {
+      let err
+      await fd.close().catch(e => err = e)
+      release()
+      err && console.error('Error closing file:', err)
+    }
+  }
+
+  async *walk(map, options = {}) {
+    if (this.destroyed) throw new Error('Database is destroyed')
+    if (!this.initialized) await this.init()
+    this.shouldSave && await this.save().catch(console.error)
+    if (this.indexOffset === 0) return
+    if (!Array.isArray(map)) {
+      if (map instanceof Set) {
+        map = [...map]
+      } else if (map && typeof map === 'object') {
+        map = [...this.indexManager.query(map, options)]
+      } else {
+        map = [...Array(this.offsets.length).keys()]
+      }
+    }
+    const ranges = this.getRanges(map)
+    const readSize = 512 * 1024 // 512KB
+    const groupedRanges = await this.fileHandler.groupedRanges(ranges)
+    const fd = await fs.promises.open(this.fileHandler.file, 'r')
+    try {
+      for (const groupedRange of groupedRanges) {
+        for await (const row of this.fileHandler.readGroupedRange(groupedRange, fd)) {
+          const entry = await this.serializer.deserialize(row.line, { compress: this.opts.compress })
+          if (entry === null) continue
+          if (options.includeOffsets) {
+            yield { entry, start: row.start }
+          } else {
+            yield entry
+          }
+        }
+      }
     } finally {
       await fd.close()
     }
   }
 
-  async *walk(map, options={}) {
-    if(this.destroyed) throw new Error('Database is destroyed')
-    if(!this.initialized) await this.init()
+  async query(criteria, options = {}) {
+    if (this.destroyed) throw new Error('Database is destroyed')
+    if (!this.initialized) await this.init()
     this.shouldSave && await this.save().catch(console.error)
-    if(this.indexOffset === 0) return
-    if(!Array.isArray(map)) {
-      if (map instanceof Set) {
-        map = [...map]
-      } else if(map && typeof map === 'object') {
-        map = [...this.indexManager.query(map, options)]
-      } else {
-        map = [...Array(this.offsets.length).keys()]
+    if (Array.isArray(criteria)) {
+      let results = await this.readLines(criteria)
+      if (options.orderBy) {
+        const [field, direction = 'asc'] = options.orderBy.split(' ')
+        results.sort((a, b) => {
+          if (a[field] > b[field]) return direction === 'asc' ? 1 : -1
+          if (a[field] < b[field]) return direction === 'asc' ? -1 : 1
+          return 0;
+        })
       }
-    }
-    const ranges = await this.getRangesWithOptions(map, options)
-    const groupedRanges = await this.fileHandler.groupedRanges(ranges)
-    const fd = await fs.promises.open(this.fileHandler.file, 'r')
-    for(const groupedRange of groupedRanges) {
-      for await (const row of this.fileHandler.readGroupedRange(groupedRange, fd)) {
-        const entry = await this.serializer.deserialize(row.line, {compress: this.opts.compress})
-        if(options.includeOffsets) {
-          yield {entry, start: row.start}
-        } else {
-          yield entry
-        }
+      if (options.limit) {
+        results = results.slice(0, options.limit);
       }
-    }
-    await fd.close() 
-  }
-
-  async getRangesWithOptions(map, options={}) {
-    if(this.destroyed) throw new Error('Database is destroyed')
-    if(!this.initialized) await this.init()
-    this.shouldSave && await this.save().catch(console.error)
-    if(this.indexOffset === 0) return
-    if(!Array.isArray(map)) {
-      if (map instanceof Set) {
-        map = [...map]
-      } else if(map && typeof map === 'object') {
-        map = [...this.indexManager.query(map, options)]
-      } else {
-        map = [...Array(this.offsets.length).keys()]
-      }
-    }
-    const results = [], ranges = this.getRanges(map)
-    if(!options.scanTerms || !options.scanTerms.length) return ranges
-    const groupedRanges = await this.fileHandler.groupedRanges(ranges)
-    const fd = await fs.promises.open(this.fileHandler.file, 'r')
-    for(const groupedRange of groupedRanges) {
-      for await (const row of this.fileHandler.readGroupedRange(groupedRange, fd)) {
-        let added = !options.matchAny
-        const lcLine = String(row.line).toLowerCase()
-        for(const term of options.scanTerms) {
-          const hasTerm = lcLine.includes(term)
-          if(options.matchAny) {
-            if(hasTerm) {
-              added = true
-              break
-            }
-          } else {
-            if(!hasTerm) {
-              added = false
-              break              
-            }
-          }
-        }
-        if(added) {
-          results.push({start: row.start, end: row.end})
-        }
-      }
-    }
-    await fd.close()
-    return results
-  }
-
-  async query(criteria, options={}) {
-    if(this.destroyed) throw new Error('Database is destroyed')
-    if(!this.initialized) await this.init()
-    this.shouldSave && await this.save().catch(console.error)
-    const ranges = await this.getRangesWithOptions(criteria, options)
-    const entries = await this.readLines(criteria, ranges)
-    if(options.orderBy) {
-      const [field, direction = 'asc'] = options.orderBy.split(' ')
-      entries.sort((a, b) => {
-        if(a[field] > b[field]) return direction === 'asc' ? 1 : -1
-        if(a[field] < b[field]) return direction === 'asc' ? -1 : 1
-        return 0
-      })
-    }
-    if(options.limit) {
-      return entries.slice(0, options.limit)
-    }
-    return entries
-  }
-
-  async update(criteria, data, options={}) {
-    if (this.shouldTruncate) {
-        this.writeBuffer.push(this.indexOffset)
-        this.shouldTruncate = false
-    }
-    if(this.destroyed) throw new Error('Database is destroyed')
-    if(!this.initialized) await this.init()
-    this.shouldSave && await this.save().catch(console.error)
-    const matchingLines = await this.indexManager.query(criteria, options)
-    if (!matchingLines || !matchingLines.size) {
+      return results
+    } else {
+      const matchingLines = await this.indexManager.query(criteria, options)
+      if (!matchingLines || !matchingLines.size) {
         return []
+      }
+      return await this.query([...matchingLines], options)
     }
+  }
+
+  async update(criteria, data, options = {}) {
+    if (this.shouldTruncate) {
+      this.writeBuffer.push(this.indexOffset)
+      this.shouldTruncate = false
+    }
+    if (this.destroyed) throw new Error('Database is destroyed')
+    if (!this.initialized) await this.init()
+    this.shouldSave && await this.save().catch(console.error)
+
+    // Busca linhas que correspondem ao critério
+    const matchingLines = await this.indexManager.query(criteria, options)
+    if (!matchingLines?.size) return []
+
+    // Obtém ranges e valida
     const ranges = this.getRanges([...matchingLines])
     const validMatchingLines = new Set(ranges.map(r => r.index))
-    if (!validMatchingLines.size) {
-      return []
-    }
+    if (!validMatchingLines.size) return []
+
+    // Lê e atualiza as entradas
     const entries = await this.readLines([...validMatchingLines], ranges)
     const lines = []
-    for(const entry of entries) {
-      let err
-      const updated = Object.assign(entry, data)
-      const ret = await this.serializer.serialize(updated).catch(e => err = e)
-      err || lines.push(ret)
+    for (const entry of entries) {
+      const updated = { ...entry, ...data }
+      const serialized = await this.serializer.serialize(updated)
+      lines.push(serialized)
     }
-    const offsets = []
-    let byteOffset = 0, k = 0
-    this.offsets.forEach((n, i) => {
-      const prevByteOffset = byteOffset
-      if (validMatchingLines.has(i) && ranges[k]) {
-        const r = ranges[k]
-        byteOffset += lines[k].length - (r.end - r.start)
-        k++
+
+    let byteOffset = 0
+    const newOffsets = []
+
+    const rangeMap = new Map()
+    ranges.forEach((range, i) => rangeMap.set(range.index, { range, line: lines[i] }))
+
+    for (let i = 0; i < this.offsets.length; i++) {
+      const originalOffset = this.offsets[i]
+
+      if (rangeMap.has(i)) {
+        const { range, line } = rangeMap.get(i)
+        const oldLength = range.end - range.start
+        const newLength = line.length
+        byteOffset += newLength - oldLength // Atualiza deslocamento acumulado
       }
-      offsets.push(n + prevByteOffset)
-    })
-    this.offsets = offsets
+
+      newOffsets.push(originalOffset + byteOffset)
+    }
+
+    this.offsets = newOffsets
     this.indexOffset += byteOffset
-    await this.fileHandler.replaceLines(ranges, lines);
-    [...validMatchingLines].forEach((lineNumber, i) => {
-      this.indexManager.dryRemove(lineNumber)
-      this.indexManager.add(entries[i], lineNumber)
+
+    await this.fileHandler.replaceLines(ranges, lines)
+
+    ranges.forEach((range, i) => {
+      this.indexManager.dryRemove(range.index)
+      this.indexManager.add(entries[i], range.index)
     })
+
     this.shouldSave = true
     return entries
   }
 
-  async delete(criteria, options={}) {
+  async delete(criteria, options = {}) {
     if (this.shouldTruncate) {
-        this.writeBuffer.push(this.indexOffset)
-        this.shouldTruncate = false
+      this.writeBuffer.push(this.indexOffset)
+      this.shouldTruncate = false
     }
-    if(this.destroyed) throw new Error('Database is destroyed')
-    if(!this.initialized) await this.init()
+    if (this.destroyed) throw new Error('Database is destroyed')
+    if (!this.initialized) await this.init()
     this.shouldSave && await this.save().catch(console.error)
     const matchingLines = await this.indexManager.query(criteria, options)
     if (!matchingLines || !matchingLines.size) {
-        return 0
+      return 0
     }
     const ranges = this.getRanges([...matchingLines])
     const validMatchingLines = new Set(ranges.map(r => r.index))
