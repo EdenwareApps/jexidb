@@ -100,7 +100,7 @@ export default class FileHandler {
     return results
   }
 
-  async *walk(ranges, options={}) {
+  async *walk(ranges) {
     const fd = await fs.promises.open(this.file, 'r')
     try {
       const groupedRanges = await this.groupedRanges(ranges)
@@ -115,46 +115,44 @@ export default class FileHandler {
   }
 
   async replaceLines(ranges, lines) {
-    let closed, renamed
-    const tmpFile = this.file + '.tmp'
-    const writer = await fs.promises.open(tmpFile, 'w+')
-    const reader = await fs.promises.open(this.file, 'r')
+    const tmpFile = this.file + '.tmp';
+    const writer = await fs.promises.open(tmpFile, 'w+');
+    const reader = await fs.promises.open(this.file, 'r');
     try {
-      let i = 0, start = 0
-      for (const r of ranges) {
-        const length = r.start - start
-        const buffer = Buffer.alloc(length)
-        await reader.read(buffer, 0, length, start)
-        start = r.end
-        buffer.length && await writer.write(buffer)
-        if (lines[i]) {
-          await writer.write(lines[i])
+      let position = 0;
+      let lineIndex = 0;
+
+      for (const range of ranges) {
+        if (position < range.start) {
+          const buffer = await this.readRange(position, range.start);
+          await writer.write(buffer);
         }
-        i++
+        if (lineIndex < lines.length && lines[lineIndex]) {
+          await writer.write(lines[lineIndex]);
+        }
+        position = range.end;
+        lineIndex++;
       }
-      const size = (await reader.stat()).size
-      const length = size - start
-      const buffer = Buffer.alloc(length)
-      await reader.read(buffer, 0, length, start)
-      await writer.write(buffer)
-      await reader.close()
-      await writer.close()
-      closed = true
-      try {
-        renamed = await fs.promises.rename(tmpFile, this.file)
-      } catch (e) {
-        await fs.promises.copyFile(tmpFile, this.file)
+
+      const { size } = await reader.stat();
+      if (position < size) {
+        const buffer = await this.readRange(position, size);
+        await writer.write(buffer);
       }
+
+      await reader.close();
+      await writer.close();
+      await fs.promises.rename(tmpFile, this.file);
     } catch (e) {
-      console.error('Error replacing lines:', e)
+      console.error('Erro ao substituir linhas:', e);
+      throw e;
     } finally {
-      if(!closed) {
-        await reader.close()
-        await writer.close()
-      }
-      renamed || await fs.promises.unlink(tmpFile).catch(() => {})
+      await reader.close().catch(() => { });
+      await writer.close().catch(() => { });
+      await fs.promises.unlink(tmpFile).catch(() => { });
     }
   }
+
   async writeData(data, immediate, fd) {
     await fd.write(data)
   }

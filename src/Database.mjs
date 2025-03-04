@@ -149,7 +149,7 @@ export class Database extends EventEmitter {
       this.writeBuffer.push(this.indexOffset)
       this.shouldTruncate = false
     }
-    const line = await this.serializer.serialize(data, { compress: this.opts.compress }) // using Buffer for offsets accuracy
+    const line = await this.serializer.serialize(data, { compress: this.opts.compress, v8: this.opts.v8 }) // using Buffer for offsets accuracy
     const position = this.offsets.length
     this.offsets.push(this.indexOffset)
     this.indexOffset += line.length
@@ -229,13 +229,12 @@ export class Database extends EventEmitter {
       }
     }
     const ranges = this.getRanges(map)
-    const readSize = 512 * 1024 // 512KB
     const groupedRanges = await this.fileHandler.groupedRanges(ranges)
     const fd = await fs.promises.open(this.fileHandler.file, 'r')
     try {
       for (const groupedRange of groupedRanges) {
         for await (const row of this.fileHandler.readGroupedRange(groupedRange, fd)) {
-          const entry = await this.serializer.deserialize(row.line, { compress: this.opts.compress })
+          const entry = await this.serializer.deserialize(row.line, { compress: this.opts.compress, v8: this.opts.v8 })
           if (entry === null) continue
           if (options.includeOffsets) {
             yield { entry, start: row.start }
@@ -276,62 +275,49 @@ export class Database extends EventEmitter {
     }
   }
 
-  async update(criteria, data, options = {}) {
+  async update(criteria, data, options={}) {
     if (this.shouldTruncate) {
-      this.writeBuffer.push(this.indexOffset)
-      this.shouldTruncate = false
+        this.writeBuffer.push(this.indexOffset)
+        this.shouldTruncate = false
     }
-    if (this.destroyed) throw new Error('Database is destroyed')
-    if (!this.initialized) await this.init()
+    if(this.destroyed) throw new Error('Database is destroyed')
+    if(!this.initialized) await this.init()
     this.shouldSave && await this.save().catch(console.error)
-
-    // Busca linhas que correspondem ao critério
     const matchingLines = await this.indexManager.query(criteria, options)
-    if (!matchingLines?.size) return []
-
-    // Obtém ranges e valida
+    if (!matchingLines || !matchingLines.size) {
+        return []
+    }
     const ranges = this.getRanges([...matchingLines])
     const validMatchingLines = new Set(ranges.map(r => r.index))
-    if (!validMatchingLines.size) return []
-
-    // Lê e atualiza as entradas
+    if (!validMatchingLines.size) {
+      return []
+    }
     const entries = await this.readLines([...validMatchingLines], ranges)
     const lines = []
-    for (const entry of entries) {
-      const updated = { ...entry, ...data }
-      const serialized = await this.serializer.serialize(updated)
-      lines.push(serialized)
+    for(const entry of entries) {
+      let err
+      const updated = Object.assign(entry, data)
+      const ret = await this.serializer.serialize(updated).catch(e => err = e)
+      err || lines.push(ret)
     }
-
-    let byteOffset = 0
-    const newOffsets = []
-
-    const rangeMap = new Map()
-    ranges.forEach((range, i) => rangeMap.set(range.index, { range, line: lines[i] }))
-
-    for (let i = 0; i < this.offsets.length; i++) {
-      const originalOffset = this.offsets[i]
-
-      if (rangeMap.has(i)) {
-        const { range, line } = rangeMap.get(i)
-        const oldLength = range.end - range.start
-        const newLength = line.length
-        byteOffset += newLength - oldLength // Atualiza deslocamento acumulado
+    const offsets = []
+    let byteOffset = 0, k = 0
+    this.offsets.forEach((n, i) => {
+      const prevByteOffset = byteOffset
+      if (validMatchingLines.has(i) && ranges[k]) {
+        const r = ranges[k]
+        byteOffset += lines[k].length - (r.end - r.start)
+        k++
       }
-
-      newOffsets.push(originalOffset + byteOffset)
-    }
-
-    this.offsets = newOffsets
-    this.indexOffset += byteOffset
-
-    await this.fileHandler.replaceLines(ranges, lines)
-
-    ranges.forEach((range, i) => {
-      this.indexManager.dryRemove(range.index)
-      this.indexManager.add(entries[i], range.index)
+      offsets.push(n + prevByteOffset)
     })
-
+    this.offsets = offsets
+    this.indexOffset += byteOffset
+    await this.fileHandler.replaceLines(ranges, lines);
+    [...validMatchingLines].forEach((lineNumber, i) => {
+      this.indexManager.dryRemove(lineNumber)
+      this.indexManager.add(entries[i], lineNumber)
+    })
     this.shouldSave = true
     return entries
   }
