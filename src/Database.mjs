@@ -10,8 +10,9 @@ export class Database extends EventEmitter {
     super()
     this.opts = Object.assign({
       v8: false,
-      index: { data: {} },
       indexes: {},
+      index: { data: {} },
+      includeLinePosition: true,
       compress: false,
       compressIndex: false,
       maxMemoryUsage: 64 * 1024 // 64KB
@@ -130,18 +131,6 @@ export class Database extends EventEmitter {
     }).filter(n => n !== undefined)
   }
 
-  async readLines(map, ranges) {
-    if (!ranges) ranges = this.getRanges(map)
-    const results = await this.fileHandler.readRanges(ranges, this.serializer.deserialize.bind(this.serializer))
-    let i = 0
-    for (const start in results) {
-      if (!results[start] || results[start]._ !== undefined) continue
-      while (this.offsets[i] != start && i < map.length) i++ // weak comparison as 'start' is a string
-      results[start]._ = map[i++]
-    }
-    return Object.values(results).filter(r => r !== undefined)
-  }
-
   async insert(data) {
     if (this.destroyed) throw new Error('Database is destroyed')
     if (!this.initialized) await this.init()
@@ -237,8 +226,11 @@ export class Database extends EventEmitter {
           const entry = await this.serializer.deserialize(row.line, { compress: this.opts.compress, v8: this.opts.v8 })
           if (entry === null) continue
           if (options.includeOffsets) {
-            yield { entry, start: row.start }
+            yield { entry, start: row.start, _: row._ || this.offsets.findIndex(n => n === row.start) }
           } else {
+            if (this.opts.includeLinePosition) {
+              entry._ = row._ || this.offsets.findIndex(n => n === row.start)
+            }
             yield entry
           }
         }
@@ -252,27 +244,27 @@ export class Database extends EventEmitter {
     if (this.destroyed) throw new Error('Database is destroyed')
     if (!this.initialized) await this.init()
     this.shouldSave && await this.save().catch(console.error)
-    if (Array.isArray(criteria)) {
-      let results = await this.readLines(criteria)
-      if (options.orderBy) {
-        const [field, direction = 'asc'] = options.orderBy.split(' ')
-        results.sort((a, b) => {
-          if (a[field] > b[field]) return direction === 'asc' ? 1 : -1
-          if (a[field] < b[field]) return direction === 'asc' ? -1 : 1
-          return 0;
-        })
-      }
-      if (options.limit) {
-        results = results.slice(0, options.limit);
-      }
-      return results
-    } else {
+    if (!Array.isArray(criteria)) {
       const matchingLines = await this.indexManager.query(criteria, options)
       if (!matchingLines || !matchingLines.size) {
         return []
       }
-      return await this.query([...matchingLines], options)
+      criteria = [...matchingLines]
     }
+    let results = []
+    for await (const entry of this.walk(criteria, options)) results.push(entry)
+    if (options.orderBy) {
+      const [field, direction = 'asc'] = options.orderBy.split(' ')
+      results.sort((a, b) => {
+        if (a[field] > b[field]) return direction === 'asc' ? 1 : -1
+        if (a[field] < b[field]) return direction === 'asc' ? -1 : 1
+        return 0;
+      })
+    }
+    if (options.limit) {
+      results = results.slice(0, options.limit);
+    }
+    return results
   }
 
   async update(criteria, data, options={}) {
@@ -292,13 +284,13 @@ export class Database extends EventEmitter {
     if (!validMatchingLines.size) {
       return []
     }
-    const entries = await this.readLines([...validMatchingLines], ranges)
+    let entries = []
+    for await (const entry of this.walk(criteria, options)) entries.push(entry)
     const lines = []
     for(const entry of entries) {
-      let err
       const updated = Object.assign(entry, data)
-      const ret = await this.serializer.serialize(updated).catch(e => err = e)
-      err || lines.push(ret)
+      const ret = await this.serializer.serialize(updated)
+      lines.push(ret)
     }
     const offsets = []
     let byteOffset = 0, k = 0
