@@ -84,7 +84,7 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
     value: function () {
       var _init = _asyncToGenerator(/*#__PURE__*/_regeneratorRuntime().mark(function _callee() {
         var _this3 = this;
-        var _this$fileHandler, lastLine, offsets, ptr, indexLine, index;
+        var _this$fileHandler, lastLine, fileSize, offsets, ptr, indexLine, index;
         return _regeneratorRuntime().wrap(function _callee$(_context) {
           while (1) switch (_context.prev = _context.next) {
             case 0:
@@ -123,47 +123,65 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
               throw new Error('Cleared, empty file');
             case 14:
               _context.next = 16;
-              return this.fileHandler.readLastLine();
+              return this.fileHandler.readLastLine()["catch"](function () {
+                return 0;
+              });
             case 16:
               lastLine = _context.sent;
               if (!(!lastLine || !lastLine.length)) {
-                _context.next = 19;
+                _context.next = 25;
                 break;
               }
-              throw new Error('File does not exists or is a empty file');
-            case 19:
-              _context.next = 21;
-              return this.serializer.deserialize(lastLine, {
-                compress: this.opts.compressIndex
-              });
-            case 21:
-              offsets = _context.sent;
-              if (Array.isArray(offsets)) {
+              if (this.opts.create) {
                 _context.next = 24;
                 break;
               }
-              throw new Error('File to parse offsets, expected an array');
+              _context.next = 21;
+              return _fs["default"].promises.stat(this.fileHandler.file)["catch"](function () {
+                return 0;
+              });
+            case 21:
+              fileSize = _context.sent;
+              if (!(fileSize > 0)) {
+                _context.next = 24;
+                break;
+              }
+              throw new Error('File is not a valid database file, expected offsets at the end of the file');
             case 24:
+              throw new Error('File does not exists or is a empty file');
+            case 25:
+              _context.next = 27;
+              return this.serializer.deserialize(lastLine, {
+                compress: this.opts.compressIndex
+              });
+            case 27:
+              offsets = _context.sent;
+              if (Array.isArray(offsets)) {
+                _context.next = 30;
+                break;
+              }
+              throw new Error('File to parse offsets, expected an array');
+            case 30:
               this.indexOffset = offsets[offsets.length - 2];
               this.offsets = offsets;
               ptr = this.locate(offsets.length - 2);
               this.offsets = this.offsets.slice(0, -2);
               this.shouldTruncate = true;
-              _context.next = 31;
+              _context.next = 37;
               return (_this$fileHandler = this.fileHandler).readRange.apply(_this$fileHandler, _toConsumableArray(ptr));
-            case 31:
+            case 37:
               indexLine = _context.sent;
-              _context.next = 34;
+              _context.next = 40;
               return this.serializer.deserialize(indexLine, {
                 compress: this.opts.compressIndex
               });
-            case 34:
+            case 40:
               index = _context.sent;
               index && this.indexManager.load(index);
-              _context.next = 43;
+              _context.next = 49;
               break;
-            case 38:
-              _context.prev = 38;
+            case 44:
+              _context.prev = 44;
               _context.t0 = _context["catch"](9);
               if (Array.isArray(this.offsets)) {
                 this.offsets = [];
@@ -172,17 +190,17 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
               if (!String(_context.t0).includes('empty file')) {
                 console.error('Error loading database:', _context.t0);
               }
-            case 43:
-              _context.prev = 43;
+            case 49:
+              _context.prev = 49;
               this.initializing = false;
               this.initialized = true;
               this.emit('init');
-              return _context.finish(43);
-            case 48:
+              return _context.finish(49);
+            case 54:
             case "end":
               return _context.stop();
           }
-        }, _callee, this, [[9, 38, 43, 48]]);
+        }, _callee, this, [[9, 44, 49, 54]]);
       }));
       function init() {
         return _init.apply(this, arguments);

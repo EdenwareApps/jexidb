@@ -42,8 +42,14 @@ export class Database extends EventEmitter {
         await this.fileHandler.truncate(0).catch(console.error)
         throw new Error('Cleared, empty file')
       }
-      const lastLine = await this.fileHandler.readLastLine()
+      const lastLine = await this.fileHandler.readLastLine().catch(() => 0)
       if (!lastLine || !lastLine.length) {
+        if (!this.opts.create) {
+          const fileSize = await fs.promises.stat(this.fileHandler.file).catch(() => 0)
+          if (fileSize > 0) {
+            throw new Error('File is not a valid database file, expected offsets at the end of the file')
+          }
+        }
         throw new Error('File does not exists or is a empty file')
       }
       const offsets = await this.serializer.deserialize(lastLine, { compress: this.opts.compressIndex })
