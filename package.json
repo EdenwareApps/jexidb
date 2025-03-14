@@ -1,6 +1,6 @@
 {
   "name": "jexidb",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "JexiDB is a pure JS NPM library for managing data on disk using JSONL efficiently, without the need for a server.",
   "main": "./dist/Database.cjs",
   "module": "./src/Database.mjs",

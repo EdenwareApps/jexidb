@@ -26,7 +26,8 @@ To create a new instance of the database, you need to provide a file path where 
 import { Database } from 'jexidb'; // ESM
 
 const db = new Database('path/to/database.jdb', { // file will be created if it does not already exist
-  v8: false, // false by default, set to true to use V8 serialization instead of JSON.
+  v8: false, //
+  create: true, // create the file if it does not exist (default is true)
   compress: false, // set to true to compress each entry
   compressIndex: false, // set to true to compress the index only
   indexes: { // keys to use in queries, only those key values ​​are kept in memory, so fewer specified keys lead to improved performance
