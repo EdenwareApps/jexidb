@@ -537,7 +537,7 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
       var _this = this;
       var options = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
       return _wrapAsyncGenerator(/*#__PURE__*/_regeneratorRuntime().mark(function _callee6() {
-        var ranges, groupedRanges, fd, _iterator4, _step4, groupedRange, _iteratorAbruptCompletion, _didIteratorError, _iteratorError, _loop, _iterator, _step;
+        var ranges, groupedRanges, fd, count, _iterator4, _step4, groupedRange, _iteratorAbruptCompletion, _didIteratorError, _iteratorError, _loop, _ret, _iterator, _step;
         return _regeneratorRuntime().wrap(function _callee6$(_context7) {
           while (1) switch (_context7.prev = _context7.next) {
             case 0:
@@ -587,42 +587,56 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
             case 18:
               fd = _context7.sent;
               _context7.prev = 19;
+              count = 0;
               _iterator4 = _createForOfIteratorHelper(groupedRanges);
-              _context7.prev = 21;
+              _context7.prev = 22;
               _iterator4.s();
-            case 23:
+            case 24:
               if ((_step4 = _iterator4.n()).done) {
-                _context7.next = 57;
+                _context7.next = 63;
                 break;
               }
               groupedRange = _step4.value;
+              if (!(options.limit && count >= options.limit)) {
+                _context7.next = 28;
+                break;
+              }
+              return _context7.abrupt("break", 63);
+            case 28:
               _iteratorAbruptCompletion = false;
               _didIteratorError = false;
-              _context7.prev = 27;
+              _context7.prev = 30;
               _loop = /*#__PURE__*/_regeneratorRuntime().mark(function _loop() {
                 var row, entry;
                 return _regeneratorRuntime().wrap(function _loop$(_context6) {
                   while (1) switch (_context6.prev = _context6.next) {
                     case 0:
                       row = _step.value;
-                      _context6.next = 3;
+                      if (!(options.limit && count >= options.limit)) {
+                        _context6.next = 3;
+                        break;
+                      }
+                      return _context6.abrupt("return", 0);
+                    case 3:
+                      _context6.next = 5;
                       return _awaitAsyncGenerator(_this.serializer.deserialize(row.line, {
                         compress: _this.opts.compress,
                         v8: _this.opts.v8
                       }));
-                    case 3:
+                    case 5:
                       entry = _context6.sent;
                       if (!(entry === null)) {
-                        _context6.next = 6;
+                        _context6.next = 8;
                         break;
                       }
                       return _context6.abrupt("return", 1);
-                    case 6:
+                    case 8:
+                      count++;
                       if (!options.includeOffsets) {
-                        _context6.next = 11;
+                        _context6.next = 14;
                         break;
                       }
-                      _context6.next = 9;
+                      _context6.next = 12;
                       return {
                         entry: entry,
                         start: row.start,
@@ -630,96 +644,103 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
                           return n === row.start;
                         })
                       };
-                    case 9:
-                      _context6.next = 14;
+                    case 12:
+                      _context6.next = 17;
                       break;
-                    case 11:
+                    case 14:
                       if (_this.opts.includeLinePosition) {
                         entry._ = row._ || _this.offsets.findIndex(function (n) {
                           return n === row.start;
                         });
                       }
-                      _context6.next = 14;
+                      _context6.next = 17;
                       return entry;
-                    case 14:
+                    case 17:
                     case "end":
                       return _context6.stop();
                   }
                 }, _loop);
               });
               _iterator = _asyncIterator(_this.fileHandler.readGroupedRange(groupedRange, fd));
-            case 30:
-              _context7.next = 32;
+            case 33:
+              _context7.next = 35;
               return _awaitAsyncGenerator(_iterator.next());
-            case 32:
+            case 35:
               if (!(_iteratorAbruptCompletion = !(_step = _context7.sent).done)) {
-                _context7.next = 39;
+                _context7.next = 45;
                 break;
               }
-              return _context7.delegateYield(_loop(), "t1", 34);
-            case 34:
-              if (!_context7.t1) {
-                _context7.next = 36;
+              return _context7.delegateYield(_loop(), "t1", 37);
+            case 37:
+              _ret = _context7.t1;
+              if (!(_ret === 0)) {
+                _context7.next = 40;
                 break;
               }
-              return _context7.abrupt("continue", 36);
-            case 36:
+              return _context7.abrupt("break", 45);
+            case 40:
+              if (!(_ret === 1)) {
+                _context7.next = 42;
+                break;
+              }
+              return _context7.abrupt("continue", 42);
+            case 42:
               _iteratorAbruptCompletion = false;
-              _context7.next = 30;
+              _context7.next = 33;
               break;
-            case 39:
-              _context7.next = 45;
+            case 45:
+              _context7.next = 51;
               break;
-            case 41:
-              _context7.prev = 41;
-              _context7.t2 = _context7["catch"](27);
+            case 47:
+              _context7.prev = 47;
+              _context7.t2 = _context7["catch"](30);
               _didIteratorError = true;
               _iteratorError = _context7.t2;
-            case 45:
-              _context7.prev = 45;
-              _context7.prev = 46;
+            case 51:
+              _context7.prev = 51;
+              _context7.prev = 52;
               if (!(_iteratorAbruptCompletion && _iterator["return"] != null)) {
-                _context7.next = 50;
+                _context7.next = 56;
                 break;
               }
-              _context7.next = 50;
+              _context7.next = 56;
               return _awaitAsyncGenerator(_iterator["return"]());
-            case 50:
-              _context7.prev = 50;
+            case 56:
+              _context7.prev = 56;
               if (!_didIteratorError) {
-                _context7.next = 53;
+                _context7.next = 59;
                 break;
               }
               throw _iteratorError;
-            case 53:
-              return _context7.finish(50);
-            case 54:
-              return _context7.finish(45);
-            case 55:
-              _context7.next = 23;
-              break;
-            case 57:
-              _context7.next = 62;
-              break;
             case 59:
-              _context7.prev = 59;
-              _context7.t3 = _context7["catch"](21);
-              _iterator4.e(_context7.t3);
-            case 62:
-              _context7.prev = 62;
-              _iterator4.f();
-              return _context7.finish(62);
+              return _context7.finish(56);
+            case 60:
+              return _context7.finish(51);
+            case 61:
+              _context7.next = 24;
+              break;
+            case 63:
+              _context7.next = 68;
+              break;
             case 65:
               _context7.prev = 65;
-              _context7.next = 68;
-              return _awaitAsyncGenerator(fd.close());
+              _context7.t3 = _context7["catch"](22);
+              _iterator4.e(_context7.t3);
             case 68:
-              return _context7.finish(65);
-            case 69:
+              _context7.prev = 68;
+              _iterator4.f();
+              return _context7.finish(68);
+            case 71:
+              _context7.prev = 71;
+              _context7.next = 74;
+              return _awaitAsyncGenerator(fd.close());
+            case 74:
+              return _context7.finish(71);
+            case 75:
             case "end":
               return _context7.stop();
           }
-        }, _callee6, null, [[19,, 65, 69], [21, 59, 62, 65], [27, 41, 45, 55], [46,, 50, 54]]);
+        }, _callee6, null, [[19,, 71, 75], [22, 65, 68, 71], [30, 47, 51, 61], [52,, 56, 60]]);
       }))();
     }
   }, {
@@ -727,7 +748,6 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
     value: function () {
       var _query = _asyncToGenerator(/*#__PURE__*/_regeneratorRuntime().mark(function _callee7(criteria) {
         var options,
-          matchingLines,
           results,
           _iteratorAbruptCompletion2,
           _didIteratorError2,
@@ -766,70 +786,54 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
               _context8.next = 10;
               return this.save()["catch"](console.error);
             case 10:
-              if (Array.isArray(criteria)) {
-                _context8.next = 17;
-                break;
-              }
-              _context8.next = 13;
-              return this.indexManager.query(criteria, options);
-            case 13:
-              matchingLines = _context8.sent;
-              if (!(!matchingLines || !matchingLines.size)) {
-                _context8.next = 16;
-                break;
-              }
-              return _context8.abrupt("return", []);
-            case 16:
-              criteria = _toConsumableArray(matchingLines);
-            case 17:
               results = [];
               _iteratorAbruptCompletion2 = false;
               _didIteratorError2 = false;
-              _context8.prev = 20;
+              _context8.prev = 13;
               _iterator2 = _asyncIterator(this.walk(criteria, options));
-            case 22:
-              _context8.next = 24;
+            case 15:
+              _context8.next = 17;
               return _iterator2.next();
-            case 24:
+            case 17:
               if (!(_iteratorAbruptCompletion2 = !(_step2 = _context8.sent).done)) {
-                _context8.next = 30;
+                _context8.next = 23;
                 break;
               }
               entry = _step2.value;
               results.push(entry);
-            case 27:
+            case 20:
               _iteratorAbruptCompletion2 = false;
-              _context8.next = 22;
+              _context8.next = 15;
               break;
-            case 30:
-              _context8.next = 36;
+            case 23:
+              _context8.next = 29;
               break;
-            case 32:
-              _context8.prev = 32;
-              _context8.t1 = _context8["catch"](20);
+            case 25:
+              _context8.prev = 25;
+              _context8.t1 = _context8["catch"](13);
               _didIteratorError2 = true;
               _iteratorError2 = _context8.t1;
-            case 36:
-              _context8.prev = 36;
-              _context8.prev = 37;
+            case 29:
+              _context8.prev = 29;
+              _context8.prev = 30;
               if (!(_iteratorAbruptCompletion2 && _iterator2["return"] != null)) {
-                _context8.next = 41;
+                _context8.next = 34;
                 break;
               }
-              _context8.next = 41;
+              _context8.next = 34;
               return _iterator2["return"]();
-            case 41:
-              _context8.prev = 41;
+            case 34:
+              _context8.prev = 34;
               if (!_didIteratorError2) {
-                _context8.next = 44;
+                _context8.next = 37;
                 break;
               }
               throw _iteratorError2;
-            case 44:
-              return _context8.finish(41);
-            case 45:
-              return _context8.finish(36);
-            case 46:
+            case 37:
+              return _context8.finish(34);
+            case 38:
+              return _context8.finish(29);
+            case 39:
               if (options.orderBy) {
                 _options$orderBy$spli = options.orderBy.split(' '), _options$orderBy$spli2 = _slicedToArray(_options$orderBy$spli, 2), field = _options$orderBy$spli2[0], _options$orderBy$spli3 = _options$orderBy$spli2[1], direction = _options$orderBy$spli3 === void 0 ? 'asc' : _options$orderBy$spli3;
                 results.sort(function (a, b) {
@@ -838,15 +842,12 @@ var Database = exports.Database = /*#__PURE__*/function (_EventEmitter) {
                   return 0;
                 });
               }
-              if (options.limit) {
-                results = results.slice(0, options.limit);
-              }
               return _context8.abrupt("return", results);
-            case 49:
+            case 41:
             case "end":
               return _context8.stop();
           }
-        }, _callee7, this, [[20, 32, 36, 46], [37,, 41, 45]]);
+        }, _callee7, this, [[13, 25, 29, 39], [30,, 34, 38]]);
       }));
       function query(_x2) {
         return _query.apply(this, arguments);

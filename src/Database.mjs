@@ -231,10 +231,18 @@ export class Database extends EventEmitter {
     const groupedRanges = await this.fileHandler.groupedRanges(ranges)
     const fd = await fs.promises.open(this.fileHandler.file, 'r')
     try {
+      let count = 0
       for (const groupedRange of groupedRanges) {
+        if (options.limit && count >= options.limit) {
+          break
+        }
         for await (const row of this.fileHandler.readGroupedRange(groupedRange, fd)) {
+          if (options.limit && count >= options.limit) {
+            break
+          }
           const entry = await this.serializer.deserialize(row.line, { compress: this.opts.compress, v8: this.opts.v8 })
           if (entry === null) continue
+          count++
           if (options.includeOffsets) {
             yield { entry, start: row.start, _: row._ || this.offsets.findIndex(n => n === row.start) }
           } else {
@@ -254,13 +262,6 @@ export class Database extends EventEmitter {
     if (this.destroyed) throw new Error('Database is destroyed')
     if (!this.initialized) await this.init()
     this.shouldSave && await this.save().catch(console.error)
-    if (!Array.isArray(criteria)) {
-      const matchingLines = await this.indexManager.query(criteria, options)
-      if (!matchingLines || !matchingLines.size) {
-        return []
-      }
-      criteria = [...matchingLines]
-    }
     let results = []
     for await (const entry of this.walk(criteria, options)) results.push(entry)
     if (options.orderBy) {
@@ -270,9 +271,6 @@ export class Database extends EventEmitter {
         if (a[field] < b[field]) return direction === 'asc' ? -1 : 1
         return 0;
       })
-    }
-    if (options.limit) {
-      results = results.slice(0, options.limit);
     }
     return results
   }

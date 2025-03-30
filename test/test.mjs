@@ -14,145 +14,31 @@ const characters = [
         missingMessage: 'Did Scorpion pull a "GET OVER HERE" on the missing entries?',
         updateMessage: 'Scorpion refuses to update. Maybe he’s stuck in the Netherrealm?',
         deleteMessage: 'I thought Scorpion was gone, but he’s still here! Must be that "Hellfire Resurrection."',
-        signatureMove: 'Spear',
-        powerType: 'Hellfire'
+        signatureMove: 'Spear', powerType: 'Hellfire'
     },
     {
         name: 'Scarlet',
         missingMessage: 'Did Scarlet drain the life from the missing entries with her blood magic?',
         updateMessage: 'Scarlet refuses to update. Maybe her blood magic is causing interference?',
         deleteMessage: 'I thought Scarlet was gone, but she’s still here! Must be that blood regeneration ability.',
-        signatureMove: 'Blood Tentacle',
-        powerType: 'Blood Manipulation'
+        signatureMove: 'Blood Tentacle', powerType: 'Blood Manipulation'
     },
     {
         name: 'Frost',
         missingMessage: 'Did Frost freeze the missing entries?',
         updateMessage: 'Frost refuses to update. Maybe she’s stuck in an ice block?',
         deleteMessage: 'I thought Frost was gone, but she’s still here! Must be that "Ice Shield."',
-        signatureMove: 'Ice Daggers',
+        signatureMove: 'Ice Daggers', 
         powerType: 'Cryomancy'
     },
     {
-        name: 'Raiden',
-        missingMessage: 'Did Raiden zap the missing entries with a thunderbolt?',
-        updateMessage: 'Raiden refuses to update. The thunder may have struck the process.',
-        deleteMessage: 'I thought Raiden was gone, but he’s still here! Must be his divine intervention.',
-        signatureMove: 'Lightning Strike',
-        powerType: 'Divine Electricity'
-    },
-    {
-        name: 'Liu Kang',
-        missingMessage: 'Did Liu Kang incinerate the missing entries with his blazing fury?',
-        updateMessage: 'Liu Kang refuses to update. Perhaps his fire has set everything ablaze.',
-        deleteMessage: 'I thought Liu Kang was gone, but he’s still here! Must be his fiery spirit.',
-        signatureMove: 'Dragon Fire',
-        powerType: 'Fire Mastery'
-    },
-    {
-        name: 'Jax Briggs',
-        missingMessage: 'Did Jax Briggs smash the missing entries with his brute strength?',
-        updateMessage: 'Jax Briggs refuses to update. His metal arms might have taken over the process.',
-        deleteMessage: 'I thought Jax Briggs was gone, but he’s still here! Must be his armored determination.',
-        signatureMove: 'Power Fist',
-        powerType: 'Cybernetic Strength'
-    },
-    {
-        name: 'Kano',
-        missingMessage: 'Did Kano hack the missing entries away with his cunning?',
-        updateMessage: 'Kano refuses to update. Looks like his cybernetic implants are causing havoc.',
-        deleteMessage: 'I thought Kano was gone, but he’s still here! Must be his ruthless survival.',
-        signatureMove: 'Cannonball',
-        powerType: 'Tech Savvy'
-    },
-    {
-        name: 'Kitana',
-        missingMessage: 'Did Kitana slice through the missing entries with her deadly fans?',
-        updateMessage: 'Kitana refuses to update. Perhaps her royal duty keeps her busy.',
-        deleteMessage: 'I thought Kitana was gone, but she’s still here! Must be her enduring legacy.',
-        signatureMove: 'Fan Strike',
-        powerType: 'Royal Martial Arts'
-    },
-    {
-        name: 'Mileena',
-        missingMessage: 'Did Mileena devour the missing entries with her savage bite?',
-        updateMessage: 'Mileena refuses to update. Her ferocious nature might be to blame.',
-        deleteMessage: 'I thought Mileena was gone, but she’s still here! Must be her deadly regeneration.',
-        signatureMove: 'Sai Attack',
-        powerType: 'Savage Agility'
-    },
-    {
-        name: 'Shang Tsung',
-        missingMessage: 'Did Shang Tsung absorb the missing entries with his soul-stealing magic?',
-        updateMessage: 'Shang Tsung refuses to update. Perhaps his soul tricks have complicated the process.',
-        deleteMessage: 'I thought Shang Tsung was gone, but he’s still here! Must be his dark sorcery.',
-        signatureMove: 'Soul Steal',
-        powerType: 'Shapeshifting Sorcery'
-    },
-    {
-        name: 'Reptile',
-        missingMessage: 'Did Reptile slither away with the missing entries?',
-        updateMessage: 'Reptile refuses to update. Maybe his stealth kept him hidden.',
-        deleteMessage: 'I thought Reptile was gone, but he’s still here! Must be his regenerative venom.',
-        signatureMove: 'Acid Spit',
-        powerType: 'Venomous Abilities'
-    },
-    {
-        name: 'Noob Saibot',
-        missingMessage: 'Did Noob Saibot engulf the missing entries in shadows?',
-        updateMessage: 'Noob Saibot refuses to update. The darkness seems to consume him.',
-        deleteMessage: 'I thought Noob Saibot was gone, but he’s still here! Must be his shadow revival.',
-        signatureMove: 'Shadow Clone',
-        powerType: 'Darkness Manipulation'
-    },
-    {
-        name: 'Johnny Cage',
-        missingMessage: 'Did Johnny Cage knockout the missing entries with his dazzling moves?',
-        updateMessage: 'Johnny Cage refuses to update. Seems like his Hollywood style is on a break.',
-        deleteMessage: 'I thought Johnny Cage was gone, but he’s still here! Must be his star power.',
-        signatureMove: 'Nut Punch',
-        powerType: 'Cinematic Charisma'
-    },
-    {
-        name: 'Smoke',
-        missingMessage: 'Did Smoke obscure the missing entries with his mysterious haze?',
-        updateMessage: 'Smoke refuses to update. Perhaps his elusive nature is to blame.',
-        deleteMessage: 'I thought Smoke was gone, but he’s still here! Must be his vanishing act.',
-        signatureMove: 'Smoke Bomb',
-        powerType: 'Stealth Techniques'
-    },
-    {
-        name: 'Sindel',
-        missingMessage: 'Did Sindel\'s scream shatter the missing entries?',
-        updateMessage: 'Sindel refuses to update. Her sonic powers might have disrupted the code.',
-        deleteMessage: 'I thought Sindel was gone, but she’s still here! Must be her immortal voice.',
-        signatureMove: 'Scream',
-        powerType: 'Sonic Manipulation'
-    },
-    {
-        name: 'Kabal',
-        missingMessage: 'Did Kabal speed through the missing entries, leaving no trace?',
-        updateMessage: 'Kabal refuses to update. His rapid movements might be causing the delay.',
-        deleteMessage: 'I thought Kabal was gone, but he’s still here! Must be his lightning-fast recovery.',
-        signatureMove: 'Hook Slash',
-        powerType: 'Super Speed'
-    },
-    {
-        name: 'Baraka',
-        missingMessage: 'Did Baraka slash the missing entries with his vicious blades?',
-        updateMessage: 'Baraka refuses to update. His savage instincts might be at play.',
-        deleteMessage: 'I thought Baraka was gone, but he’s still here! Must be his brutal regeneration.',
-        signatureMove: 'Bladed Attack',
-        powerType: 'Savage Mutation'
-    },
-    {
-        name: 'Goro',
-        missingMessage: 'Did Goro crush the missing entries under his massive strength?',
-        updateMessage: 'Goro refuses to update. His formidable might may be to blame.',
-        deleteMessage: 'I thought Goro was gone, but he’s still here! Must be his unyielding power.',
-        signatureMove: 'Earth Shatter',
-        powerType: 'Brute Strength'
-    }
+        name: 'Frost',
+        missingMessage: 'Did Frost freeze the missing entries?',
+        updateMessage: 'Frost refuses to update. Maybe she’s stuck in an ice block?',
+        deleteMessage: 'I thought Frost was gone, but she’s still here! Must be that "Ice Shield."',
+        signatureMove: 'Ice Daggers', 
+        powerType: 'Cryomancy'
+    }    
 ];
 
 // Function to run the tests
@@ -197,14 +83,19 @@ const runTests = async (id, name, format, opts) => {
     console.assert(pass2, `Round 2 - READ: Test failed: ${character.name} seems to have been teleported out of the database!`);
     if(pass1 && pass2) console.log(`Round 2 - READ: Flawless Victory! All characters inserted successfully, led by ${character.name}.`);
 
-    // 4. Test data update
+    // 4. Test indexes
+    const pass3 = await db.indexManager.readColumnIndex('name').has(character.name)
+    console.assert(pass3, `Round 3 - INDEX: Test failed: ${character.name} is not in the index.`);
+    if(pass3) console.log(`Round 3 - INDEX: Flawless Victory! ${character.name} is in the index.`);
+
+    // 5. Test data update
     await db.update({ id: 1 }, { name: character.name + ' Updated' });
     results = await db.query({ id: 1 });
     const pass4 = results.length === 1 && results[0].name === character.name + ' Updated';
     console.assert(pass4, `Round 3 - UPDATE: Test failed: ${character.updateMessage}`);
     if(pass4) console.log(`Round 3 - UPDATE: Flawless Victory! ${character.name} has been updated successfully.`);
 
-    // 5. Test data deletion
+    // 6. Test data deletion
     await db.delete({ name: character.name + ' Updated' });
     results = await db.query({ id: { '<=': 2 } });
     const pass5 = results.length === 1;
@@ -233,7 +124,7 @@ const runTests = async (id, name, format, opts) => {
 }
 
 async function runAllTests() {
-    const depth = 5
+    const depth = 10
     let err, i = 1
     let tests = [
         ['json', 'JSON', { indexes: { id: 'number', name: 'string' }, v8: false, compress: false, compressIndex: false }],
