@@ -553,4 +553,8 @@ await db.init();
 await db.insert({ id: 1, name: 'John Doe' });
 ```
 
+<p align="center">
+  <img width="420" src="https://edenware.app/jexidb/images/jexi-mascot.webp" alt="JexiDB mascot" title="JexiDB mascot" />
+</p>
+
 **We maintain compatibility with the JexiDB 1.x API with improved performance and reliability.** 
