@@ -532,29 +532,6 @@ JexiDB maintains the original JexiDB philosophy while fixing bugs and implementi
 - **Insert operations**: 6-11x faster
 - **Memory usage**: 25% less memory
 
-### 🔧 Simple Migration
-
-Migration from JexiDB 1.x to JexiDB is simple:
-
-```javascript
-// Before (JexiDB 1.x)
-const { Database } = require('jexidb');
-const db = new Database('./database.jdb', { 
-  indexes: { id: 'number', name: 'string' }
-});
-await db.init();
-await db.insert({ id: 1, name: 'John Doe' });
-await db.save();
-
-// Now (JexiDB)
-import { Database } from 'jexidb';
-const db = new Database('./users.jdb', { indexes: { id: 'number' } });
-await db.init();
-await db.insert({ id: 1, name: 'John Doe' });
-```
-
 <p align="center">
   <img width="420" src="https://edenware.app/jexidb/images/jexi-mascot.webp" alt="JexiDB mascot" title="JexiDB mascot" />
 </p>
-
-**We maintain compatibility with the JexiDB 1.x API with improved performance and reliability.** 
