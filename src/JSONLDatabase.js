@@ -30,8 +30,15 @@ class JSONLDatabase extends EventEmitter {
     
     this.options = {
       batchSize: 100, // Batch size for inserts
+      create: true, // Create database if it doesn't exist (default: true)
+      clear: false, // Clear database on load if not empty (default: false)
       ...options
     };
+    
+    // If clear is true, create should also be true
+    if (this.options.clear === true) {
+      this.options.create = true;
+    }
     
     this.isInitialized = false;
     this.offsets = [];
@@ -77,12 +84,50 @@ class JSONLDatabase extends EventEmitter {
       const dir = path.dirname(this.filePath);
       await fs.mkdir(dir, { recursive: true });
       
+      // Check if file exists before loading
+      const fileExists = await fs.access(this.filePath).then(() => true).catch(() => false);
+      
+      // Handle clear option
+      if (this.options.clear && fileExists) {
+        await fs.writeFile(this.filePath, '');
+        this.offsets = [];
+        this.indexOffset = 0;
+        this.recordCount = 0;
+        console.log(`Database cleared: ${this.filePath}`);
+        this.isInitialized = true;
+        this.emit('init');
+        return;
+      }
+      
+      // Handle create option
+      if (!fileExists) {
+        if (this.options.create) {
+          await fs.writeFile(this.filePath, '');
+          this.offsets = [];
+          this.indexOffset = 0;
+          this.recordCount = 0;
+          console.log(`Database created: ${this.filePath}`);
+          this.isInitialized = true;
+          this.emit('init');
+          return;
+        } else {
+          throw new Error(`Database file does not exist: ${this.filePath}`);
+        }
+      }
+      
+      // Load existing database
       await this.loadDataWithOffsets();
       
       this.isInitialized = true;
       this.emit('init');
       
     } catch (error) {
+      // If create is false and file doesn't exist or is corrupted, throw error
+      if (!this.options.create) {
+        throw new Error(`Failed to load database: ${error.message}`);
+      }
+      
+      // If create is true, initialize empty database
       this.recordCount = 0;
       this.offsets = [];
       this.indexOffset = 0;
@@ -180,9 +225,7 @@ class JSONLDatabase extends EventEmitter {
       this.recordCount = this.offsets.length;
       
     } catch (error) {
-      this.recordCount = 0;
-      this.offsets = [];
-      this.indexOffset = 0;
+      throw error; // Re-throw to be handled by init()
     }
   }
 
@@ -865,6 +908,22 @@ class JSONLDatabase extends EventEmitter {
       recordCount: this.recordCount,
       indexCount: Object.keys(this.indexes).length
     };
+  }
+
+  /**
+   * Compatibility method: readColumnIndex - gets unique values from indexed columns only
+   * Maintains compatibility with JexiDB v1 code
+   * @param {string} column - The column name to get unique values from
+   * @returns {Set} Set of unique values in the column (indexed columns only)
+   */
+  readColumnIndex(column) {
+    // Only works with indexed columns
+    if (this.indexes[column]) {
+      return new Set(this.indexes[column].keys());
+    }
+    
+    // For non-indexed columns, throw error
+    throw new Error(`Column '${column}' is not indexed. Only indexed columns are supported.`);
   }
 
   // Intelligent criteria matching for non-indexed fields

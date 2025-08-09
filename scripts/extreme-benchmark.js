@@ -1,6 +1,6 @@
 /**
- * Extreme Benchmark - Compare JexiDB 2.0.0 against JexiDB 1.x
- * Tests: JexiDB 2.0.0 (consolidated) vs JexiDB 1.x
+ * Extreme Benchmark - Compare JexiDB 2.0.1 against JexiDB 1.x
+ * Tests: JexiDB 2.0.1 (consolidated) vs JexiDB 1.x
  */
 
 const fs = require('fs').promises;

@@ -18,7 +18,7 @@ Main script that generates comprehensive test data for JexiDB testing.
 Simple runner script with command-line interface.
 
 ### `extreme-benchmark.js`
-Comprehensive benchmark comparing JexiDB 2.0.0 vs JexiDB 1.x performance.
+Comprehensive benchmark comparing JexiDB 2.0.1 vs JexiDB 1.x performance.
 
 ### `benchmark-performance.js`
 Performance testing suite for JexiDB operations.

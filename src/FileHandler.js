@@ -600,7 +600,7 @@ class FileHandler {
     } catch (error) {
       if (error.code === 'ENOENT') {
         return {
-          version: '2.0.0', // Keep version number for internal tracking
+          version: '2.0.1', // Keep version number for internal tracking
           created: new Date().toISOString(),
           lastModified: new Date().toISOString(),
           recordCount: 0,

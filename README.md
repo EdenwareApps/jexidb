@@ -510,19 +510,6 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 JexiDB maintains the original JexiDB philosophy while fixing bugs and implementing a more robust architecture.
 
-### 📈 Version 2.0.0 Changes
-
-**JexiDB** addresses the problems of version 1.x:
-
-| JexiDB 1.x Problem | JexiDB Solution |
-|---------------------|----------------------|
-| Unsafe truncation | ✅ Mandatory truncation after operations |
-| Inconsistent offsets | ✅ Offsets always recalculated |
-| No integrity validation | ✅ Automatic validation |
-| V8 dependency | ✅ Pure JavaScript |
-| Non-isolated tests | ✅ Tests always clean files |
-| Inconsistent serialization | ✅ Standardized line breaks |
-
 ### 🚀 Performance
 
 **JexiDB** performance compared to version 1.x:

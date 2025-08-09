@@ -308,4 +308,74 @@ describe('JSONLDatabase', () => {
       await db2.destroy();
     });
   });
+
+  describe('Database Options', () => {
+    test('should create database when create is true (default)', async () => {
+      const db = new JexiDB(testFile, { create: true });
+      await db.init();
+      expect(db.isInitialized).toBe(true);
+      expect(db.length).toBe(0);
+      await db.destroy();
+    });
+
+    test('should throw error when create is false and file does not exist', async () => {
+      const db = new JexiDB(testFile, { create: false });
+      await expect(db.init()).rejects.toThrow('Database file does not exist');
+    });
+
+    test('should clear database when clear is true', async () => {
+      // First create a database with some data
+      const db1 = new JexiDB(testFile, { create: true });
+      await db1.init();
+      await db1.insert({ id: 1, name: 'Test' });
+      await db1.save();
+      await db1.destroy();
+
+      // Now clear it
+      const db2 = new JexiDB(testFile, { clear: true });
+      await db2.init();
+      expect(db2.length).toBe(0);
+      await db2.destroy();
+    });
+
+    test('should set create to true when clear is true', async () => {
+      const db = new JexiDB(testFile, { clear: true });
+      expect(db.options.create).toBe(true);
+    });
+  });
+
+  describe('Column Values', () => {
+    test('should get unique values from indexed column', async () => {
+      const db = new JexiDB(testFile, { 
+        indexes: { category: 'string', status: 'string' },
+        create: true 
+      });
+      await db.init();
+      
+      await db.insert({ id: 1, category: 'A', status: 'active' });
+      await db.insert({ id: 2, category: 'B', status: 'inactive' });
+      await db.insert({ id: 3, category: 'A', status: 'active' }); // Duplicate category and status
+      await db.save();
+
+      const categories = db.readColumnIndex('category');
+      expect(categories).toEqual(new Set(['A', 'B'])); // Only unique values
+
+      const statuses = db.readColumnIndex('status');
+      expect(statuses).toEqual(new Set(['active', 'inactive'])); // Only unique values
+
+      await db.destroy();
+    });
+
+    test('should throw error for non-indexed columns', async () => {
+      const db = new JexiDB(testFile, { create: true });
+      await db.init();
+      
+      await db.insert({ id: 1, name: 'Alice' });
+      await db.save();
+
+      expect(() => db.readColumnIndex('name')).toThrow('Column \'name\' is not indexed');
+
+      await db.destroy();
+    });
+  });
 }); 

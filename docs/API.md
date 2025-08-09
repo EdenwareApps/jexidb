@@ -24,6 +24,9 @@ new Database(filePath, options = {})
   - `autoSave` (boolean): Automatically save after operations
   - `validateOnInit` (boolean): Validate integrity on initialization
   - `backgroundMaintenance` (boolean): Enable background maintenance
+  - `create` (boolean): Create database if it doesn't exist (default: true)
+  - `clear` (boolean): Clear database on load if not empty (default: false)
+  - `batchSize` (number): Batch size for inserts (default: 100)
 
 #### Methods
 
@@ -111,6 +114,15 @@ Gets comprehensive database statistics.
 
 ```javascript
 const stats = await db.getStats()
+```
+
+##### readColumnIndex(column)
+Gets unique values from a specific column (indexed columns only).
+
+```javascript
+const categories = db.readColumnIndex('category')
+// Returns: Set(['Electronics', 'Books', 'Clothing'])
+// Throws error for non-indexed columns
 ```
 
 ##### destroy()

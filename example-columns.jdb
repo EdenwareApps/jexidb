@@ -1,0 +1,5 @@
+{"id":1,"category":"Electronics","status":"active","price":100,"_id":0,"_created":1754701475617,"_updated":1754701475617}
+{"id":2,"category":"Books","status":"inactive","price":20,"_id":1,"_created":1754701475617,"_updated":1754701475617}
+{"id":3,"category":"Electronics","status":"active","price":150,"_id":2,"_created":1754701475617,"_updated":1754701475617}
+{"id":4,"category":"Clothing","status":"active","price":50,"_id":3,"_created":1754701475617,"_updated":1754701475617}
+[0,122,239,361]

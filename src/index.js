@@ -227,6 +227,16 @@ class JexiDBCompatibility extends JSONLDatabase {
     }
     return result;
   }
+
+  /**
+   * Compatibility method: readColumnIndex - gets unique values from indexed columns only
+   * Maintains compatibility with JexiDB v1 code
+   * @param {string} column - The column name to get unique values from
+   * @returns {Set} Set of unique values in the column (indexed columns only)
+   */
+  readColumnIndex(column) {
+    return super.readColumnIndex(column);
+  }
 }
 
 /**

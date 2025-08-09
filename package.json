@@ -1,6 +1,6 @@
 {
   "name": "jexidb",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "JexiDB - A fast and reliable local CRUD database for Electron apps with pure JavaScript JSONL architecture",
   "main": "./dist/index.js",
   "module": "./src/index.js",
