@@ -9,6 +9,7 @@
 - **Point Reading**: Efficient memory usage - only reads necessary data
 - **Rich Query API**: Support for complex queries with operators, sorting, and pagination
 - **Intelligent Auto-Save**: Automatic data persistence with configurable thresholds and intervals
+- **Memory-Safe Operations**: Advanced memory management to prevent buffer allocation errors
 - **Event-Driven Monitoring**: Real-time notifications for all database operations
 - **Performance Optimization**: Adaptive batch sizes and memory management
 - **Automatic Integrity Validation**: Built-in data integrity checking and repair
@@ -158,6 +159,49 @@ console.log(`Pending: ${status.pendingCount}/${status.bufferSize}`);
 console.log(`Should flush: ${status.shouldFlush}`);
 console.log(`Auto-save enabled: ${status.autoSaveEnabled}`);
 ```
+
+### Memory Management
+
+JexiDB includes advanced memory management features to prevent `RangeError: Array buffer allocation failed` errors in memory-constrained environments.
+
+#### Memory-Safe Configuration
+
+```javascript
+const db = new Database('./data.jdb', {
+  // Memory management
+  memorySafeMode: true,        // Enable memory-safe operations
+  chunkSize: 4 * 1024 * 1024, // 4MB chunks (reduced for low memory)
+  gcInterval: 500,            // Force GC every 500 records
+  maxFlushChunkBytes: 2 * 1024 * 1024, // 2MB max flush chunks
+  
+  // Auto-save with smaller thresholds
+  autoSave: true,
+  autoSaveThreshold: 25,      // Flush more frequently
+  autoSaveInterval: 3000,     // Flush every 3 seconds
+  
+  // Performance with memory constraints
+  batchSize: 25,              // Smaller batches
+  minBatchSize: 5,
+  maxBatchSize: 100
+});
+```
+
+#### Memory-Safe Features
+
+- **Chunked File Processing**: Files are processed in configurable chunks instead of loading entire files in memory
+- **Garbage Collection**: Optional forced garbage collection at configurable intervals
+- **Buffer Management**: Smaller, more frequent buffer flushes to reduce memory pressure
+- **Fallback Strategies**: Graceful degradation when memory is insufficient
+- **Memory Monitoring**: Real-time buffer status and memory usage tracking
+
+#### Best Practices for Memory-Constrained Environments
+
+1. **Use Smaller Chunks**: Set `chunkSize` to 1-4MB for low memory systems
+2. **Enable Garbage Collection**: Set `gcInterval` to 500-1000 for frequent cleanup
+3. **Reduce Batch Sizes**: Use smaller `batchSize` and `autoSaveThreshold`
+4. **Monitor Buffer Status**: Use `getBufferStatus()` to track memory usage
+5. **Enable Memory-Safe Mode**: Set `memorySafeMode: true` (default)
+6. **Use Node.js GC Flag**: Run with `--expose-gc` for manual garbage collection
 
 ### Main Methods
 

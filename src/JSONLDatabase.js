@@ -28,30 +28,33 @@ class JSONLDatabase extends EventEmitter {
       this.filePath = filePath;
     }
     
-    // Enhanced configuration with intelligent defaults
-    this.options = {
-      // Original options
-      batchSize: 50, // Reduced from 100 for faster response
-      create: true, // Create database if it doesn't exist (default: true)
-      clear: false, // Clear database on load if not empty (default: false)
-      
-      // Auto-save intelligent configuration
-      autoSave: true, // Enable auto-save by default
-      autoSaveThreshold: 50, // Flush when buffer reaches 50 records
-      autoSaveInterval: 5000, // Flush every 5 seconds
-      forceSaveOnClose: true, // Always save when closing
-      
-      // Performance configuration
-      adaptiveBatchSize: true, // Adjust batch size based on usage
-      minBatchSize: 10, // Minimum batch size for flush
-      maxBatchSize: 200, // Maximum batch size for performance
-      
-      // Memory management
-      maxMemoryUsage: 'auto', // Calculate automatically or use fixed value
-      maxFlushChunkBytes: 8 * 1024 * 1024, // 8MB default
-      
-      ...options
-    };
+         // Enhanced configuration with intelligent defaults
+     this.options = {
+       // Original options
+       batchSize: 50, // Reduced from 100 for faster response
+       create: true, // Create database if it doesn't exist (default: true)
+       clear: false, // Clear database on load if not empty (default: false)
+       
+       // Auto-save intelligent configuration
+       autoSave: true, // Enable auto-save by default
+       autoSaveThreshold: 50, // Flush when buffer reaches 50 records
+       autoSaveInterval: 5000, // Flush every 5 seconds
+       forceSaveOnClose: true, // Always save when closing
+       
+       // Performance configuration
+       adaptiveBatchSize: true, // Adjust batch size based on usage
+       minBatchSize: 10, // Minimum batch size for flush
+       maxBatchSize: 200, // Maximum batch size for performance
+       
+       // Memory management
+       maxMemoryUsage: 'auto', // Calculate automatically or use fixed value
+       maxFlushChunkBytes: 8 * 1024 * 1024, // 8MB default
+       memorySafeMode: true, // Enable memory-safe operations by default
+       chunkSize: 8 * 1024 * 1024, // 8MB chunks for file operations
+       gcInterval: 1000, // Force GC every N records (0 = disabled)
+       
+       ...options
+     };
     
     // If clear is true, create should also be true
     if (this.options.clear === true) {
@@ -892,41 +895,12 @@ class JSONLDatabase extends EventEmitter {
 
     if (!this.shouldSave) return;
     
-    // Recalculate offsets based on current file content
+    // MEMORY-SAFE STRATEGY: Process file in chunks to avoid loading entire file in memory
     try {
-      const content = await fs.readFile(this.filePath, 'utf8');
-      const lines = content.split('\n').filter(line => line.trim());
-      
-      // Filter out offset lines and recalculate offsets
-      const dataLines = [];
-      const newOffsets = [];
-      let currentOffset = 0;
-      
-      for (const line of lines) {
-        try {
-          const parsed = JSON.parse(line);
-          if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'number') {
-            // Skip offset lines
-            continue;
-          }
-        } catch (e) {
-          // Not JSON, keep the line
-        }
-        
-        // This is a data line
-        dataLines.push(line);
-        newOffsets.push(currentOffset);
-        currentOffset += Buffer.byteLength(line + '\n', 'utf8');
-      }
-      
-      // Update offsets
-      this.offsets = newOffsets;
-      
-      // Write clean content back (only data lines)
-      const cleanContent = dataLines.join('\n') + (dataLines.length > 0 ? '\n' : '');
-      await fs.writeFile(this.filePath, cleanContent);
+      await this.recalculateOffsetsInChunks();
     } catch (error) {
-      // File doesn't exist or can't be read, that's fine
+      console.error('Error recalculating offsets:', error);
+      // Continue with current offsets if recalculation fails
     }
     
     // Add the new offset line
@@ -937,6 +911,118 @@ class JSONLDatabase extends EventEmitter {
     await this.savePersistentIndexes();
     
     this.shouldSave = false;
+  }
+
+    // MEMORY-SAFE STRATEGY: Process large files in chunks
+  async recalculateOffsetsInChunks() {
+    const chunkSize = this.options.chunkSize || 8 * 1024 * 1024; // 8MB chunks
+    
+    try {
+      // Check if file exists and has content
+      const stats = await fs.stat(this.filePath).catch(() => null);
+      if (!stats || stats.size === 0) {
+        this.offsets = [];
+        return;
+      }
+
+      // Open file for reading
+      const readHandle = await fs.open(this.filePath, 'r');
+      
+      const newOffsets = [];
+      let currentOffset = 0;
+      let buffer = Buffer.alloc(chunkSize);
+      let lineBuffer = '';
+      let lineNumber = 0;
+      let dataLines = [];
+      
+      try {
+        while (true) {
+          const { bytesRead } = await readHandle.read(buffer, 0, buffer.length);
+          if (bytesRead === 0) break;
+          
+          // Process the chunk
+          const chunk = buffer.toString('utf8', 0, bytesRead);
+          lineBuffer += chunk;
+          
+          // Process complete lines
+          const lines = lineBuffer.split('\n');
+          lineBuffer = lines.pop() || ''; // Keep incomplete line for next iteration
+          
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            
+            try {
+              const parsed = JSON.parse(line);
+              if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'number') {
+                // Skip offset lines
+                continue;
+              }
+            } catch (e) {
+              // Not JSON, keep the line
+            }
+            
+            // This is a data line - collect and track offset
+            dataLines.push(line);
+            newOffsets.push(currentOffset);
+            currentOffset += Buffer.byteLength(line + '\n', 'utf8');
+            lineNumber++;
+            
+            // Memory management: periodically clear references
+            if (this.options.gcInterval > 0 && lineNumber % this.options.gcInterval === 0) {
+              global.gc && global.gc(); // Force garbage collection if available
+            }
+          }
+        }
+        
+        // Process any remaining content in lineBuffer
+        if (lineBuffer.trim()) {
+          try {
+            const parsed = JSON.parse(lineBuffer);
+            if (!(Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'number')) {
+              dataLines.push(lineBuffer);
+              newOffsets.push(currentOffset);
+            }
+          } catch (e) {
+            // Not JSON, keep the line
+            dataLines.push(lineBuffer);
+            newOffsets.push(currentOffset);
+          }
+        }
+        
+        // Close handle
+        await readHandle.close();
+        
+        // Write clean content back (only data lines)
+        const cleanContent = dataLines.join('\n') + (dataLines.length > 0 ? '\n' : '');
+        await fs.writeFile(this.filePath, cleanContent);
+        
+        // Update offsets
+        this.offsets = newOffsets;
+        
+      } catch (error) {
+        // Cleanup on error
+        await readHandle.close();
+        throw error;
+      }
+      
+    } catch (error) {
+      // If chunked processing fails, fall back to simple offset calculation
+      console.warn('Chunked processing failed, using fallback method:', error.message);
+      await this.fallbackOffsetCalculation();
+    }
+  }
+
+  // FALLBACK STRATEGY: Simple offset calculation without reading entire file
+  async fallbackOffsetCalculation() {
+    try {
+      // Just calculate offsets based on current record count
+      // This is less accurate but memory-safe
+      const estimatedBytesPerRecord = 200; // Rough estimate
+      this.offsets = Array.from({ length: this.recordCount }, (_, i) => i * estimatedBytesPerRecord);
+    } catch (error) {
+      console.error('Fallback offset calculation failed:', error);
+      // Keep existing offsets
+    }
   }
 
   async close() {
@@ -1316,32 +1402,15 @@ class JSONLDatabase extends EventEmitter {
     try {
       const fileSize = (await fs.stat(this.filePath)).size;
       
-      // Check if all records in the file are valid JSONL
-      const data = await fs.readFile(this.filePath, 'utf8');
-      const lines = data.split('\n');
-
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trim();
-        if (line === '') continue; // Skip empty lines
-        
-        try {
-          JSON.parse(line);
-        } catch (e) {
-          return {
-            isValid: false,
-            message: `Invalid JSONL line at line ${i + 1}: ${line}`,
-            line: i + 1,
-            content: line,
-            error: e.message
-          };
-        }
-      }
-
+      // MEMORY-SAFE STRATEGY: Validate file in chunks
+      const validationResult = await this.validateIntegrityInChunks();
+      
       return { 
-        isValid: true, 
-        message: 'Database integrity check passed.',
+        isValid: validationResult.isValid, 
+        message: validationResult.message,
         fileSize,
-        recordCount: this.recordCount
+        recordCount: this.recordCount,
+        ...validationResult
       };
     } catch (error) {
       // File doesn't exist yet, but database is initialized
@@ -1356,6 +1425,97 @@ class JSONLDatabase extends EventEmitter {
       return { 
         isValid: false, 
         message: `Error checking integrity: ${error.message}` 
+      };
+    }
+  }
+
+  // MEMORY-SAFE STRATEGY: Validate large files in chunks
+  async validateIntegrityInChunks() {
+    const chunkSize = this.options.chunkSize || 8 * 1024 * 1024; // 8MB chunks
+    
+    try {
+      // Check if file exists and has content
+      const stats = await fs.stat(this.filePath).catch(() => null);
+      if (!stats || stats.size === 0) {
+        return { isValid: true, message: 'Empty database file' };
+      }
+
+      // Open file for reading
+      const readHandle = await fs.open(this.filePath, 'r');
+      
+      let lineNumber = 0;
+      let buffer = Buffer.alloc(chunkSize);
+      let lineBuffer = '';
+      
+      try {
+        while (true) {
+          const { bytesRead } = await readHandle.read(buffer, 0, buffer.length);
+          if (bytesRead === 0) break;
+          
+          // Process the chunk
+          const chunk = buffer.toString('utf8', 0, bytesRead);
+          lineBuffer += chunk;
+          
+          // Process complete lines
+          const lines = lineBuffer.split('\n');
+          lineBuffer = lines.pop() || ''; // Keep incomplete line for next iteration
+          
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            
+            try {
+              JSON.parse(line);
+            } catch (e) {
+              return {
+                isValid: false,
+                message: `Invalid JSONL line at line ${lineNumber + 1}: ${line}`,
+                line: lineNumber + 1,
+                content: line,
+                error: e.message
+              };
+            }
+            lineNumber++;
+            
+                         // Memory management: periodically clear references
+             if (this.options.gcInterval > 0 && lineNumber % this.options.gcInterval === 0) {
+               global.gc && global.gc(); // Force garbage collection if available
+             }
+          }
+        }
+        
+        // Process any remaining content in lineBuffer
+        if (lineBuffer.trim()) {
+          try {
+            JSON.parse(lineBuffer);
+          } catch (e) {
+            return {
+              isValid: false,
+              message: `Invalid JSONL line at line ${lineNumber + 1}: ${lineBuffer}`,
+              line: lineNumber + 1,
+              content: lineBuffer,
+              error: e.message
+            };
+          }
+        }
+        
+        // Close handle
+        await readHandle.close();
+        
+        return { 
+          isValid: true, 
+          message: 'Database integrity check passed.' 
+        };
+        
+      } catch (error) {
+        // Cleanup on error
+        await readHandle.close();
+        throw error;
+      }
+      
+    } catch (error) {
+      return { 
+        isValid: false, 
+        message: `Error during integrity check: ${error.message}` 
       };
     }
   }

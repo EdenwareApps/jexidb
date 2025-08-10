@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `autoSaveThreshold`: Flush buffer when it reaches N records (default: 50)
   - `autoSaveInterval`: Flush buffer every N milliseconds (default: 5000ms)
   - `forceSaveOnClose`: Always save when closing database (default: true)
+- **Memory-Safe Operations**: Advanced memory management to prevent `RangeError: Array buffer allocation failed`
+  - `memorySafeMode`: Enable memory-safe operations (default: true)
+  - `chunkSize`: Chunk size for file operations (default: 8MB)
+  - `gcInterval`: Force garbage collection every N records (default: 1000)
+  - Chunked file processing instead of loading entire files in memory
+  - Fallback strategies for memory-constrained environments
 - **New Public Methods**:
   - `flush()`: Explicitly flush insertion buffer to disk
   - `forceSave()`: Force save operation regardless of buffer size

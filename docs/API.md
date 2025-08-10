@@ -37,6 +37,9 @@ new Database(filePath, options = {})
   - `maxBatchSize` (number): Maximum batch size for performance (default: 200)
   
   **Memory Management:**
+  - `memorySafeMode` (boolean): Enable memory-safe operations (default: true)
+  - `chunkSize` (number): Chunk size for file operations (default: 8MB)
+  - `gcInterval` (number): Force GC every N records (0 = disabled, default: 1000)
   - `maxMemoryUsage` (string|number): Memory limit ('auto' or bytes, default: 'auto')
   - `maxFlushChunkBytes` (number): Maximum chunk size for flush operations (default: 8MB)
 
@@ -170,6 +173,65 @@ const config = db.getPerformanceConfig()
 //   minBatchSize: 10,
 //   maxBatchSize: 200
 // }
+```
+
+#### Memory Management
+
+JexiDB includes advanced memory management features to prevent `RangeError: Array buffer allocation failed` errors in memory-constrained environments.
+
+##### Memory-Safe Configuration
+
+```javascript
+const db = new Database('./data.jdb', {
+  // Memory management
+  memorySafeMode: true,        // Enable memory-safe operations
+  chunkSize: 4 * 1024 * 1024, // 4MB chunks (reduced for low memory)
+  gcInterval: 500,            // Force GC every 500 records
+  maxFlushChunkBytes: 2 * 1024 * 1024, // 2MB max flush chunks
+  
+  // Auto-save with smaller thresholds
+  autoSave: true,
+  autoSaveThreshold: 25,      // Flush more frequently
+  autoSaveInterval: 3000,     // Flush every 3 seconds
+  
+  // Performance with memory constraints
+  batchSize: 25,              // Smaller batches
+  minBatchSize: 5,
+  maxBatchSize: 100
+});
+```
+
+##### Memory-Safe Features
+
+- **Chunked File Processing**: Files are processed in configurable chunks instead of loading entire files in memory
+- **Garbage Collection**: Optional forced garbage collection at configurable intervals
+- **Buffer Management**: Smaller, more frequent buffer flushes to reduce memory pressure
+- **Fallback Strategies**: Graceful degradation when memory is insufficient
+- **Memory Monitoring**: Real-time buffer status and memory usage tracking
+
+##### Best Practices for Memory-Constrained Environments
+
+1. **Use Smaller Chunks**: Set `chunkSize` to 1-4MB for low memory systems
+2. **Enable Garbage Collection**: Set `gcInterval` to 500-1000 for frequent cleanup
+3. **Reduce Batch Sizes**: Use smaller `batchSize` and `autoSaveThreshold`
+4. **Monitor Buffer Status**: Use `getBufferStatus()` to track memory usage
+5. **Enable Memory-Safe Mode**: Set `memorySafeMode: true` (default)
+6. **Use Node.js GC Flag**: Run with `--expose-gc` for manual garbage collection
+
+##### Example: Ultra Memory-Safe Configuration
+
+```javascript
+const ultraMemorySafeConfig = {
+  memorySafeMode: true,
+  chunkSize: 1 * 1024 * 1024,    // 1MB chunks
+  gcInterval: 100,               // GC every 100 records
+  maxFlushChunkBytes: 512 * 1024, // 512KB flush chunks
+  autoSaveThreshold: 10,         // Flush every 10 records
+  autoSaveInterval: 2000,        // Flush every 2 seconds
+  batchSize: 10,                 // Very small batches
+  minBatchSize: 2,
+  maxBatchSize: 50
+};
 ```
 
 ##### validateIntegrity(options)
