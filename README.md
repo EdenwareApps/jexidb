@@ -8,8 +8,10 @@
 - **Persistent Indexes**: Fast searches with disk-persisted indexes that don't need rebuilding
 - **Point Reading**: Efficient memory usage - only reads necessary data
 - **Rich Query API**: Support for complex queries with operators, sorting, and pagination
+- **Intelligent Auto-Save**: Automatic data persistence with configurable thresholds and intervals
+- **Event-Driven Monitoring**: Real-time notifications for all database operations
+- **Performance Optimization**: Adaptive batch sizes and memory management
 - **Automatic Integrity Validation**: Built-in data integrity checking and repair
-- **Event System**: Real-time notifications for database operations
 - **Legacy Compatibility**: Automatic migration from JexiDB 1.x databases
 - **Pure JavaScript**: No native dependencies, works everywhere, easy to deploy
 
@@ -54,7 +56,7 @@ const results = await db.query({ name: 'john doe' }, { caseInsensitive: true });
 await db.update({ id: 1 }, { age: 31 });
 await db.delete({ id: 1 });
 await db.save();
-await db.destroy();
+await db.close();  // or await db.destroy()
 ```
 
 ### CommonJS
@@ -71,7 +73,7 @@ const db = new Database('./users.jdb', {
   await db.init();
   await db.insert({ id: 1, name: 'John' });
   console.log(await db.findOne({ id: 1 }));
-  await db.destroy();
+  await db.close();  // or await db.destroy()
 })();
 ```
 
@@ -90,11 +92,71 @@ const db = new Database(filePath, options);
 **Options:**
 ```javascript
 {
+  // Core options
   indexes: {},           // Indexes for fields
-  markDeleted: true,     // Mark as deleted instead of physically removing
-  autoSave: true,        // Automatically save after operations
-  validateOnInit: false  // Validate integrity on initialization
+  create: true,          // Create database if it doesn't exist
+  clear: false,          // Clear database on load
+  
+  // Auto-save configuration
+  autoSave: true,        // Enable intelligent auto-save (default: true)
+  autoSaveThreshold: 50, // Flush buffer when it reaches this many records
+  autoSaveInterval: 5000, // Flush buffer every N milliseconds
+  forceSaveOnClose: true, // Always save when closing database
+  
+  // Performance configuration
+  batchSize: 50,         // Batch size for inserts (reduced for faster response)
+  adaptiveBatchSize: true, // Adjust batch size based on usage
+  minBatchSize: 10,      // Minimum batch size for flush
+  maxBatchSize: 200      // Maximum batch size for performance
 }
+```
+
+### Auto-Save Intelligence
+
+JexiDB features intelligent auto-save capabilities that automatically manage data persistence without manual intervention.
+
+#### Auto-Save Modes
+
+**Intelligent Auto-Save (Default):**
+- Automatically flushes buffer when it reaches the threshold (default: 50 records)
+- Automatically flushes buffer every N milliseconds (default: 5000ms)
+- Always saves when closing the database
+- Provides real-time feedback through events
+
+**Manual Mode:**
+- Disable auto-save with `autoSave: false`
+- Manually call `flush()` and `save()` when needed
+- Useful for applications requiring precise control over persistence timing
+
+#### Event-Driven Monitoring
+
+```javascript
+// Monitor auto-save operations
+db.on('buffer-flush', (count) => {
+  console.log(`Flushed ${count} records`);
+});
+
+db.on('buffer-full', () => {
+  console.log('Buffer reached threshold');
+});
+
+db.on('auto-save-timer', () => {
+  console.log('Time-based auto-save triggered');
+});
+
+db.on('save-complete', () => {
+  console.log('Database saved successfully');
+});
+```
+
+#### Buffer Status Monitoring
+
+```javascript
+// Check buffer status anytime
+const status = db.getBufferStatus();
+console.log(`Pending: ${status.pendingCount}/${status.bufferSize}`);
+console.log(`Should flush: ${status.shouldFlush}`);
+console.log(`Auto-save enabled: ${status.autoSaveEnabled}`);
 ```
 
 ### Main Methods
@@ -173,8 +235,46 @@ Counts records.
 #### `save()`
 Saves pending changes.
 
+#### `flush()`
+Flushes the insertion buffer to disk immediately.
+
+#### `forceSave()`
+Forces a save operation regardless of buffer size.
+
+#### `getBufferStatus()`
+Gets information about the current buffer state.
+
+#### `configurePerformance(settings)`
+Dynamically configures performance settings.
+
+#### `getPerformanceConfig()`
+Gets current performance configuration.
+
+#### `close()`
+Closes the database instance and saves pending changes.
+
 #### `destroy()`
-Destroys the database.
+Closes the database instance and saves pending changes (equivalent to close()).
+
+```javascript
+await db.destroy()  // Same as: await db.close()
+```
+
+#### `deleteDatabase()`
+**⚠️ WARNING: This permanently deletes the database file!**
+
+Deletes the database file from disk and closes the instance.
+
+```javascript
+await db.deleteDatabase()  // Deletes the database file permanently
+```
+
+#### `removeDatabase()`
+Removes the database file from disk (alias for deleteDatabase).
+
+```javascript
+await db.removeDatabase()  // Same as: await db.deleteDatabase()
+```
 
 #### `validateIntegrity(options)`
 Validates database integrity.
@@ -216,13 +316,25 @@ Index statistics.
 ### Events
 
 ```javascript
+// Core events
 db.on('init', () => console.log('Database initialized'));
 db.on('insert', (record, index) => console.log('Record inserted'));
 db.on('update', (record, index) => console.log('Record updated'));
 db.on('delete', (record, index) => console.log('Record deleted'));
 db.on('before-save', () => console.log('Before save'));
 db.on('save', () => console.log('Save completed'));
+db.on('close', () => console.log('Database closed'));
 db.on('destroy', () => console.log('Database destroyed'));
+db.on('delete-database', () => console.log('Database file deleted'));
+
+// Auto-save events
+db.on('buffer-flush', (count) => console.log(`Buffer flushed: ${count} records`));
+db.on('buffer-full', () => console.log('Buffer reached threshold'));
+db.on('auto-save-timer', () => console.log('Time-based auto-save triggered'));
+db.on('save-complete', () => console.log('Save operation completed'));
+db.on('close-save-complete', () => console.log('Database closed with final save'));
+db.on('close', () => console.log('Database closed'));
+db.on('performance-configured', (config) => console.log('Performance reconfigured'));
 ```
 
 ## 📁 File Structure

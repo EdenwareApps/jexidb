@@ -325,13 +325,13 @@ describe('JexiDB Local Database', () => {
 
   describe('Performance', () => {
     test('should handle large datasets efficiently', async () => {
-      // Insert 20 records for basic performance test
-      for (let i = 0; i < 20; i++) {
+      // Insert 30 records for basic performance test
+      for (let i = 0; i < 30; i++) {
         await db.insert({ 
           id: i, 
           name: `User ${i}`, 
           email: `user${i}@example.com`,
-          age: 20 + (i % 50)
+          age: 20 + (i % 60)  // This will generate ages 20-79, ensuring some > 40
         });
       }
       
@@ -341,7 +341,7 @@ describe('JexiDB Local Database', () => {
       
       // Verify we can count the data
       const count = await db.count();
-      expect(count).toBe(20);
+      expect(count).toBe(30);
     }, 15000); // 15 second timeout
   });
 }); 

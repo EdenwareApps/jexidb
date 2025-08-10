@@ -1,8 +1,0 @@
-{"id":1,"name":"Alice","email":"alice@company.com","age":29,"department":"Engineering","_id":0,"_created":1753652932508,"_updated":1753652932594}
-{"id":2,"name":"Bob","email":"bob@company.com","age":32,"department":"Marketing","_id":1,"_created":1753652932521,"_updated":1753652932521}
-[0,146]
-{"id":3,"name":"Carol","email":"carol@company.com","age":25,"department":"Design","_id":2,"_created":1753652932542,"_updated":1753652932542}
-[0,146,294]
-{"id":4,"name":"David","email":"david@company.com","age":35,"department":"Engineering","_id":3,"_created":1753652932557,"_updated":1753652932557}
-[0,146,294,447]
-[0,146,294,447]

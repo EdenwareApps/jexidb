@@ -297,8 +297,7 @@ describe('JSONLDatabase', () => {
       await db1.init();
       await db1.insert({ id: 1, name: 'John' });
       await db1.save();
-      // Don't destroy - just close the connection
-      db1.isInitialized = false;
+      await db1.close();  // Properly close the connection
 
       // Second instance
       const db2 = new Database(testFile, { indexes: { id: 'number' } });

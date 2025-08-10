@@ -21,12 +21,24 @@ new Database(filePath, options = {})
 - `options` (object): Configuration options
   - `indexes` (object): Index configuration
   - `markDeleted` (boolean): Mark records as deleted instead of physical removal
-  - `autoSave` (boolean): Automatically save after operations
-  - `validateOnInit` (boolean): Validate integrity on initialization
-  - `backgroundMaintenance` (boolean): Enable background maintenance
   - `create` (boolean): Create database if it doesn't exist (default: true)
   - `clear` (boolean): Clear database on load if not empty (default: false)
-  - `batchSize` (number): Batch size for inserts (default: 100)
+  
+  **Auto-Save Configuration:**
+  - `autoSave` (boolean): Enable intelligent auto-save (default: true)
+  - `autoSaveThreshold` (number): Flush buffer when it reaches this many records (default: 50)
+  - `autoSaveInterval` (number): Flush buffer every N milliseconds (default: 5000)
+  - `forceSaveOnClose` (boolean): Always save when closing database (default: true)
+  
+  **Performance Configuration:**
+  - `batchSize` (number): Batch size for inserts (default: 50)
+  - `adaptiveBatchSize` (boolean): Adjust batch size based on usage (default: true)
+  - `minBatchSize` (number): Minimum batch size for flush (default: 10)
+  - `maxBatchSize` (number): Maximum batch size for performance (default: 200)
+  
+  **Memory Management:**
+  - `maxMemoryUsage` (string|number): Memory limit ('auto' or bytes, default: 'auto')
+  - `maxFlushChunkBytes` (number): Maximum chunk size for flush operations (default: 8MB)
 
 #### Methods
 
@@ -102,6 +114,64 @@ Saves pending changes to disk.
 await db.save()
 ```
 
+##### flush()
+Flushes the insertion buffer to disk immediately.
+
+```javascript
+const flushedCount = await db.flush()
+// Returns: number of records flushed
+```
+
+##### forceSave()
+Forces a save operation regardless of buffer size.
+
+```javascript
+await db.forceSave()
+// Always saves, even with just 1 record in buffer
+```
+
+##### getBufferStatus()
+Gets information about the current buffer state.
+
+```javascript
+const status = db.getBufferStatus()
+// Returns: {
+//   pendingCount: 15,
+//   bufferSize: 50,
+//   lastFlush: 1640995200000,
+//   lastAutoSave: 1640995200000,
+//   shouldFlush: false,
+//   autoSaveEnabled: true,
+//   autoSaveTimer: 'active'
+// }
+```
+
+##### configurePerformance(settings)
+Dynamically configures performance settings.
+
+```javascript
+db.configurePerformance({
+  batchSize: 25,
+  autoSaveThreshold: 30,
+  autoSaveInterval: 4000
+})
+```
+
+##### getPerformanceConfig()
+Gets current performance configuration.
+
+```javascript
+const config = db.getPerformanceConfig()
+// Returns: {
+//   batchSize: 25,
+//   autoSaveThreshold: 30,
+//   autoSaveInterval: 4000,
+//   adaptiveBatchSize: true,
+//   minBatchSize: 10,
+//   maxBatchSize: 200
+// }
+```
+
 ##### validateIntegrity(options)
 Validates database integrity.
 
@@ -125,11 +195,36 @@ const categories = db.readColumnIndex('category')
 // Throws error for non-indexed columns
 ```
 
+##### close()
+Closes the database instance and saves pending changes.
+
+```javascript
+await db.close()
+// Saves data and closes instance, but keeps the database file
+```
+
 ##### destroy()
-Destroys the database instance and cleans up resources.
+Closes the database instance and saves pending changes (equivalent to close()).
 
 ```javascript
 await db.destroy()
+// Same as: await db.close()
+```
+
+##### deleteDatabase()
+**⚠️ WARNING: This permanently deletes the database file!**
+
+Deletes the database file from disk and closes the instance.
+
+```javascript
+await db.deleteDatabase()  // Deletes the database file permanently
+```
+
+##### removeDatabase()
+Removes the database file from disk (alias for deleteDatabase).
+
+```javascript
+await db.removeDatabase()  // Same as: await db.deleteDatabase()
 ```
 
 #### Properties
@@ -145,6 +240,15 @@ await db.destroy()
 - `delete`: Emitted when records are deleted
 - `save`: Emitted when database is saved
 - `before-save`: Emitted before database is saved
+
+**Auto-Save Events:**
+- `buffer-flush`: Emitted when buffer is flushed (count parameter)
+- `buffer-full`: Emitted when buffer reaches threshold
+- `auto-save-timer`: Emitted when time-based auto-save triggers
+- `save-complete`: Emitted when save operation completes
+- `close-save-complete`: Emitted when database closes with final save
+- `close`: Emitted when database is closed
+- `performance-configured`: Emitted when performance settings are changed
 
 ### Query Operators
 
@@ -177,6 +281,72 @@ const results = await db.find({
 - `skip`: Skip number of results
 - `sort`: Sort results by field
 - `caseInsensitive`: Case-insensitive string matching
+
+## Auto-Save Intelligence
+
+JexiDB features intelligent auto-save capabilities that automatically manage data persistence without manual intervention.
+
+### Auto-Save Modes
+
+**Intelligent Auto-Save (Default):**
+- Automatically flushes buffer when it reaches the threshold (default: 50 records)
+- Automatically flushes buffer every N milliseconds (default: 5000ms)
+- Always saves when closing the database
+- Provides real-time feedback through events
+
+**Manual Mode:**
+- Disable auto-save with `autoSave: false`
+- Manually call `flush()` and `save()` when needed
+- Useful for applications requiring precise control over persistence timing
+
+### Auto-Save Configuration
+
+```javascript
+const db = new Database('data.jdb', {
+  // Enable intelligent auto-save
+  autoSave: true,
+  autoSaveThreshold: 50,    // Flush every 50 records
+  autoSaveInterval: 5000,   // Flush every 5 seconds
+  forceSaveOnClose: true,   // Always save on close
+  
+  // Performance tuning
+  batchSize: 50,            // Reduced for faster response
+  adaptiveBatchSize: true,  // Adjust based on usage
+  minBatchSize: 10,         // Minimum flush size
+  maxBatchSize: 200         // Maximum flush size
+});
+```
+
+### Event-Driven Monitoring
+
+```javascript
+// Monitor auto-save operations
+db.on('buffer-flush', (count) => {
+  console.log(`Flushed ${count} records`);
+});
+
+db.on('buffer-full', () => {
+  console.log('Buffer reached threshold');
+});
+
+db.on('auto-save-timer', () => {
+  console.log('Time-based auto-save triggered');
+});
+
+db.on('save-complete', () => {
+  console.log('Database saved successfully');
+});
+```
+
+### Buffer Status Monitoring
+
+```javascript
+// Check buffer status anytime
+const status = db.getBufferStatus();
+console.log(`Pending: ${status.pendingCount}/${status.bufferSize}`);
+console.log(`Should flush: ${status.shouldFlush}`);
+console.log(`Auto-save enabled: ${status.autoSaveEnabled}`);
+```
 
 ## Optimization Features
 

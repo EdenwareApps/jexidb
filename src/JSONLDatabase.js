@@ -28,10 +28,28 @@ class JSONLDatabase extends EventEmitter {
       this.filePath = filePath;
     }
     
+    // Enhanced configuration with intelligent defaults
     this.options = {
-      batchSize: 100, // Batch size for inserts
+      // Original options
+      batchSize: 50, // Reduced from 100 for faster response
       create: true, // Create database if it doesn't exist (default: true)
       clear: false, // Clear database on load if not empty (default: false)
+      
+      // Auto-save intelligent configuration
+      autoSave: true, // Enable auto-save by default
+      autoSaveThreshold: 50, // Flush when buffer reaches 50 records
+      autoSaveInterval: 5000, // Flush every 5 seconds
+      forceSaveOnClose: true, // Always save when closing
+      
+      // Performance configuration
+      adaptiveBatchSize: true, // Adjust batch size based on usage
+      minBatchSize: 10, // Minimum batch size for flush
+      maxBatchSize: 200, // Maximum batch size for performance
+      
+      // Memory management
+      maxMemoryUsage: 'auto', // Calculate automatically or use fixed value
+      maxFlushChunkBytes: 8 * 1024 * 1024, // 8MB default
+      
       ...options
     };
     
@@ -39,6 +57,11 @@ class JSONLDatabase extends EventEmitter {
     if (this.options.clear === true) {
       this.options.create = true;
     }
+    
+    // Auto-save timer and state
+    this.autoSaveTimer = null;
+    this.lastFlushTime = null;
+    this.lastAutoSaveTime = Date.now();
     
     this.isInitialized = false;
     this.offsets = [];
@@ -288,11 +311,30 @@ class JSONLDatabase extends EventEmitter {
       
       // Convert back to Map objects
       for (const [field, indexMap] of Object.entries(savedIndexes)) {
-        if (this.indexes[field]) {
+        // Initialize index if it doesn't exist
+        if (!this.indexes[field]) {
           this.indexes[field] = new Map();
-          for (const [value, indices] of Object.entries(indexMap)) {
-            this.indexes[field].set(value, new Set(indices));
+        }
+        
+        this.indexes[field] = new Map();
+        for (const [value, indices] of Object.entries(indexMap)) {
+          // Convert value back to original type based on field configuration
+          let convertedValue = value;
+          if (this.indexes[field] && this.indexes[field].constructor === Map) {
+            // Try to convert based on field type
+            if (field === 'id' || field.includes('id') || field.includes('Id')) {
+              convertedValue = parseInt(value, 10);
+            } else if (typeof value === 'string' && !isNaN(parseFloat(value))) {
+              // Try to convert numeric strings back to numbers
+              const num = parseFloat(value);
+              if (Number.isInteger(num)) {
+                convertedValue = parseInt(value, 10);
+              } else {
+                convertedValue = num;
+              }
+            }
           }
+          this.indexes[field].set(convertedValue, new Set(indices));
         }
       }
       
@@ -354,7 +396,7 @@ class JSONLDatabase extends EventEmitter {
     }
   }
 
-  // ORIGINAL STRATEGY: Buffer in memory + batch write
+  // ORIGINAL STRATEGY: Buffer in memory + batch write with intelligent auto-save
   async insert(data) {
     if (!this.isInitialized) {
       throw new Error('Database not initialized');
@@ -378,17 +420,32 @@ class JSONLDatabase extends EventEmitter {
     // Add to index immediately for searchability
     this.addToIndex(record, this.recordCount - 1);
     
-    // Flush buffer if it's full (BATCH WRITE) or if autoSave is enabled
-    if (this.insertionBuffer.length >= this.insertionStats.batchSize || this.options.autoSave) {
-      await this.flushInsertionBuffer();
+    // Intelligent auto-save logic
+    if (this.options.autoSave) {
+      // Auto-save based on threshold
+      if (this.insertionBuffer.length >= this.options.autoSaveThreshold) {
+        await this.flush();
+        this.emit('buffer-full');
+      }
+      
+      // Auto-save based on time interval
+      if (!this.autoSaveTimer) {
+        this.autoSaveTimer = setTimeout(async () => {
+          if (this.insertionBuffer.length > 0) {
+            await this.flush();
+            this.emit('auto-save-timer');
+          }
+          this.autoSaveTimer = null;
+        }, this.options.autoSaveInterval);
+      }
+    } else {
+      // Manual mode: flush only when buffer is full
+      if (this.insertionBuffer.length >= this.insertionStats.batchSize) {
+        await this.flushInsertionBuffer();
+      }
     }
     
     this.shouldSave = true;
-    
-    // Save immediately if autoSave is enabled
-    if (this.options.autoSave && this.shouldSave) {
-      await this.save();
-    }
     
     // Emit insert event
     this.emit('insert', record, this.recordCount - 1);
@@ -396,7 +453,47 @@ class JSONLDatabase extends EventEmitter {
     return record; // Return immediately (ORIGINAL STRATEGY)
   }
 
-  // ULTRA-OPTIMIZED STRATEGY: Bulk flush with minimal I/O
+  // PUBLIC METHOD: Flush buffer to disk
+  async flush() {
+    if (!this.isInitialized) {
+      throw new Error('Database not initialized');
+    }
+    
+    if (this.insertionBuffer.length > 0) {
+      const flushCount = this.insertionBuffer.length;
+      await this.flushInsertionBuffer();
+      this.lastFlushTime = Date.now();
+      this.emit('buffer-flush', flushCount);
+      return flushCount;
+    }
+    return 0;
+  }
+
+  // PUBLIC METHOD: Force save - always saves regardless of buffer size
+  async forceSave() {
+    if (!this.isInitialized) {
+      throw new Error('Database not initialized');
+    }
+    
+    await this.flush();
+    await this.save();
+    this.emit('save-complete');
+  }
+
+  // PUBLIC METHOD: Get buffer status information
+  getBufferStatus() {
+    return {
+      pendingCount: this.insertionBuffer.length,
+      bufferSize: this.options.batchSize,
+      lastFlush: this.lastFlushTime,
+      lastAutoSave: this.lastAutoSaveTime,
+      shouldFlush: this.insertionBuffer.length >= this.options.autoSaveThreshold,
+      autoSaveEnabled: this.options.autoSave,
+      autoSaveTimer: this.autoSaveTimer ? 'active' : 'inactive'
+    };
+  }
+
+  // ULTRA-OPTIMIZED STRATEGY: Bulk flush with minimal I/O (chunked to avoid OOM)
   async flushInsertionBuffer() {
     if (this.insertionBuffer.length === 0) {
       return;
@@ -413,45 +510,54 @@ class JSONLDatabase extends EventEmitter {
         currentOffset = 0;
       }
 
-      // Pre-allocate arrays for better performance
-      const offsets = new Array(this.insertionBuffer.length);
-      const lines = new Array(this.insertionBuffer.length);
-      
-      // Batch process all records
+      // Write in chunks to avoid allocating a huge buffer/string at once
+      const maxChunkBytes = this.options.maxFlushChunkBytes || 8 * 1024 * 1024; // 8MB default
+      let chunkParts = [];
+      let chunkBytes = 0;
+
+      // We'll push offsets directly to avoid creating a separate large array
+      const pendingOffsets = [];
+
       for (let i = 0; i < this.insertionBuffer.length; i++) {
         const record = this.insertionBuffer[i];
-        
-        // Records are already indexed in insert/insertMany methods
-        // No need to index again here
-        
-        // Serialize record (batch operation)
         const line = JSON.stringify(record) + '\n';
-        lines[i] = line;
-        
-        // Calculate accurate offset (batch operation)
-        offsets[i] = currentOffset;
-        currentOffset += Buffer.byteLength(line, 'utf8');
+        const lineBytes = Buffer.byteLength(line, 'utf8');
+
+        // Track offset for this record
+        pendingOffsets.push(currentOffset);
+        currentOffset += lineBytes;
+
+        // If one line is larger than chunk size, write the current chunk and then this line alone
+        if (lineBytes > maxChunkBytes) {
+          if (chunkParts.length > 0) {
+            await fs.appendFile(this.filePath, chunkParts.join(''));
+            chunkParts.length = 0;
+            chunkBytes = 0;
+          }
+          await fs.appendFile(this.filePath, line);
+          continue;
+        }
+
+        // If adding this line would exceed the chunk size, flush current chunk first
+        if (chunkBytes + lineBytes > maxChunkBytes) {
+          await fs.appendFile(this.filePath, chunkParts.join(''));
+          chunkParts.length = 0;
+          chunkBytes = 0;
+        }
+
+        chunkParts.push(line);
+        chunkBytes += lineBytes;
       }
 
-      // Single string concatenation (much faster than Buffer.concat)
-      const batchString = lines.join('');
-      const batchBuffer = Buffer.from(batchString, 'utf8');
-      
-      // Single file write operation
-      await fs.appendFile(this.filePath, batchBuffer);
-      
-      // Batch update offsets
-      this.offsets.push(...offsets);
-      
-      // Record count is already updated in insert/insertMany methods
-      // No need to update it again here
-      
-      // Clear the insertion buffer
+      if (chunkParts.length > 0) {
+        await fs.appendFile(this.filePath, chunkParts.join(''));
+      }
+
+      // Update offsets and clear buffer
+      this.offsets.push(...pendingOffsets);
       this.insertionBuffer.length = 0;
-      
-      // Mark that we need to save (offset line will be added by save() method)
-      this.shouldSave = true;
-      
+      this.shouldSave = true; // Mark that we need to save (offset line will be added by save())
+
     } catch (error) {
       console.error('Error flushing insertion buffer:', error);
       throw new Error(`Failed to flush insertion buffer: ${error.message}`);
@@ -478,19 +584,21 @@ class JSONLDatabase extends EventEmitter {
       matchingIndices = this.queryIndex(indexedCriteria);
     }
     
-    // If no indexed fields or no matches found, start with all records
-    if (matchingIndices.length === 0) {
+    // If no indexed fields, start with all records
+    if (indexedFields.length === 0) {
       matchingIndices = Array.from({ length: this.recordCount }, (_, i) => i);
+    } else if (matchingIndices.length === 0) {
+      // If we have indexed fields but no matches, return empty array
+      return [];
     }
     
     if (matchingIndices.length === 0) {
       return [];
     }
 
-    // Step 2: Collect results from both disk and buffer
+    // Step 2: Collect results from disk (existing records)
     const results = [];
     
-    // First, get results from disk (existing records)
     for (const index of matchingIndices) {
       if (index < this.offsets.length) {
         const offset = this.offsets[index];
@@ -507,54 +615,16 @@ class JSONLDatabase extends EventEmitter {
       }
     }
     
-    // Then, get results from buffer (new records) - only include records that match the indexed criteria
-    const bufferIndices = new Set();
-    if (indexedFields.length > 0) {
-      // Use the same queryIndex logic for buffer records
-      for (const [field, fieldCriteria] of Object.entries(indexedFields.reduce((acc, field) => {
-        acc[field] = criteria[field];
-        return acc;
-      }, {}))) {
-        const indexMap = this.indexes[field];
-        if (indexMap) {
-          if (typeof fieldCriteria === 'object' && !Array.isArray(fieldCriteria)) {
-            // Handle operators like 'in'
-            for (const [operator, operatorValue] of Object.entries(fieldCriteria)) {
-              if (operator === 'in' && Array.isArray(operatorValue)) {
-                for (const searchValue of operatorValue) {
-                  const indexSet = indexMap.get(searchValue);
-                  if (indexSet) {
-                    for (const index of indexSet) {
-                      if (index >= this.recordCount - this.insertionBuffer.length) {
-                        bufferIndices.add(index);
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    } else {
-      // No indexed fields, include all buffer records
+    // Step 3: Add results from buffer (new records) if buffer is not empty
+    if (this.insertionBuffer.length > 0) {
+      // Check each buffer record against criteria
       for (let i = 0; i < this.insertionBuffer.length; i++) {
-        bufferIndices.add(this.recordCount - this.insertionBuffer.length + i);
-      }
-    }
-    
-    // Add matching buffer records
-    for (const bufferIndex of bufferIndices) {
-      const bufferOffset = bufferIndex - (this.recordCount - this.insertionBuffer.length);
-      if (bufferOffset >= 0 && bufferOffset < this.insertionBuffer.length) {
-        const record = this.insertionBuffer[bufferOffset];
-        
-        // Check non-indexed fields
-        if (nonIndexedFields.length === 0 || this.matchesCriteria(record, nonIndexedFields.reduce((acc, field) => {
-          acc[field] = criteria[field];
-          return acc;
-        }, {}))) {
-          results.push(record);
+        const record = this.insertionBuffer[i];
+        if (record && !record._deleted) {
+          // Check if record matches all criteria
+          if (this.matchesCriteria(record, criteria)) {
+            results.push(record);
+          }
         }
       }
     }
@@ -870,19 +940,32 @@ class JSONLDatabase extends EventEmitter {
   }
 
   async close() {
+    // Clear auto-save timer
+    if (this.autoSaveTimer) {
+      clearTimeout(this.autoSaveTimer);
+      this.autoSaveTimer = null;
+    }
+    
     // Flush any pending inserts first
     if (this.insertionBuffer.length > 0) {
-      await this.flushInsertionBuffer();
+      await this.flush();
     }
 
-    if (this.shouldSave) {
+    // Force save on close if enabled
+    if (this.options.forceSaveOnClose && this.shouldSave) {
+      await this.save();
+      this.emit('close-save-complete');
+    } else if (this.shouldSave) {
       await this.save();
     }
+    
     if (this.fileHandle) {
       await this.fileHandle.close();
       this.fileHandle = null;
     }
+    
     this.isInitialized = false;
+    this.emit('close');
   }
 
   get length() {
@@ -899,7 +982,16 @@ class JSONLDatabase extends EventEmitter {
       memoryUsage: 0, // No buffer in memory - on-demand reading
       fileHandle: this.fileHandle ? 'open' : 'closed',
       insertionBufferSize: this.insertionBuffer.length,
-      batchSize: this.insertionStats.batchSize
+      batchSize: this.insertionStats.batchSize,
+      // Auto-save information
+      autoSave: {
+        enabled: this.options.autoSave,
+        threshold: this.options.autoSaveThreshold,
+        interval: this.options.autoSaveInterval,
+        timerActive: this.autoSaveTimer ? true : false,
+        lastFlush: this.lastFlushTime,
+        lastAutoSave: this.lastAutoSaveTime
+      }
     };
   }
 
@@ -907,6 +999,37 @@ class JSONLDatabase extends EventEmitter {
     return {
       recordCount: this.recordCount,
       indexCount: Object.keys(this.indexes).length
+    };
+  }
+
+  // PUBLIC METHOD: Configure performance settings
+  configurePerformance(settings) {
+    if (settings.batchSize !== undefined) {
+      this.options.batchSize = Math.max(this.options.minBatchSize, 
+                                       Math.min(this.options.maxBatchSize, settings.batchSize));
+      this.insertionStats.batchSize = this.options.batchSize;
+    }
+    
+    if (settings.autoSaveThreshold !== undefined) {
+      this.options.autoSaveThreshold = settings.autoSaveThreshold;
+    }
+    
+    if (settings.autoSaveInterval !== undefined) {
+      this.options.autoSaveInterval = settings.autoSaveInterval;
+    }
+    
+    this.emit('performance-configured', this.options);
+  }
+
+  // PUBLIC METHOD: Get performance configuration
+  getPerformanceConfig() {
+    return {
+      batchSize: this.options.batchSize,
+      autoSaveThreshold: this.options.autoSaveThreshold,
+      autoSaveInterval: this.options.autoSaveInterval,
+      adaptiveBatchSize: this.options.adaptiveBatchSize,
+      minBatchSize: this.options.minBatchSize,
+      maxBatchSize: this.options.maxBatchSize
     };
   }
 
@@ -1053,9 +1176,29 @@ class JSONLDatabase extends EventEmitter {
   }
 
   async destroy() {
+    // destroy() agora é equivalente a close() - fecha instância, mantém arquivo
+    await this.close();
+    this.emit('destroy');
+  }
+
+  async deleteDatabase() {
     await this.close();
     await fs.unlink(this.filePath);
-    this.emit('destroy');
+    
+    // Also remove index file if it exists
+    try {
+      const indexPath = this.filePath.replace('.jdb', '.idx.jdb');
+      await fs.unlink(indexPath);
+    } catch (e) {
+      // Index file might not exist
+    }
+    
+    this.emit('delete-database');
+  }
+
+  // Alias for deleteDatabase
+  async removeDatabase() {
+    return this.deleteDatabase();
   }
 
   async findOne(criteria = {}) {
