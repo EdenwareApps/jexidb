@@ -1,7 +1,7 @@
 // Example: Using JexiDB with ESM (ES Modules)
 // This file demonstrates how to use the library in modern ESM environments
 
-import JexiDB from 'jexidb';
+import Database from 'jexidb';
 
 async function main() {
   console.log('🚀 JexiDB Examples\n');
@@ -9,7 +9,7 @@ async function main() {
   // Example 1: Basic usage
   console.log('=== Example 1: Basic Usage ===');
   
-  const db = new JexiDB('./example-users.jdb', {
+  const db = new Database('./example-users.jdb', {
     indexes: { id: 'number', email: 'string', age: 'number' }
   });
   
@@ -50,7 +50,7 @@ async function main() {
   // Example 2: New options (create, clear)
   console.log('=== Example 2: New Options (create, clear) ===');
   
-  const db2 = new JexiDB('./example-options.jdb', {
+  const db2 = new Database('./example-options.jdb', {
     indexes: { category: 'string' },
     create: true,
     clear: false
@@ -65,7 +65,7 @@ async function main() {
   await db2.destroy();
   
   // Test clear option
-  const db3 = new JexiDB('./example-options.jdb', {
+  const db3 = new Database('./example-options.jdb', {
     indexes: { category: 'string' },
     clear: true
   });
@@ -77,7 +77,7 @@ async function main() {
   // Example 3: readColumnIndex
   console.log('\n=== Example 3: readColumnIndex ===');
   
-  const db4 = new JexiDB('./example-columns.jdb', {
+  const db4 = new Database('./example-columns.jdb', {
     indexes: { category: 'string', status: 'string' },
     create: true
   });

@@ -8,8 +8,8 @@
 const fs = require('fs').promises;
 const path = require('path');
 
-// Import JexiDB
-const JexiDB = require('../src/index');
+// Import Database
+const Database = require('../src/index');
 
 class TestDatabaseVerifier {
   constructor() {
@@ -32,7 +32,7 @@ class TestDatabaseVerifier {
       console.log(`📊 File size: ${stats.size} bytes`);
 
       // Initialize database
-      const db = new JexiDB(dbPath);
+      const db = new Database(dbPath);
       await db.init();
 
       // Get database stats

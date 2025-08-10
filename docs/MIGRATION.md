@@ -12,7 +12,7 @@ async function migrateFromJSON(jsonFilePath, dbPath) {
   // Read JSON file
   const jsonData = JSON.parse(fs.readFileSync(jsonFilePath, 'utf8'));
   
-  // Create JexiDB database
+  // Create database
   const db = new Database(dbPath);
   await db.init();
   
@@ -41,8 +41,8 @@ const { Database } = require('jexidb');
 
 async function migrateFromSQLite(sqlitePath, dbPath) {
   const db = new sqlite3.Database(sqlitePath);
-  const jexidb = new Database(dbPath);
-  await jexidb.init();
+  const database = new Database(dbPath);
+  await database.init();
   
   return new Promise((resolve, reject) => {
     db.all('SELECT * FROM users', async (err, rows) => {
@@ -52,9 +52,9 @@ async function migrateFromSQLite(sqlitePath, dbPath) {
       }
       
       try {
-              await jexidb.insertMany(rows);
-      await jexidb.save();
-      await jexidb.destroy();
+      await database.insertMany(rows);
+      await database.save();
+      await database.destroy();
         console.log('Migration completed successfully');
         resolve();
       } catch (error) {
@@ -78,8 +78,8 @@ async function migrateFromMongoDB(mongoUri, collectionName, dbPath) {
   const db = client.db();
   const collection = db.collection(collectionName);
   
-  const jexidb = new Database(dbPath);
-  await jexidb.init();
+  const database = new Database(dbPath);
+  await database.init();
   
   const cursor = collection.find({});
   const batch = [];
@@ -89,17 +89,17 @@ async function migrateFromMongoDB(mongoUri, collectionName, dbPath) {
     batch.push(doc);
     
     if (batch.length >= 1000) {
-      await jexidb.insertMany(batch);
+      await database.insertMany(batch);
       batch.length = 0;
     }
   }
   
   if (batch.length > 0) {
-    await jexidb.insertMany(batch);
+    await database.insertMany(batch);
   }
   
-  await jexidb.save();
-  await jexidb.destroy();
+  await database.save();
+  await database.destroy();
   await client.close();
   
   console.log('Migration completed successfully');

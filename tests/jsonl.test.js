@@ -1,4 +1,4 @@
-const JexiDB = require('../dist/index.js').default;
+const Database = require('../dist/index.js').default;
 const fs = require('fs').promises;
 const path = require('path');
 
@@ -13,7 +13,7 @@ describe('JSONLDatabase', () => {
     testFile = `./test-db-${timestamp}-${randomId}.jsonl`;
 
     // Create new instance with background maintenance disabled
-    db = new JexiDB(testFile, {
+    db = new Database(testFile, {
       indexes: {
         id: 'number',
         email: 'string',
@@ -293,7 +293,7 @@ describe('JSONLDatabase', () => {
   describe('Persistence', () => {
     test('should persist data between instances', async () => {
       // First instance
-      const db1 = new JexiDB(testFile, { indexes: { id: 'number' } });
+      const db1 = new Database(testFile, { indexes: { id: 'number' } });
       await db1.init();
       await db1.insert({ id: 1, name: 'John' });
       await db1.save();
@@ -301,7 +301,7 @@ describe('JSONLDatabase', () => {
       db1.isInitialized = false;
 
       // Second instance
-      const db2 = new JexiDB(testFile, { indexes: { id: 'number' } });
+      const db2 = new Database(testFile, { indexes: { id: 'number' } });
       await db2.init();
       const result = await db2.findOne({ id: 1 });
       expect(result.name).toBe('John');
@@ -311,7 +311,7 @@ describe('JSONLDatabase', () => {
 
   describe('Database Options', () => {
     test('should create database when create is true (default)', async () => {
-      const db = new JexiDB(testFile, { create: true });
+      const db = new Database(testFile, { create: true });
       await db.init();
       expect(db.isInitialized).toBe(true);
       expect(db.length).toBe(0);
@@ -319,34 +319,34 @@ describe('JSONLDatabase', () => {
     });
 
     test('should throw error when create is false and file does not exist', async () => {
-      const db = new JexiDB(testFile, { create: false });
+      const db = new Database(testFile, { create: false });
       await expect(db.init()).rejects.toThrow('Database file does not exist');
     });
 
     test('should clear database when clear is true', async () => {
       // First create a database with some data
-      const db1 = new JexiDB(testFile, { create: true });
+      const db1 = new Database(testFile, { create: true });
       await db1.init();
       await db1.insert({ id: 1, name: 'Test' });
       await db1.save();
       await db1.destroy();
 
       // Now clear it
-      const db2 = new JexiDB(testFile, { clear: true });
+      const db2 = new Database(testFile, { clear: true });
       await db2.init();
       expect(db2.length).toBe(0);
       await db2.destroy();
     });
 
     test('should set create to true when clear is true', async () => {
-      const db = new JexiDB(testFile, { clear: true });
+      const db = new Database(testFile, { clear: true });
       expect(db.options.create).toBe(true);
     });
   });
 
   describe('Column Values', () => {
     test('should get unique values from indexed column', async () => {
-      const db = new JexiDB(testFile, { 
+      const db = new Database(testFile, {
         indexes: { category: 'string', status: 'string' },
         create: true 
       });
@@ -367,7 +367,7 @@ describe('JSONLDatabase', () => {
     });
 
     test('should throw error for non-indexed columns', async () => {
-      const db = new JexiDB(testFile, { create: true });
+      const db = new Database(testFile, { create: true });
       await db.init();
       
       await db.insert({ id: 1, name: 'Alice' });

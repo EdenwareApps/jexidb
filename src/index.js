@@ -183,11 +183,13 @@ class JexiDBCompatibility extends JSONLDatabase {
   }
 
   /**
-   * Compatibility method: walk() -> find() with async iteration
+   * Streaming iterator over records without loading all into memory
+   * Supports a limited subset of options: { limit }
    */
   async *walk(options = {}) {
-    const results = await this.find({}, options);
-    for (const record of results) {
+    // Delegate to core engine streaming implementation
+    // Ensure pending inserts are flushed by calling super.walk
+    for await (const record of super.walk({ limit: options.limit })) {
       yield record;
     }
   }
@@ -266,6 +268,8 @@ class JexiDBCompatibility extends JSONLDatabase {
 
 // Export the compatibility wrapper as default
 export default JexiDBCompatibility;
+// Retrocompat: named export 'Database' (JexiDB v1 used { Database })
+export const Database = JexiDBCompatibility;
 
 // Export auxiliary classes for advanced use
 export { FileHandler, IndexManager, IntegrityChecker };

@@ -1,4 +1,4 @@
-const JexiDB = require('../dist/index.js').default;
+const Database = require('../dist/index.js').default;
 const { utils } = require('../dist/index.js');
 const fs = require('fs').promises;
 const path = require('path');
@@ -128,7 +128,7 @@ describe('JexiDB Utils', () => {
       expect(result.recordCount).toBe(3);
 
       // Verify database works - use the path that was actually created
-      const db = new JexiDB(dbPath, { validateOnInit: false });
+      const db = new Database(dbPath, { validateOnInit: false });
       await db.init();
       
       const allRecords = await db.find({});

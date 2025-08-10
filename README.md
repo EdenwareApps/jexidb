@@ -21,22 +21,18 @@ npm install jexidb
 
 ## 🚀 Quick Start
 
-```javascript
-// import { Database } from 'jexidb'
-const { Database } = require('jexidb');
+### ESM
 
-// Create database with indexes (supports both .jdb and .jsonl)
+```javascript
+import Database from 'jexidb';
+
+// Prefer default import aliased as Database for clarity
 const db = new Database('./users.jdb', {
-  indexes: {
-    id: 'number',
-    email: 'string',
-    age: 'number'
-  },
+  indexes: { id: 'number', email: 'string', age: 'number' },
   autoSave: true,
   validateOnInit: true
 });
 
-// Initialize
 await db.init();
 
 // Event listeners
@@ -45,12 +41,7 @@ db.on('update', (record, index) => console.log(`Record updated at index ${index}
 db.on('save', () => console.log('Changes saved'));
 
 // Insert data
-const user = await db.insert({
-  id: 1,
-  name: 'John Doe',
-  email: 'john@example.com',
-  age: 30
-});
+await db.insert({ id: 1, name: 'John Doe', email: 'john@example.com', age: 30 });
 
 // Search data (both methods work)
 const john = await db.findOne({ id: 1 });
@@ -59,17 +50,29 @@ const youngUsers = await db.find({ age: { '<': 30 } });
 // JexiDB 1.x compatible query
 const results = await db.query({ name: 'john doe' }, { caseInsensitive: true });
 
-// Update data
+// Update / Delete / Save
 await db.update({ id: 1 }, { age: 31 });
-
-// Remove data
 await db.delete({ id: 1 });
-
-// Save changes
 await db.save();
-
-// Destroy database
 await db.destroy();
+```
+
+### CommonJS
+
+```javascript
+const Database = require('jexidb');
+// Alternatively (backward compatible): const { Database } = require('jexidb');
+
+const db = new Database('./users.jdb', {
+  indexes: { id: 'number', email: 'string', age: 'number' }
+});
+
+(async () => {
+  await db.init();
+  await db.insert({ id: 1, name: 'John' });
+  console.log(await db.findOne({ id: 1 }));
+  await db.destroy();
+})();
 ```
 
 ## 📚 API Reference

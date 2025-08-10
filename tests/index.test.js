@@ -1,4 +1,4 @@
-const JexiDB = require('../dist/index.js').default;
+const Database = require('../dist/index.js').default;
 const fs = require('fs').promises;
 const path = require('path');
 
@@ -19,7 +19,7 @@ describe('JexiDB Local Database', () => {
       // Ignore if file doesn't exist
     }
 
-    db = new JexiDB(testDbPath, {
+    db = new Database(testDbPath, {
       indexes: {
         id: 'number',
         email: 'string',

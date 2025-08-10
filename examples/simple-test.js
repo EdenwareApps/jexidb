@@ -1,10 +1,10 @@
 // Simple test to demonstrate readColumnIndex method
-const JexiDB = require('../dist/index.js').default;
+const Database = require('../dist/index.js').default;
 
 async function testReadColumnIndex() {
   console.log('🧪 Testing readColumnIndex Method\n');
 
-  const db = new JexiDB('./test-columns.jdb', { 
+  const db = new Database('./test-columns.jdb', { 
     indexes: { category: 'string', status: 'string' },
     create: true
   });

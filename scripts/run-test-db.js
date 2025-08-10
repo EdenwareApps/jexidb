@@ -8,8 +8,8 @@
 const fs = require('fs').promises;
 const path = require('path');
 
-// Import JexiDB
-const JexiDB = require('../src/index');
+// Import Database
+const Database = require('../src/index');
 
 class TestDatabaseGenerator {
   constructor() {
@@ -70,7 +70,7 @@ class TestDatabaseGenerator {
       } catch (e) {}
 
       // Create database
-      const db = new JexiDB(dbPath, {
+      const db = new Database(dbPath, {
         indexes: {
           id: 'string',
           category: 'string',

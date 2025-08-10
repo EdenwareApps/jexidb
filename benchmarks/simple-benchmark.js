@@ -1,7 +1,7 @@
 // Simple Benchmark: JexiDB Performance Test
 // Focus on core operations performance
 
-import JexiDB from '../src/index.js';
+import Database from '../src/index.js';
 import { promises as fs } from 'fs';
 
 class SimpleBenchmark {
@@ -28,7 +28,7 @@ class SimpleBenchmark {
   }
 
   async benchmarkJexiDB2() {
-    console.log('\n🚀 Benchmarking JexiDB...');
+    console.log('\n🚀 Benchmarking Database...');
     const dbPath = './benchmark-jexidb-2.jsonl';
     
     // Clean up
@@ -36,7 +36,7 @@ class SimpleBenchmark {
       await fs.unlink(dbPath);
     } catch (e) {}
 
-    const db = new JexiDB(dbPath, {
+    const db = new Database(dbPath, {
       indexes: { id: 'number', age: 'number', score: 'number' }
     });
 
@@ -86,18 +86,18 @@ class SimpleBenchmark {
     await db.close();
     results.close = performance.now() - closeStart;
 
-    console.log('✅ JexiDB benchmark completed');
+    console.log('✅ Database benchmark completed');
     return results;
   }
 
   printResults(jexidb2Results) {
     console.log('\n' + '='.repeat(70));
-    console.log('📊 BENCHMARK RESULTS: JexiDB Performance Test');
+    console.log('📊 BENCHMARK RESULTS: Database Performance Test');
     console.log('='.repeat(70));
     
     console.log('\n⏱️  Performance Comparison (Lower is Better):');
     console.log('─'.repeat(70));
-          console.log('Operation'.padEnd(20) + 'JexiDB (ms)'.padEnd(15) + 'Status');
+          console.log('Operation'.padEnd(20) + 'Database (ms)'.padEnd(15) + 'Status');
     console.log('─'.repeat(70));
     
     const operations = ['init', 'bulkInsert', 'save', 'findById', 'findByAge', 'update', 'delete', 'close'];
@@ -105,7 +105,7 @@ class SimpleBenchmark {
     for (const op of operations) {
       if (jexidb2Results[op]) {
         const jexidb2Time = jexidb2Results[op];
-        const status = '✅'; // Always successful for JexiDB
+        const status = '✅';
         
         console.log(
           op.padEnd(20) +
@@ -117,11 +117,11 @@ class SimpleBenchmark {
     
     console.log('\n🚀 Insert Performance:');
     console.log('─'.repeat(70));
-          console.log(`JexiDB: ${jexidb2Results.insertPerSecond} records/second`);
+          console.log(`Database: ${jexidb2Results.insertPerSecond} records/second`);
     
     console.log('\n📊 Query Results:');
     console.log('─'.repeat(70));
-          console.log(`Age >= 25 results: JexiDB=${jexidb2Results.ageResultsCount}`);
+          console.log(`Age >= 25 results: Database=${jexidb2Results.ageResultsCount}`);
     
     // Summary
     console.log('\n📈 Summary:');
@@ -131,7 +131,7 @@ class SimpleBenchmark {
       jexidb2Results[op]
     ).length;
     
-          console.log(`✅ JexiDB is faster in ${fasterOperations}/${operations.length} operations`);
+          console.log(`✅ Completed ${fasterOperations}/${operations.length} operations`);
     
     if (fasterOperations > 0) {
       const avgImprovement = operations
@@ -144,7 +144,7 @@ class SimpleBenchmark {
       console.log(`📊 Average improvement: ${avgImprovement.toFixed(2)}%`);
     }
     
-          console.log('\n🎯 Key Advantages of JexiDB:');
+          console.log('\n🎯 Key Advantages:');
     console.log('─'.repeat(70));
     console.log('• Hybrid architecture (indexed + on-demand reading)');
     console.log('• Batch insert optimization');
@@ -156,7 +156,7 @@ class SimpleBenchmark {
   }
 
   async run() {
-    console.log('🏁 Starting JexiDB Performance Benchmark');
+    console.log('🏁 Starting Database Performance Benchmark');
     console.log(`📊 Test dataset: ${this.testSize.toLocaleString()} records`);
     console.log('⏳ This may take a minute...\n');
     

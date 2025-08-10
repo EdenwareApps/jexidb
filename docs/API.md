@@ -148,7 +148,7 @@ await db.destroy()
 
 ### Query Operators
 
-JexiDB supports MongoDB-style query operators:
+The database supports MongoDB-style query operators:
 
 - `$eq`: Equal to
 - `$ne`: Not equal to
@@ -162,7 +162,7 @@ JexiDB supports MongoDB-style query operators:
 
 ### Nested Field Queries
 
-JexiDB supports querying nested fields using dot notation:
+You can query nested fields using dot notation:
 
 ```javascript
 const results = await db.find({
@@ -204,7 +204,7 @@ JexiDB automatically switches between insertion and query optimization modes bas
 
 ## Error Handling
 
-JexiDB includes comprehensive error handling with automatic recovery:
+Comprehensive error handling with automatic recovery:
 
 - **File corruption recovery**: Repairs corrupted files
 - **Index rebuilding**: Automatically rebuilds corrupted indexes

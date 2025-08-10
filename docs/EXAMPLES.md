@@ -1,11 +1,11 @@
-# JexiDB Usage Examples
+# Database Usage Examples
 
 ## Basic Usage
 
 ### Simple Database
 
 ```javascript
-const { Database } = require('jexidb');
+const Database = require('jexidb');
 
 // Create database
 const db = new Database('./data/users.jsonl');

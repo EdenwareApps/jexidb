@@ -1,4 +1,4 @@
-const JexiDB = require('../src/index');
+const Database = require('../src/index');
 const fs = require('fs').promises;
 const path = require('path');
 
@@ -162,7 +162,7 @@ async function generateTestDatabase(dbPath = './test-database.jdb') {
   
   try {
     // Create database with indexes for common fields
-          const db = new JexiDB(dbPath, {
+          const db = new Database(dbPath, {
       indexes: {
         id: 'number',
         email: 'string',
@@ -295,7 +295,7 @@ async function generateMultipleTestDatabases() {
   for (const dbConfig of databases) {
     console.log(`📝 Creating ${dbConfig.name} database...`);
     
-          const db = new JexiDB(dbConfig.path, {
+          const db = new Database(dbConfig.path, {
       indexes: { id: 'number' },
       autoSave: true
     });

@@ -3,8 +3,8 @@
 const fs = require('fs').promises;
 const path = require('path');
 
-// Import JexiDB
-const JexiDB = require('../dist/index.js').default;
+// Import Database
+const Database = require('../dist/index.js').default;
 
 async function simpleTest() {
   const testFile = './simple-test.jdb';
@@ -20,7 +20,7 @@ async function simpleTest() {
   try {
     // Create database
     console.log('1️⃣ Creating database...');
-    const db = new JexiDB(testFile, {
+    const db = new Database(testFile, {
       indexes: { id: 'number', email: 'string' },
       autoSave: true
     });

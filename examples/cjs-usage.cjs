@@ -1,15 +1,15 @@
-// Example: Using JexiDB with CommonJS
+// Example: Using Database with CommonJS
 // This file demonstrates how to use the library in CommonJS environments
 
-const JexiDB = require('../dist/index.js').default;
+const Database = require('../dist/index.js').default;
 const { utils, OPERATORS } = require('../dist/index.js');
 
 async function exampleCJS() {
-  console.log('🚀 JexiDB CommonJS Example');
+  console.log('🚀 Database CommonJS Example');
   console.log('========================\n');
 
   // Create a new database
-  const db = new JexiDB('./example-cjs.jsonl', {
+  const db = new Database('./example-cjs.jsonl', {
     indexes: {
       id: 'number',
       email: 'string',

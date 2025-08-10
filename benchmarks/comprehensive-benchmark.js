@@ -1,7 +1,7 @@
 // Comprehensive Benchmark: JexiDB Performance Test
 // Large dataset performance test
 
-import JexiDB from '../src/index.js';
+import Database from '../src/index.js';
 import { promises as fs } from 'fs';
 
 class ComprehensiveBenchmark {
@@ -43,7 +43,7 @@ class ComprehensiveBenchmark {
   }
 
   async benchmarkJexiDB() {
-    console.log('\n🚀 Benchmarking JexiDB (Optimized)...');
+    console.log('\n🚀 Benchmarking Database (Optimized)...');
     const dbPath = './benchmark-jexidb-2-comprehensive.jsonl';
     
     // Clean up
@@ -51,7 +51,7 @@ class ComprehensiveBenchmark {
       await fs.unlink(dbPath);
     } catch (e) {}
 
-    const db = new JexiDB(dbPath, {
+    const db = new Database(dbPath, {
       indexes: { 
         id: 'number', 
         age: 'number', 
@@ -148,18 +148,18 @@ class ComprehensiveBenchmark {
     await db.close();
     results.close = performance.now() - closeStart;
 
-    console.log('✅ JexiDB benchmark completed');
+    console.log('✅ Database benchmark completed');
     return results;
   }
 
   printResults(jexidb2Results) {
     console.log('\n' + '='.repeat(80));
-    console.log('📊 COMPREHENSIVE BENCHMARK: JexiDB (Optimized)');
+    console.log('📊 COMPREHENSIVE BENCHMARK: Database (Optimized)');
     console.log('='.repeat(80));
     
     console.log('\n⏱️  Performance Comparison (Lower is Better):');
     console.log('─'.repeat(80));
-          console.log('Operation'.padEnd(20) + 'JexiDB (ms)'.padEnd(15) + 'Status');
+          console.log('Operation'.padEnd(20) + 'Database (ms)'.padEnd(15) + 'Status');
     console.log('─'.repeat(80));
     
     const operations = ['init', 'bulkInsert', 'save', 'findById', 'findByAge', 'findBySalary', 'findByDepartment', 'findByCity', 'complexQuery', 'findBySkills', 'update', 'delete', 'close'];
@@ -179,16 +179,16 @@ class ComprehensiveBenchmark {
     
     console.log('\n🚀 Insert Performance:');
     console.log('─'.repeat(80));
-          console.log(`JexiDB: ${jexidb2Results.insertPerSecond} records/second`);
+          console.log(`Database: ${jexidb2Results.insertPerSecond} records/second`);
     
     console.log('\n📊 Query Results Comparison:');
     console.log('─'.repeat(80));
-    console.log(`Age 30-50: JexiDB 2.0.1=${jexidb2Results.ageResultsCount}`);
-    console.log(`Salary 50k-80k: JexiDB 2.0.1=${jexidb2Results.salaryResultsCount}`);
-    console.log(`Engineering dept: JexiDB 2.0.1=${jexidb2Results.deptResultsCount}`);
-    console.log(`New York city: JexiDB 2.0.1=${jexidb2Results.cityResultsCount}`);
-    console.log(`Complex query: JexiDB 2.0.1=${jexidb2Results.complexResultsCount}`);
-    console.log(`JavaScript skills: JexiDB 2.0.1=${jexidb2Results.skillsResultsCount}`);
+    console.log(`Age 30-50: Database=${jexidb2Results.ageResultsCount}`);
+    console.log(`Salary 50k-80k: Database=${jexidb2Results.salaryResultsCount}`);
+    console.log(`Engineering dept: Database=${jexidb2Results.deptResultsCount}`);
+    console.log(`New York city: Database=${jexidb2Results.cityResultsCount}`);
+    console.log(`Complex query: Database=${jexidb2Results.complexResultsCount}`);
+    console.log(`JavaScript skills: Database=${jexidb2Results.skillsResultsCount}`);
     
     // Summary
     console.log('\n📈 Summary:');
@@ -198,7 +198,7 @@ class ComprehensiveBenchmark {
       jexidb2Results[op]
     ).length;
     
-    console.log(`✅ JexiDB 2.0.1 is faster in ${fasterOperations}/${operations.length} operations`);
+    console.log(`✅ Database shows results for ${fasterOperations}/${operations.length} operations`);
     
     if (fasterOperations > 0) {
       const avgImprovement = operations
@@ -211,7 +211,7 @@ class ComprehensiveBenchmark {
       console.log(`📊 Average improvement: ${avgImprovement.toFixed(2)}ms`);
     }
     
-    console.log('\n🎯 Key Advantages of JexiDB 2.0.1:');
+    console.log('\n🎯 Key Advantages:');
     console.log('─'.repeat(80));
     console.log('• Hybrid architecture (indexed + on-demand reading)');
     console.log('• Batch insert optimization (3.5x faster inserts)');
@@ -232,7 +232,7 @@ class ComprehensiveBenchmark {
   }
 
   async run() {
-    console.log('🏁 Starting Comprehensive JexiDB 2.0.1 Benchmark');
+    console.log('🏁 Starting Comprehensive Database Benchmark');
     console.log(`📊 Test dataset: ${this.testSize.toLocaleString()} employee records`);
     console.log('⏳ This may take a few minutes...\n');
     
