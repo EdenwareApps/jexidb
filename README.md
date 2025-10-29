@@ -1,683 +1,301 @@
-# JexiDB - Pure JavaScript JSONL Database
-
-**JexiDB** is a lightweight, high-performance JSONL (JSON Lines) database for Node.js built in pure JavaScript that provides fast data storage and retrieval with persistent indexing.
-
-## 🚀 Features
-
-- **JSONL Architecture**: Each database is a single JSONL file for simplicity and portability
-- **Persistent Indexes**: Fast searches with disk-persisted indexes that don't need rebuilding
-- **Point Reading**: Efficient memory usage - only reads necessary data
-- **Rich Query API**: Support for complex queries with operators, sorting, and pagination
-- **Intelligent Auto-Save**: Automatic data persistence with configurable thresholds and intervals
-- **Memory-Safe Operations**: Advanced memory management to prevent buffer allocation errors
-- **Event-Driven Monitoring**: Real-time notifications for all database operations
-- **Performance Optimization**: Adaptive batch sizes and memory management
-- **Automatic Integrity Validation**: Built-in data integrity checking and repair
-- **Legacy Compatibility**: Automatic migration from JexiDB 1.x databases
-- **Pure JavaScript**: No native dependencies, works everywhere, easy to deploy
-
-## 📦 Installation
-
-```bash
-npm install jexidb
-```
-
-## 🚀 Quick Start
-
-### ESM
-
-```javascript
-import Database from 'jexidb';
-
-// Prefer default import aliased as Database for clarity
-const db = new Database('./users.jdb', {
-  indexes: { id: 'number', email: 'string', age: 'number' },
-  autoSave: true,
-  validateOnInit: true
-});
-
-await db.init();
-
-// Event listeners
-db.on('insert', (record, index) => console.log(`Record inserted at index ${index}`));
-db.on('update', (record, index) => console.log(`Record updated at index ${index}`));
-db.on('save', () => console.log('Changes saved'));
-
-// Insert data
-await db.insert({ id: 1, name: 'John Doe', email: 'john@example.com', age: 30 });
-
-// Search data (both methods work)
-const john = await db.findOne({ id: 1 });
-const youngUsers = await db.find({ age: { '<': 30 } });
-
-// JexiDB 1.x compatible query
-const results = await db.query({ name: 'john doe' }, { caseInsensitive: true });
-
-// Update / Delete / Save
-await db.update({ id: 1 }, { age: 31 });
-await db.delete({ id: 1 });
-await db.save();
-await db.close();  // or await db.destroy()
-```
-
-### CommonJS
-
-```javascript
-const Database = require('jexidb');
-// Alternatively (backward compatible): const { Database } = require('jexidb');
-
-const db = new Database('./users.jdb', {
-  indexes: { id: 'number', email: 'string', age: 'number' }
-});
-
-(async () => {
-  await db.init();
-  await db.insert({ id: 1, name: 'John' });
-  console.log(await db.findOne({ id: 1 }));
-  await db.close();  // or await db.destroy()
-})();
-```
-
-## 📚 API Reference
-
-### Constructor
-
-```javascript
-const db = new Database(filePath, options);
-```
-
-**Parameters:**
-- `filePath` (string): Path to the main file (.jdb)
-- `options` (object): Configuration options
-
-**Options:**
-```javascript
-{
-  // Core options
-  indexes: {},           // Indexes for fields
-  create: true,          // Create database if it doesn't exist
-  clear: false,          // Clear database on load
-  
-  // Auto-save configuration
-  autoSave: true,        // Enable intelligent auto-save (default: true)
-  autoSaveThreshold: 50, // Flush buffer when it reaches this many records
-  autoSaveInterval: 5000, // Flush buffer every N milliseconds
-  forceSaveOnClose: true, // Always save when closing database
-  
-  // Performance configuration
-  batchSize: 50,         // Batch size for inserts (reduced for faster response)
-  adaptiveBatchSize: true, // Adjust batch size based on usage
-  minBatchSize: 10,      // Minimum batch size for flush
-  maxBatchSize: 200      // Maximum batch size for performance
-}
-```
-
-### Auto-Save Intelligence
-
-JexiDB features intelligent auto-save capabilities that automatically manage data persistence without manual intervention.
-
-#### Auto-Save Modes
-
-**Intelligent Auto-Save (Default):**
-- Automatically flushes buffer when it reaches the threshold (default: 50 records)
-- Automatically flushes buffer every N milliseconds (default: 5000ms)
-- Always saves when closing the database
-- Provides real-time feedback through events
-
-**Manual Mode:**
-- Disable auto-save with `autoSave: false`
-- Manually call `flush()` and `save()` when needed
-- Useful for applications requiring precise control over persistence timing
-
-#### Event-Driven Monitoring
-
-```javascript
-// Monitor auto-save operations
-db.on('buffer-flush', (count) => {
-  console.log(`Flushed ${count} records`);
-});
-
-db.on('buffer-full', () => {
-  console.log('Buffer reached threshold');
-});
-
-db.on('auto-save-timer', () => {
-  console.log('Time-based auto-save triggered');
-});
-
-db.on('save-complete', () => {
-  console.log('Database saved successfully');
-});
-```
-
-#### Buffer Status Monitoring
-
-```javascript
-// Check buffer status anytime
-const status = db.getBufferStatus();
-console.log(`Pending: ${status.pendingCount}/${status.bufferSize}`);
-console.log(`Should flush: ${status.shouldFlush}`);
-console.log(`Auto-save enabled: ${status.autoSaveEnabled}`);
-```
-
-### Memory Management
-
-JexiDB includes advanced memory management features to prevent `RangeError: Array buffer allocation failed` errors in memory-constrained environments.
-
-#### Memory-Safe Configuration
-
-```javascript
-const db = new Database('./data.jdb', {
-  // Memory management
-  memorySafeMode: true,        // Enable memory-safe operations
-  chunkSize: 4 * 1024 * 1024, // 4MB chunks (reduced for low memory)
-  gcInterval: 500,            // Force GC every 500 records
-  maxFlushChunkBytes: 2 * 1024 * 1024, // 2MB max flush chunks
-  
-  // Auto-save with smaller thresholds
-  autoSave: true,
-  autoSaveThreshold: 25,      // Flush more frequently
-  autoSaveInterval: 3000,     // Flush every 3 seconds
-  
-  // Performance with memory constraints
-  batchSize: 25,              // Smaller batches
-  minBatchSize: 5,
-  maxBatchSize: 100
-});
-```
-
-#### Memory-Safe Features
-
-- **Chunked File Processing**: Files are processed in configurable chunks instead of loading entire files in memory
-- **Garbage Collection**: Optional forced garbage collection at configurable intervals
-- **Buffer Management**: Smaller, more frequent buffer flushes to reduce memory pressure
-- **Fallback Strategies**: Graceful degradation when memory is insufficient
-- **Memory Monitoring**: Real-time buffer status and memory usage tracking
-
-#### Best Practices for Memory-Constrained Environments
-
-1. **Use Smaller Chunks**: Set `chunkSize` to 1-4MB for low memory systems
-2. **Enable Garbage Collection**: Set `gcInterval` to 500-1000 for frequent cleanup
-3. **Reduce Batch Sizes**: Use smaller `batchSize` and `autoSaveThreshold`
-4. **Monitor Buffer Status**: Use `getBufferStatus()` to track memory usage
-5. **Enable Memory-Safe Mode**: Set `memorySafeMode: true` (default)
-6. **Use Node.js GC Flag**: Run with `--expose-gc` for manual garbage collection
-
-### Main Methods
-
-#### `init()`
-Initializes the database.
-
-#### `insert(data)`
-Inserts a record.
-
-#### `insertMany(dataArray)`
-Inserts multiple records.
-
-#### `find(criteria, options)` / `query(criteria, options)`
-Searches records with optional criteria. Both methods work identically.
-
-**Supported operators:**
-```javascript
-// Comparison
-{ age: { '>': 25 } }
-{ age: { '>=': 25 } }
-{ age: { '<': 30 } }
-{ age: { '<=': 30 } }
-{ age: { '!=': 25 } }
-
-// Arrays
-{ tags: { in: ['developer', 'admin'] } }
-{ tags: { nin: ['designer'] } }
-
-// Strings
-{ name: { regex: 'john' } }
-{ name: { contains: 'john' } }
-```
-
-**Options:**
-```javascript
-{
-  limit: 10,           // Limit results
-  skip: 5,            // Skip records
-  sort: { age: 1 },   // Sorting (1 = ascending, -1 = descending)
-  caseInsensitive: false,  // Case insensitive matching (query() only)
-  matchAny: false     // OR instead of AND
-}
-```
-
-**JexiDB 1.x Compatibility:**
-```javascript
-// Both work identically
-const results1 = await db.find({ name: 'John' });
-const results2 = await db.query({ name: 'John' });
-
-// Case insensitive query (JexiDB 1.x style)
-const results = await db.query({ name: 'john' }, { caseInsensitive: true });
-```
-
-#### `findOne(criteria, options)`
-Searches for one record.
-
-#### `update(criteria, updateData, options)`
-Updates records.
-
-#### `delete(criteria, options)`
-Removes records.
-
-**Delete options:**
-```javascript
-{
-  physical: false,  // Physically remove instead of marking as deleted
-  limit: 1         // Limit number of records to delete
-}
-```
-
-#### `count(criteria, options)`
-Counts records.
-
-#### `save()`
-Saves pending changes.
-
-#### `flush()`
-Flushes the insertion buffer to disk immediately.
-
-#### `forceSave()`
-Forces a save operation regardless of buffer size.
-
-#### `getBufferStatus()`
-Gets information about the current buffer state.
-
-#### `configurePerformance(settings)`
-Dynamically configures performance settings.
-
-#### `getPerformanceConfig()`
-Gets current performance configuration.
-
-#### `close()`
-Closes the database instance and saves pending changes.
-
-#### `destroy()`
-Closes the database instance and saves pending changes (equivalent to close()).
-
-```javascript
-await db.destroy()  // Same as: await db.close()
-```
-
-#### `deleteDatabase()`
-**⚠️ WARNING: This permanently deletes the database file!**
-
-Deletes the database file from disk and closes the instance.
-
-```javascript
-await db.deleteDatabase()  // Deletes the database file permanently
-```
-
-#### `removeDatabase()`
-Removes the database file from disk (alias for deleteDatabase).
-
-```javascript
-await db.removeDatabase()  // Same as: await db.deleteDatabase()
-```
-
-#### `validateIntegrity(options)`
-Validates database integrity.
-
-#### `rebuildIndexes(options)`
-Rebuilds indexes.
-
-#### `getStats()`
-Gets detailed statistics.
-
-### `walk()` Iterator
-
-For traversing large volumes of data:
-
-```javascript
-// Traverse all records
-for await (const record of db.walk()) {
-  console.log(record.name);
-}
-
-// With options
-for await (const record of db.walk({ 
-  limit: 100, 
-  skip: 50, 
-  includeDeleted: false 
-})) {
-  console.log(record.name);
-}
-```
-
-### Properties
-
-#### `length`
-Total number of records.
-
-#### `indexStats`
-Index statistics.
-
-### Events
-
-```javascript
-// Core events
-db.on('init', () => console.log('Database initialized'));
-db.on('insert', (record, index) => console.log('Record inserted'));
-db.on('update', (record, index) => console.log('Record updated'));
-db.on('delete', (record, index) => console.log('Record deleted'));
-db.on('before-save', () => console.log('Before save'));
-db.on('save', () => console.log('Save completed'));
-db.on('close', () => console.log('Database closed'));
-db.on('destroy', () => console.log('Database destroyed'));
-db.on('delete-database', () => console.log('Database file deleted'));
-
-// Auto-save events
-db.on('buffer-flush', (count) => console.log(`Buffer flushed: ${count} records`));
-db.on('buffer-full', () => console.log('Buffer reached threshold'));
-db.on('auto-save-timer', () => console.log('Time-based auto-save triggered'));
-db.on('save-complete', () => console.log('Save operation completed'));
-db.on('close-save-complete', () => console.log('Database closed with final save'));
-db.on('close', () => console.log('Database closed'));
-db.on('performance-configured', (config) => console.log('Performance reconfigured'));
-```
-
-## 📁 File Structure
-
-For each database, 2 files are created:
-
-```
-users.jdb            # Data (JSON Lines format)
-users.idx.jdb        # Compressed persistent indexes
-```
-
-### 🔄 Legacy Compatibility
-
-JexiDB automatically detects and migrates JexiDB 1.x files:
-
-**Legacy Format (JexiDB 1.x):**
-```
-users.jsonl          # Data + indexes + offsets in single file
-```
-
-**New Format (JexiDB):**
-```
-users.jdb            # Data + offsets
-users.idx.jdb        # Compressed indexes
-```
-
-
-
-### 🚀 Persistent Indexes
-
-JexiDB implements **persistent indexes** that are saved to disk:
-
-**Benefits:**
-- **Fast startup**: No need to read all data to rebuild indexes
-- **Scalable**: Works well with large databases (100k+ records)
-- **Consistent**: Indexes synchronized with data
-- **Portable**: Only 2 files to manage
-- **Compressed**: Indexes compressed using gzip
-
-**🔧 How it works:**
-1. **First open**: Indexes are built by reading data
-2. **Save**: Indexes are persisted and compressed to `users.idx.jdb`
-3. **Reopen**: Indexes are loaded instantly from disk
-4. **Fallback**: If index file is corrupted, rebuilds automatically
-
-### JSONL Format
-
-Each line is a valid JSON record:
-
-```json
-{"id":1,"name":"John","email":"john@example.com","_created":"2024-12-19T10:00:00.000Z","_updated":"2024-12-19T10:00:00.000Z"}
-{"id":2,"name":"Jane","email":"jane@example.com","_created":"2024-12-19T10:01:00.000Z","_updated":"2024-12-19T10:01:00.000Z"}
-```
-
-## 🔍 Advanced Examples
-
-### Complex Search
-
-```javascript
-// Young users from New York who are developers
-const users = await db.find({
-  age: { '<': 30 },
-  'profile.city': 'New York',
-  tags: { in: ['developer'] }
-}, {
-  sort: { age: 1 },
-  limit: 10
-});
-```
-
-### Batch Update
-
-```javascript
-// Update age of all users from a city
-const updated = await db.update(
-  { 'profile.city': 'New York' },
-  { 'profile.country': 'USA' }
-);
-```
-
-### Integrity Validation
-
-```javascript
-// Validate integrity with details
-const integrity = await db.validateIntegrity({
-  checkData: true,
-  checkIndexes: true,
-  checkOffsets: true,
-  verbose: true
-});
-
-if (!integrity.isValid) {
-  console.log('Errors:', integrity.errors);
-  console.log('Warnings:', integrity.warnings);
-}
-```
-
-### Detailed Statistics
-
-```javascript
-const stats = await db.getStats();
-console.log('File size:', stats.file.size);
-console.log('Total records:', stats.summary.totalRecords);
-console.log('Indexes:', stats.indexes.indexCount);
-```
-
-## 🧪 Tests
-
-```bash
-npm test
-```
-
-**Automatic Cleanup**: The test script automatically removes all test files after execution to keep the project directory clean.
-
-**Manual Cleanup**: If you need to clean up test files manually:
-```bash
-npm run test:clean
-```
-
-**Available Test Scripts**:
-- `npm test` - Run all tests with automatic cleanup
-- `npm run test:watch` - Run tests in watch mode
-- `npm run test:clean` - Clean up test files manually
-- `npm run test:optimized` - Run optimized performance tests
-- `npm run test:parallel` - Run tests in parallel
-- `npm run test:fast` - Run fast tests without isolation
-
-## 📈 Performance
-
-### JSONL Features
-
-- **Point reading**: Only reads necessary lines
-- **In-memory indexes**: Fast search by indexed fields
-- **No complete parsing**: Doesn't load entire file into memory
-- **Large volume support**: Scales with millions of records
-
-### Comparison: JexiDB vs 1.x
-
-| Feature | JexiDB | JexiDB 1.x |
-|---------|---------------|------------|
-| Safe truncation | ✅ | ❌ |
-| Consistent offsets | ✅ | ❌ |
-| Integrity validation | ✅ | ❌ |
-| Isolated tests | ✅ | ❌ |
-| No V8 dependency | ✅ | ❌ |
-| Similar API | ✅ | ✅ |
-
-## 🔧 Utilities
-
-```javascript
-const { utils } = require('jexidb');
-
-// Validate JSONL file
-const validation = await utils.validateJSONLFile('./data.jsonl');
-
-// Convert JSON to JSONL (basic)
-await utils.convertJSONToJSONL('./data.json', './data.jsonl');
-
-// Convert JSONL to JSON
-await utils.convertJSONLToJSON('./data.jsonl', './data.json');
-
-// Create JexiDB database with automatic indexes
-const result = await utils.createDatabaseFromJSON('./users.json', './users.jsonl', {
-  autoDetectIndexes: true,
-  autoIndexFields: ['id', 'email', 'name', 'username']
-});
-
-// Analyze JSON and suggest optimal indexes
-const analysis = await utils.analyzeJSONForIndexes('./users.json', 100);
-console.log('Recommended indexes:', analysis.suggestions.recommended);
-
-// Migrate from JexiDB 1.x to JexiDB
-await utils.migrateFromJexiDB('./jexidb-v1-database', './users.jsonl');
-```
-
-### 🔍 **How Utilities Work**
-
-#### **1. Basic Conversion (No Indexes)**
-```javascript
-// Only converts format - DOES NOT add indexes
-await utils.convertJSONToJSONL('./data.json', './data.jsonl');
-```
-- ✅ Converts JSON to JSONL
-- ❌ **DOES NOT create indexes**
-- ❌ **DOES NOT create JexiDB database**
-- ✅ Pure JSONL file
-
-#### **2. Database Creation with Automatic Indexes**
-```javascript
-// Create complete JexiDB database with indexes
-const result = await utils.createDatabaseFromJSON('./users.json', './users.jsonl', {
-  autoDetectIndexes: true,
-  autoIndexFields: ['id', 'email', 'name']
-});
-
-console.log(result);
-// {
-//   success: true,
-//   recordCount: 1000,
-//   indexes: ['id', 'email', 'name'],
-//   dbPath: './users.jsonl'
-// }
-```
-- ✅ Converts JSON to JSONL
-- ✅ **Creates indexes automatically**
-- ✅ **Creates complete JexiDB database**
-- ✅ File ready for use
-
-#### **3. Intelligent Index Analysis**
-```javascript
-// Analyze data and suggest optimal indexes
-const analysis = await utils.analyzeJSONForIndexes('./users.json');
-
-console.log('Recommended:', analysis.suggestions.recommended);
-// [
-//   { field: 'id', type: 'number', coverage: 100, uniqueness: 100 },
-//   { field: 'email', type: 'string', coverage: 95, uniqueness: 98 }
-// ]
-```
-
-
-
-## 🔄 Migration from JexiDB 1.x
-
-### Seamless Migration
-
-JexiDB is **fully backward compatible** with JexiDB 1.x! You can use the same API:
-
-```javascript
-// JexiDB 1.x code works unchanged in JexiDB
-import { Database } from 'jexidb';
-
-const db = new Database('./database.jdb', { 
-  indexes: { id: 'number', name: 'string' }
-});
-await db.init();
-
-// All JexiDB 1.x methods work:
-await db.insert({ id: 1, name: 'John Doe' });
-const results = await db.query({ name: 'John Doe' }, { caseInsensitive: true });
-await db.update({ id: 1 }, { name: 'John Smith' });
-await db.delete({ id: 1 });
-await db.save();
-```
-
-### File Format Support
-
-JexiDB supports both file formats:
-- **`.jdb`** (preferred) - JexiDB's branded extension
-- **`.jsonl`** (standard) - JSON Lines format
-
-```javascript
-// Both work identically:
-const db1 = new Database('./users.jdb', { indexes: { id: 'number' } });
-const db2 = new Database('./users.jsonl', { indexes: { id: 'number' } });
-```
-
-### Key Improvements
-
-| Feature | JexiDB 1.x | JexiDB |
-|---------|------------|--------------|
-| **API Compatibility** | Original | ✅ **100% Backward Compatible** |
-| **Query Methods** | `db.query()` | ✅ `db.query()` + `db.find()` |
-| **File Format** | `.jdb` (proprietary) | ✅ `.jdb` + `.jsonl` support |
-| **Performance** | Basic | ✅ **10-100x faster** |
-| **Memory Usage** | Higher | ✅ **25% less memory** |
-| **Data Integrity** | Basic | ✅ **Advanced validation** |
-
-## 📝 Changelog
-
-See [CHANGELOG.md](CHANGELOG.md) for complete change history.
-
-## 🤝 Contributing
-
-1. Fork the project
-2. Create a branch for your feature
-3. Commit your changes
-4. Push to the branch
-5. Open a Pull Request
-
-## 📄 License
-
-MIT License - see [LICENSE](LICENSE) for details.
-
----
-
-## 🎯 About JexiDB
-
-JexiDB maintains the original JexiDB philosophy while fixing bugs and implementing a more robust architecture.
-
-### 🚀 Performance
-
-**JexiDB** performance compared to version 1.x:
-
-- **Find operations**: 103x faster
-- **Update operations**: 26x faster  
-- **Insert operations**: 6-11x faster
-- **Memory usage**: 25% less memory
+# JexiDB
 
 <p align="center">
-  <img width="420" src="https://edenware.app/jexidb/images/jexi-mascot.webp" alt="JexiDB mascot" title="JexiDB mascot" />
+  <img width="270" src="https://edenware.app/jexidb/images/jexidb-logo-icon.jpg" alt="JexiDB logo" title="JexiDB logo" />
 </p>
+
+## Overview
+
+JexiDB is a high-performance, in-memory database with persistence capabilities. It provides advanced indexing, querying, and term mapping features for efficient data operations. Ideal for local Node.js projects as well as apps built with Electron or NW.js. Written in pure JavaScript, it requires no compilation and is compatible with both CommonJS and ESM modules.
+
+**Key Features:**
+- In-memory storage with optional persistence
+- Advanced indexing and querying capabilities  
+- Term mapping for efficient storage and querying
+- Bulk update operations with `iterate()` method
+- Manual save functionality (auto-save removed for better control)
+- Transaction support with operation queuing
+- Recovery mechanisms for data integrity
+
+## Installation
+
+To install JexiDB, you can use npm:
+
+```bash
+npm install EdenwareApps/jexidb
+```
+
+## Usage
+
+### Creating a Database Instance
+
+To create a new instance of the database, you need to provide a file path where the database will be stored and an optional configuration object for indexes.
+
+```javascript
+// const { Database } = require('jexidb'); // commonjs
+
+import { Database } from 'jexidb'; // ESM
+
+const db = new Database('path/to/database.jdb', {
+  create: true,                    // Create file if doesn't exist (default: true)
+  clear: false,                    // Clear existing files before loading (default: false)
+  
+  // REQUIRED - Define your schema structure
+  fields: {
+    id: 'number',
+    name: 'string',
+    email: 'string',
+    tags: 'array:string'
+  },
+  
+  // OPTIONAL - Performance optimization (only fields you query frequently)
+  indexes: {
+    name: 'string',               // ✅ Search by name
+    tags: 'array:string'          // ✅ Search by tags
+  }
+  
+  // termMapping is now auto-enabled for array:string fields
+});
+```
+#### Constructor Options
+
+- **create** (boolean, default: `true`): Controls whether the database file should be created if it doesn't exist.
+  - `true`: Creates the file if it doesn't exist (default behavior)
+  - `false`: Throws an error if the file doesn't exist
+
+- **clear** (boolean, default: `false`): Controls whether to clear existing database files before loading.
+  - `true`: Deletes both the main database file (.jdb) and index file (.idx.jdb) if they exist, then starts with a clean database
+  - `false`: Loads existing data from files (default behavior)
+
+You can [learn a bit more about these options at this link](https://github.com/EdenwareApps/jexidb/tree/main/test#readme).
+
+
+### Initializing the Database
+
+Before using the database, you need to initialize it. This will load the existing data and indexes from the file.
+
+```javascript
+await db.init();
+```
+Only the values ​​specified as indexes are kept in memory for faster queries. JexiDB will never load the entire file into memory.
+
+
+### Inserting Data
+
+You can insert data into the database by using the `insert` method. The data should be an object that contains the defined indexes. All object values will be saved into database.
+
+```javascript
+await db.insert({ id: 1, name: 'John Doe' });
+await db.insert({ id: 2, name: 'Jane Doe', anyArbitraryField: '1' });
+```
+
+### Querying Data
+
+The `query` method allows you to retrieve data based on specific criteria. You can specify criteria for multiple fields.
+
+```javascript
+const results = await db.query({ name: 'John Doe' }, { caseInsensitive: true });
+console.log(results); // [{ id: 1, name: 'John Doe' }]
+```
+
+Note: For now the query should be limited to using the fields specified as 'indexes' when instantiating the class.
+
+#### Querying with Conditions
+
+You can use conditions to perform more complex queries:
+
+```javascript
+const results = await db.query({ id: { '>': 1 } });
+console.log(results); // [{ id: 2, name: 'Jane Doe' }]
+```
+
+### Updating Data
+
+To update existing records, use the `update` method with the criteria to find the records and the new data.
+
+```javascript
+await db.update({ id: 1 }, { name: 'John Smith' });
+```
+
+### Deleting Data
+
+You can delete records that match certain criteria using the `delete` method.
+
+```javascript
+const deletedCount = await db.delete({ name: 'Jane Doe' });
+console.log(`Deleted ${deletedCount} record(s).`);
+```
+
+### Iterating Through Records
+
+You can iterate through records in the database using the `walk` method, which returns an async generator.
+
+```javascript
+for await (const record of db.walk()) {
+  console.log(record);
+}
+```
+
+### Saving Changes
+
+After making any changes to the database, you need to save them using the `save` method. This will persist the changes to disk.
+
+```javascript
+await db.save();
+```
+
+## Testing
+
+JexiDB includes a comprehensive test suite built with Jest. To run the tests:
+
+```bash
+# Run all tests
+npm test
+
+# Run tests in watch mode (for development)
+npm test:watch
+
+# Run tests with coverage report
+npm test:coverage
+
+# Run legacy test suite (original Mortal Kombat themed tests)
+npm run test:legacy
+```
+
+The test suite includes:
+- **Database Tests**: Complete CRUD operations, querying, indexing, and persistence
+- **IndexManager Tests**: Index creation, querying with various operators, and data management
+- **Serializer Tests**: JSON serialization/deserialization with various data types
+
+All database operations ensure that the `_` property (position index) is always included in returned results.
+
+## Bulk Operations with `iterate()`
+
+The `iterate()` method provides high-performance bulk update capabilities with streaming support:
+
+```javascript
+// Basic bulk update
+for await (const entry of db.iterate({ category: 'fruits' })) {
+  entry.price = entry.price * 1.1 // 10% price increase
+  entry.lastUpdated = new Date().toISOString()
+}
+
+// Advanced options with progress tracking
+for await (const entry of db.iterate(
+  { status: 'active' },
+  {
+    chunkSize: 1000,
+    progressCallback: (progress) => {
+      console.log(`Processed: ${progress.processed}, Modified: ${progress.modified}`)
+    }
+  }
+)) {
+  entry.processed = true
+}
+```
+
+**Key Benefits:**
+- **Streaming Performance**: Process large datasets without loading everything into memory
+- **Bulk Updates**: Modify multiple records in a single operation
+- **Automatic Change Detection**: Automatically detects which records were modified
+- **Progress Tracking**: Optional progress callbacks for long-running operations
+
+## 🔄 Migration Guide (1.x.x → 2.1.0)
+
+### ⚠️ Important: Database Files Are NOT Compatible
+
+**Existing `.jdb` files from version 1.x.x will NOT work with version 2.1.0.**
+
+### Step 1: Export Data from 1.x.x
+
+```javascript
+// In your 1.x.x application
+const oldDb = new Database('old-database.jdb', {
+  indexes: { name: 'string', tags: 'array:string' }
+})
+
+await oldDb.init()
+const allData = await oldDb.find({}) // Export all data
+await oldDb.destroy()
+```
+
+### Step 2: Update Your Code
+
+```javascript
+// ❌ OLD (1.x.x)
+const db = new Database('db.jdb', {
+  indexes: { name: 'string', tags: 'array:string' }
+})
+
+// ✅ NEW (2.1.0)
+const db = new Database('db.jdb', {
+  fields: {                    // REQUIRED - Define schema
+    id: 'number',
+    name: 'string',
+    tags: 'array:string'
+  },
+  indexes: {                   // OPTIONAL - Performance optimization
+    name: 'string',            // ✅ Search by name
+    tags: 'array:string'       // ✅ Search by tags
+  }
+})
+```
+
+### Step 3: Import Data to 2.1.0
+
+```javascript
+// In your 2.1.0 application
+const newDb = new Database('new-database.jdb', {
+  fields: { /* your schema */ },
+  indexes: { /* your indexes */ }
+})
+
+await newDb.init()
+
+// Import all data
+for (const record of allData) {
+  await newDb.insert(record)
+}
+
+await newDb.save()
+```
+
+### Key Changes Summary
+
+| Feature | 1.x.x | 2.1.0 |
+|---------|-------|-------|
+| `fields` | Optional | **MANDATORY** |
+| `termMapping` | `false` (default) | `true` (default) |
+| `termMappingFields` | Manual config | Auto-detected |
+| Database files | Compatible | **NOT compatible** |
+| Performance | Basic | **77% size reduction** |
+
+## 📚 Documentation
+
+For comprehensive documentation and examples:
+
+- **[📖 Full Documentation](docs/README.md)** - Complete documentation index
+- **[🔧 API Reference](docs/API.md)** - Detailed API documentation
+- **[💡 Examples](docs/EXAMPLES.md)** - Practical examples and use cases
+- **[🚀 Getting Started](docs/README.md#quick-start)** - Quick start guide
+
+### Key Features Documentation
+
+- **[Bulk Operations](docs/API.md#bulk-operations)** - High-performance `iterate()` method
+- **[Term Mapping](docs/API.md#term-mapping)** - Optimize storage for repetitive data
+- **[Query Operators](docs/API.md#query-operators)** - Advanced querying capabilities
+- **[Performance Tips](docs/API.md#best-practices)** - Optimization strategies
+
+## Conclusion
+
+JexiDB provides a simple yet powerful way to store and manage data in JavaScript applications. With its indexing and querying features, you can build efficient data-driven applications.
+
+<p align="center">
+  <img width="380" src="https://edenware.app/jexidb/images/jexidb-mascot3.jpg" alt="JexiDB mascot" title="JexiDB mascot" />
+</p>
+
+# Contributing
+
+Please, feel free to contribute to the project by opening a discussion under Issues section or sending your PR.
+
+If you find this library useful, please consider making a donation of any amount via [PayPal by clicking here](https://www.paypal.com/donate/?item_name=megacubo.tv&cmd=_donations&business=efox.web%40gmail.com) to help the developer continue to dedicate himself to the project. ❤

@@ -1,184 +1,194 @@
-# JexiDB - High-Performance Local JSONL Database
+# JexiDB Documentation
 
-[![Tests](https://img.shields.io/badge/tests-71%2F71%20passing-brightgreen)](https://github.com/jexidb/jexidb)
-[![Performance](https://img.shields.io/badge/performance-10k%20ops%2Fsec-brightgreen)](https://github.com/jexidb/jexidb)
-[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+Welcome to the JexiDB documentation! This directory contains comprehensive guides and references for using JexiDB effectively.
 
-JexiDB is a high-performance, local JSONL database with intelligent optimizations, real compression, and comprehensive error handling. Perfect for Electron apps, Node.js applications, and any scenario requiring fast local data storage.
+## 📚 Documentation Structure
 
-## ✨ Features
+### 🚀 [API Reference](API.md)
+Complete API documentation covering all methods, options, and features:
+- Database constructor and configuration
+- Core methods (insert, update, delete, find)
+- Advanced features (term mapping, bulk operations)
+- Query operators and complex queries
+- Performance optimization tips
 
-- 🚀 **High Performance**: 10,000+ ops/sec for bulk operations
-- 🧠 **Intelligent Optimizations**: Adaptive mode switching and query optimization
-- 📦 **Real Compression**: LZ4 and Gzip compression with automatic fallback
-- 🛡️ **Error Recovery**: Comprehensive error handling with automatic recovery
-- 🔍 **Advanced Queries**: MongoDB-style query operators and nested field support
-- 📊 **Performance Monitoring**: Built-in statistics and optimization recommendations
-- 🎯 **Zero Dependencies**: Pure JavaScript implementation
-- 🔧 **Production Ready**: 100% test coverage and comprehensive documentation
+### 💡 [Examples](EXAMPLES.md)
+Practical examples and real-world use cases:
+- Basic usage patterns
+- User management systems
+- Product catalogs
+- Blog systems
+- Analytics dashboards
+- Performance optimization techniques
+- Error handling strategies
 
-## 🚀 Quick Start
+## 🎯 Quick Start
 
-### Installation
+If you're new to JexiDB, start with these resources:
 
-```bash
-npm install jexidb
-```
+1. **Installation**: See the main [README.md](../README.md) for installation instructions
+2. **Basic Usage**: Check out the [Basic Usage](EXAMPLES.md#basic-usage) section in Examples
+3. **API Reference**: Browse the [API Reference](API.md) for detailed method documentation
+4. **Advanced Features**: Explore [Term Mapping](API.md#term-mapping) and [Bulk Operations](API.md#bulk-operations)
 
-### Basic Usage
+## 🔍 What's New
 
+### Recent Features
+- **Term Mapping**: Reduce database size by up to 77% for repetitive data
+- **Bulk Operations**: High-performance `iterate()` method for large datasets
+- **Advanced Querying**: Support for complex queries with logical operators
+- **Indexed Query Modes**: Strict and permissive query modes for performance control
+
+### Performance Improvements
+- Streaming operations for memory efficiency
+- Automatic term cleanup
+- Optimized indexing strategies
+- Batch processing capabilities
+
+## 📖 Key Concepts
+
+### Indexes
+Define which fields to keep in memory for fast queries:
 ```javascript
-const { Database } = require('jexidb');
-
-// Create database
-const db = new Database('./data/users.jsonl', {
-  indexes: { id: true, email: true }
-});
-
-// Initialize
-await db.init();
-
-// Insert data
-await db.insert({ id: '1', name: 'John', email: 'john@example.com' });
-
-// Find data
-const user = await db.findOne({ id: '1' });
-const users = await db.find({ name: { $regex: /john/i } });
-
-// Update data
-await db.update({ id: '1' }, { name: 'John Updated' });
-
-// Delete data
-await db.delete({ id: '1' });
-
-// Save and cleanup
-await db.save();
-await db.destroy();
-```
-
-## 📚 Documentation
-
-- [API Reference](docs/API.md) - Complete API documentation
-- [Usage Examples](docs/EXAMPLES.md) - Practical examples and patterns
-- [Performance Guide](docs/PERFORMANCE.md) - Optimization strategies
-- [Migration Guide](docs/MIGRATION.md) - Migrating from other databases
-
-## 🏗️ Architecture
-
-JexiDB is built with a modular architecture:
-
-- **Database**: Main database class with CRUD operations
-- **FileHandler**: Efficient file I/O with batch operations
-- **IndexManager**: Intelligent indexing with multiple strategies
-- **QueryOptimizer**: Query optimization and execution planning
-- **CompressionManager**: Real compression with LZ4 and Gzip
-- **CacheManager**: Intelligent caching with adaptive eviction
-- **ErrorHandler**: Comprehensive error recovery and logging
-- **BackgroundMaintenance**: Non-blocking maintenance operations
-
-## 🎯 Performance
-
-### Benchmarks
-
-| Operation | Throughput | Latency |
-|-----------|------------|---------|
-| Bulk Insert | 10,000 ops/sec | <1ms |
-| Single Insert | 1,000 ops/sec | <5ms |
-| Indexed Query | 5,000 ops/sec | <2ms |
-| Update | 1,000 ops/sec | <10ms |
-| Delete | 1,000 ops/sec | <10ms |
-
-### Compression
-
-- **LZ4**: 30-50% size reduction, very fast
-- **Gzip**: 20-40% size reduction, good compression
-- **Automatic**: Age-based compression strategy
-
-## 🔧 Configuration
-
-```javascript
-const db = new Database('./data.jsonl', {
-  // Indexes
-  indexes: {
-    id: true,
-    email: true,
-    'metadata.created': true
+const db = new Database('app.jdb', {
+  fields: {                    // REQUIRED - Define schema
+    id: 'number',
+    name: 'string',
+    email: 'string'
   },
-  
-  // Behavior
-  markDeleted: true,
-  autoSave: true,
-  validateOnInit: false,
-  backgroundMaintenance: true,
-  
-  // Performance
-  cache: {
-    maxSize: 1000,
-    ttl: 300000
-  },
-  
-  // Compression
-  compression: {
-    hot: { type: 'none', threshold: 7 },
-    warm: { type: 'lz4', threshold: 30 },
-    cold: { type: 'gzip', threshold: Infinity }
-  },
-  
-  // Error handling
-  errorHandler: {
-    logLevel: 'info',
-    enableRecovery: true
+  indexes: {                    // OPTIONAL - Only fields you query frequently
+    email: 'string'            // ✅ Login queries
   }
-});
+})
 ```
 
-## 🧪 Testing
-
-```bash
-# Run all tests
-npm test
-
-# Run benchmarks
-npm run benchmark-performance
-npm run benchmark-compression
-
-# Generate test data
-npm run generate-test-db
-```
-
-## 📊 Monitoring
-
+### Term Mapping
+Optimize storage for repetitive string data:
 ```javascript
-// Get comprehensive statistics
-const stats = await db.getStats();
-console.log(`Records: ${stats.recordCount}`);
-console.log(`File size: ${stats.fileSize} bytes`);
-console.log(`Cache hit rate: ${stats.cacheStats.hitRate}%`);
-
-// Get optimization recommendations
-const recommendations = db.getOptimizationRecommendations();
-console.log('Optimization tips:', recommendations);
+const db = new Database('app.jdb', {
+  fields: {                    // REQUIRED - Define schema
+    id: 'number',
+    name: 'string',
+    tags: 'array:string',
+    categories: 'array:string'
+  }
+  // termMapping is now auto-enabled for array:string fields
+})
 ```
 
-## 🤝 Contributing
+### Bulk Operations
+Process large datasets efficiently:
+```javascript
+for await (const record of db.iterate({ status: 'pending' })) {
+  record.status = 'processed'
+  record.updatedAt = Date.now()
+}
+```
+
+## 🛠️ Common Patterns
+
+### Database Lifecycle
+```javascript
+const db = new Database('my-app.jdb', options)
+await db.init()        // Initialize
+// ... use database ...
+await db.save()        // Save changes
+await db.destroy()     // Clean up
+```
+
+### Error Handling
+```javascript
+try {
+  await db.init()
+  await db.insert(data)
+  await db.save()
+} catch (error) {
+  console.error('Database error:', error)
+} finally {
+  await db.destroy()
+}
+```
+
+### Query Patterns
+```javascript
+// Simple queries
+const users = await db.find({ status: 'active' })
+
+// Complex queries
+const results = await db.find({
+  age: { '>': 18, '<': 65 },
+  $or: [
+    { role: 'admin' },
+    { role: 'moderator' }
+  ]
+})
+
+// Case-insensitive search
+const results = await db.find(
+  { name: 'john doe' },
+  { caseInsensitive: true }
+)
+```
+
+## 🔧 Configuration Options
+
+### Basic Configuration
+```javascript
+const db = new Database('database.jdb', {
+  create: true,           // Create file if doesn't exist
+  clear: false,           // Clear existing data
+  fields: {                // REQUIRED - Define schema
+    id: 'number',
+    name: 'string'
+  },
+  indexes: {              // OPTIONAL - Only fields you query frequently
+    name: 'string'        // ✅ Search by name
+  },
+  indexedQueryMode: 'permissive'  // Query mode
+})
+```
+
+### Advanced Configuration
+```javascript
+const db = new Database('database.jdb', {
+  fields: {                        // REQUIRED - Define schema
+    id: 'number',
+    name: 'string',
+    tags: 'array:string'
+  },
+  indexes: {                      // OPTIONAL - Only fields you query frequently
+    name: 'string',              // ✅ Search by name
+    tags: 'array:string'         // ✅ Search by tags
+  }
+  // termMapping is now auto-enabled for array:string fields
+})
+```
+
+## 📊 Performance Tips
+
+1. **Use indexed fields** in your queries for best performance
+2. **Enable term mapping** for datasets with repetitive strings
+3. **Use `iterate()`** for bulk operations on large datasets
+4. **Specify fewer indexes** to reduce memory usage
+5. **Use `save()`** strategically to persist changes
+
+## 🆘 Getting Help
+
+- **Issues**: Report bugs and request features on [GitHub Issues](https://github.com/EdenwareApps/jexidb/issues)
+- **Documentation**: Browse this documentation for detailed guides
+- **Examples**: Check out the [Examples](EXAMPLES.md) for practical use cases
+- **API Reference**: Consult the [API Reference](API.md) for method details
+
+## 📝 Contributing
+
+Found an issue with the documentation? Want to add an example?
 
 1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests for new functionality
-5. Run the test suite
-6. Submit a pull request
+2. Make your changes
+3. Submit a pull request
 
-## 📄 License
-
-MIT License - see [LICENSE](LICENSE) for details.
-
-## 🙏 Acknowledgments
-
-- Inspired by JexiDB but with significant improvements
-- Built with performance and reliability in mind
-- Designed for real-world production use
+We welcome contributions to improve the documentation!
 
 ---
 
-**JexiDB** - Fast, reliable, and intelligent local database storage.
+**Happy coding with JexiDB! 🚀**

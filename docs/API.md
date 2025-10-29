@@ -1,452 +1,1051 @@
-# JexiDB API Reference
+# JexiDB API Documentation
 
-## Overview
+## ⚠️ Version 2.1.0 - Breaking Changes
 
-JexiDB is a high-performance, local JSONL database with intelligent optimizations, real compression, and comprehensive error handling.
+**This version is NOT backward compatible with databases created with previous versions (1.x.x).**
 
-## Core Classes
+### Major Changes:
+- **`fields` is now MANDATORY** - Define your schema structure
+- **Term mapping is auto-enabled** - No manual configuration needed
+- **Database files are incompatible** - Export/import required for migration
+- **Performance improvements** - Up to 77% size reduction for repetitive data
 
-### Database
+## Table of Contents
 
-The main database class that provides CRUD operations with intelligent optimizations.
+1. [Database Constructor](#database-constructor)
+2. [Core Methods](#core-methods)
+3. [Query Methods](#query-methods)
+4. [Advanced Features](#advanced-features)
+5. [Term Mapping](#term-mapping)
+6. [Bulk Operations](#bulk-operations)
+7. [Configuration Options](#configuration-options)
+8. [Migration Guide](#migration-guide)
 
-#### Constructor
+## Database Constructor
 
 ```javascript
-new Database(filePath, options = {})
+import { Database } from 'jexidb'
+
+const db = new Database('path/to/database.jdb', options)
 ```
 
-**Parameters:**
-- `filePath` (string): Path to the database file
-- `options` (object): Configuration options
-  - `indexes` (object): Index configuration
-  - `markDeleted` (boolean): Mark records as deleted instead of physical removal
-  - `create` (boolean): Create database if it doesn't exist (default: true)
-  - `clear` (boolean): Clear database on load if not empty (default: false)
-  
-  **Auto-Save Configuration:**
-  - `autoSave` (boolean): Enable intelligent auto-save (default: true)
-  - `autoSaveThreshold` (number): Flush buffer when it reaches this many records (default: 50)
-  - `autoSaveInterval` (number): Flush buffer every N milliseconds (default: 5000)
-  - `forceSaveOnClose` (boolean): Always save when closing database (default: true)
-  
-  **Performance Configuration:**
-  - `batchSize` (number): Batch size for inserts (default: 50)
-  - `adaptiveBatchSize` (boolean): Adjust batch size based on usage (default: true)
-  - `minBatchSize` (number): Minimum batch size for flush (default: 10)
-  - `maxBatchSize` (number): Maximum batch size for performance (default: 200)
-  
-  **Memory Management:**
-  - `memorySafeMode` (boolean): Enable memory-safe operations (default: true)
-  - `chunkSize` (number): Chunk size for file operations (default: 8MB)
-  - `gcInterval` (number): Force GC every N records (0 = disabled, default: 1000)
-  - `maxMemoryUsage` (string|number): Memory limit ('auto' or bytes, default: 'auto')
-  - `maxFlushChunkBytes` (number): Maximum chunk size for flush operations (default: 8MB)
+### Constructor Options
 
-#### Methods
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `create` | boolean | `true` | Create the file if it doesn't exist |
+| `clear` | boolean | `false` | Clear existing files before loading |
+| `fields` | object | **Required** | **MANDATORY** - Define the data structure schema |
+| `indexes` | object | `{}` | **Optional** indexed fields for faster queries (not required) |
+| `termMapping` | boolean | `true` | Enable term mapping for optimal performance (auto-detected) |
+| `termMappingFields` | string[] | `[]` | Fields to apply term mapping to (auto-detected from indexes) |
+| `termMappingCleanup` | boolean | `true` | Automatically clean up orphaned terms |
 
-##### init()
-Initializes the database and loads existing data.
+### Fields vs Indexes - Important Distinction
+
+**Fields** (Schema - **MANDATORY**):
+- ✅ **Required** - Define the structure of your data
+- ✅ **Schema enforcement** - Controls which fields are allowed
+- ✅ **All fields** are queryable by default
+- ✅ **No performance impact** on memory usage
+- ✅ **Data validation** - Ensures data consistency
+
+**Indexes** (Performance Optimization - **Optional**):
+- ⚠️ **Optional** - Only for fields you query frequently
+- ⚠️ **Memory overhead** - Each index uses additional memory
+- ⚠️ **Use sparingly** - Only index fields you actually query
+- ⚠️ **Query performance** - Only affects query speed, not functionality
+
+### When to Use Indexes
+
+```javascript
+// ❌ DON'T: Index everything (wastes memory)
+const db = new Database('db.jdb', {
+  fields: {                 // REQUIRED - Define schema
+    id: 'number',
+    name: 'string',
+    email: 'string',
+    phone: 'string',
+    address: 'string',
+    city: 'string',
+    country: 'string',
+    status: 'string',
+    createdAt: 'number',
+    updatedAt: 'number'
+  },
+  indexes: {                // OPTIONAL - Only for performance
+    id: 'number',           // Maybe needed
+    name: 'string',         // Maybe needed  
+    email: 'string',        // Maybe needed
+    phone: 'string',        // Maybe needed
+    address: 'string',      // Maybe needed
+    city: 'string',         // Maybe needed
+    country: 'string',      // Maybe needed
+    status: 'string',       // Maybe needed
+    createdAt: 'number',    // Maybe needed
+    updatedAt: 'number'    // Maybe needed
+  }
+})
+
+// ✅ DO: Define schema + index only what you query frequently
+const db = new Database('db.jdb', {
+  fields: {                 // REQUIRED - Define schema
+    id: 'number',
+    name: 'string',
+    email: 'string',
+    phone: 'string',
+    address: 'string',
+    city: 'string',
+    country: 'string',
+    status: 'string',
+    createdAt: 'number',
+    updatedAt: 'number'
+  },
+  indexes: {                // OPTIONAL - Only for performance
+    id: 'number',           // Primary key - always index
+    email: 'string',        // Login queries - index this
+    status: 'string'        // Filter queries - index this
+  }
+  // Other fields (name, phone, address, etc.) are still queryable
+  // but will use slower sequential search
+})
+```
+
+### Example
+
+```javascript
+// Example: E-commerce product database
+const db = new Database('products.jdb', {
+  create: true,
+  clear: false,
+  fields: {                   // REQUIRED - Define schema
+    id: 'number',
+    name: 'string',
+    description: 'string',
+    category: 'string',
+    tags: 'array:string',
+    price: 'number',
+    imageUrl: 'string',
+    inStock: 'boolean',
+    createdAt: 'number'
+  },
+  indexes: {                  // OPTIONAL - Only for performance
+    id: 'number',             // Primary key - always index
+    category: 'string',       // Filter by category - index this
+    tags: 'array:string',     // Search by tags - index this
+    price: 'number'          // Price range queries - index this
+  }
+  // Fields like 'name', 'description', 'imageUrl' are still queryable
+  // but will use slower sequential search (no index needed unless you query them frequently)
+})
+
+await db.init()
+
+// All these queries work, but some are faster:
+await db.find({ id: 1 })                    // ✅ Fast (indexed)
+await db.find({ category: 'electronics' }) // ✅ Fast (indexed)  
+await db.find({ tags: 'wireless' })        // ✅ Fast (indexed)
+await db.find({ price: { '>': 100 } })     // ✅ Fast (indexed)
+await db.find({ name: 'iPhone' })          // ⚠️ Slower (not indexed, but still works)
+await db.find({ description: 'wireless' }) // ⚠️ Slower (not indexed, but still works)
+```
+
+## Core Methods
+
+### `init()`
+
+Initialize the database and load existing data.
 
 ```javascript
 await db.init()
 ```
 
-##### insert(data)
-Inserts a single record with adaptive optimization.
+### `insert(data)`
+
+Insert a new record into the database.
 
 ```javascript
-const record = await db.insert({ id: '1', name: 'John' })
+await db.insert({ 
+  id: 1, 
+  name: 'John Doe', 
+  email: 'john@example.com' 
+})
 ```
 
-##### insertMany(dataArray)
-Inserts multiple records with bulk optimization.
+### `update(criteria, updates)`
+
+Update records matching the criteria.
 
 ```javascript
-const records = await db.insertMany([
-  { id: '1', name: 'John' },
-  { id: '2', name: 'Jane' }
-])
-```
-
-##### find(criteria, options)
-Finds records matching criteria with query optimization.
-
-```javascript
-const results = await db.find(
-  { age: { $gte: 25 } },
-  { limit: 10, sort: { name: 1 } }
+await db.update(
+  { id: 1 }, 
+  { email: 'newemail@example.com', updated: true }
 )
 ```
 
-##### findOne(criteria, options)
-Finds a single record matching criteria.
+### `delete(criteria)`
+
+Delete records matching the criteria.
 
 ```javascript
-const user = await db.findOne({ id: '1' })
+await db.delete({ id: 1 })
 ```
 
-##### update(criteria, updates, options)
-Updates records matching criteria.
+### `save()`
 
-```javascript
-const updated = await db.update(
-  { id: '1' },
-  { name: 'John Updated', age: 30 }
-)
-```
-
-##### delete(criteria, options)
-Deletes records matching criteria.
-
-```javascript
-const deleted = await db.delete({ id: '1' })
-```
-
-##### count(criteria)
-Counts records matching criteria.
-
-```javascript
-const count = await db.count({ active: true })
-```
-
-##### save()
-Saves pending changes to disk.
+Save all pending changes to disk.
 
 ```javascript
 await db.save()
 ```
 
-##### flush()
-Flushes the insertion buffer to disk immediately.
+### `destroy()`
 
-```javascript
-const flushedCount = await db.flush()
-// Returns: number of records flushed
-```
-
-##### forceSave()
-Forces a save operation regardless of buffer size.
-
-```javascript
-await db.forceSave()
-// Always saves, even with just 1 record in buffer
-```
-
-##### getBufferStatus()
-Gets information about the current buffer state.
-
-```javascript
-const status = db.getBufferStatus()
-// Returns: {
-//   pendingCount: 15,
-//   bufferSize: 50,
-//   lastFlush: 1640995200000,
-//   lastAutoSave: 1640995200000,
-//   shouldFlush: false,
-//   autoSaveEnabled: true,
-//   autoSaveTimer: 'active'
-// }
-```
-
-##### configurePerformance(settings)
-Dynamically configures performance settings.
-
-```javascript
-db.configurePerformance({
-  batchSize: 25,
-  autoSaveThreshold: 30,
-  autoSaveInterval: 4000
-})
-```
-
-##### getPerformanceConfig()
-Gets current performance configuration.
-
-```javascript
-const config = db.getPerformanceConfig()
-// Returns: {
-//   batchSize: 25,
-//   autoSaveThreshold: 30,
-//   autoSaveInterval: 4000,
-//   adaptiveBatchSize: true,
-//   minBatchSize: 10,
-//   maxBatchSize: 200
-// }
-```
-
-#### Memory Management
-
-JexiDB includes advanced memory management features to prevent `RangeError: Array buffer allocation failed` errors in memory-constrained environments.
-
-##### Memory-Safe Configuration
-
-```javascript
-const db = new Database('./data.jdb', {
-  // Memory management
-  memorySafeMode: true,        // Enable memory-safe operations
-  chunkSize: 4 * 1024 * 1024, // 4MB chunks (reduced for low memory)
-  gcInterval: 500,            // Force GC every 500 records
-  maxFlushChunkBytes: 2 * 1024 * 1024, // 2MB max flush chunks
-  
-  // Auto-save with smaller thresholds
-  autoSave: true,
-  autoSaveThreshold: 25,      // Flush more frequently
-  autoSaveInterval: 3000,     // Flush every 3 seconds
-  
-  // Performance with memory constraints
-  batchSize: 25,              // Smaller batches
-  minBatchSize: 5,
-  maxBatchSize: 100
-});
-```
-
-##### Memory-Safe Features
-
-- **Chunked File Processing**: Files are processed in configurable chunks instead of loading entire files in memory
-- **Garbage Collection**: Optional forced garbage collection at configurable intervals
-- **Buffer Management**: Smaller, more frequent buffer flushes to reduce memory pressure
-- **Fallback Strategies**: Graceful degradation when memory is insufficient
-- **Memory Monitoring**: Real-time buffer status and memory usage tracking
-
-##### Best Practices for Memory-Constrained Environments
-
-1. **Use Smaller Chunks**: Set `chunkSize` to 1-4MB for low memory systems
-2. **Enable Garbage Collection**: Set `gcInterval` to 500-1000 for frequent cleanup
-3. **Reduce Batch Sizes**: Use smaller `batchSize` and `autoSaveThreshold`
-4. **Monitor Buffer Status**: Use `getBufferStatus()` to track memory usage
-5. **Enable Memory-Safe Mode**: Set `memorySafeMode: true` (default)
-6. **Use Node.js GC Flag**: Run with `--expose-gc` for manual garbage collection
-
-##### Example: Ultra Memory-Safe Configuration
-
-```javascript
-const ultraMemorySafeConfig = {
-  memorySafeMode: true,
-  chunkSize: 1 * 1024 * 1024,    // 1MB chunks
-  gcInterval: 100,               // GC every 100 records
-  maxFlushChunkBytes: 512 * 1024, // 512KB flush chunks
-  autoSaveThreshold: 10,         // Flush every 10 records
-  autoSaveInterval: 2000,        // Flush every 2 seconds
-  batchSize: 10,                 // Very small batches
-  minBatchSize: 2,
-  maxBatchSize: 50
-};
-```
-
-##### validateIntegrity(options)
-Validates database integrity.
-
-```javascript
-const integrity = await db.validateIntegrity({ verbose: true })
-```
-
-##### getStats()
-Gets comprehensive database statistics.
-
-```javascript
-const stats = await db.getStats()
-```
-
-##### readColumnIndex(column)
-Gets unique values from a specific column (indexed columns only).
-
-```javascript
-const categories = db.readColumnIndex('category')
-// Returns: Set(['Electronics', 'Books', 'Clothing'])
-// Throws error for non-indexed columns
-```
-
-##### close()
-Closes the database instance and saves pending changes.
-
-```javascript
-await db.close()
-// Saves data and closes instance, but keeps the database file
-```
-
-##### destroy()
-Closes the database instance and saves pending changes (equivalent to close()).
+Close the database and clean up resources.
 
 ```javascript
 await db.destroy()
-// Same as: await db.close()
 ```
 
-##### deleteDatabase()
-**⚠️ WARNING: This permanently deletes the database file!**
+## Query Methods
 
-Deletes the database file from disk and closes the instance.
+### `find(criteria, options)`
+
+Find records matching the criteria.
 
 ```javascript
-await db.deleteDatabase()  // Deletes the database file permanently
+// Basic query
+const results = await db.find({ name: 'John Doe' })
+
+// Query with conditions
+const results = await db.find({ 
+  age: { '>': 18, '<': 65 },
+  status: 'active'
+})
+
+// Case insensitive search
+const results = await db.find(
+  { name: 'john doe' }, 
+  { caseInsensitive: true }
+)
 ```
 
-##### removeDatabase()
-Removes the database file from disk (alias for deleteDatabase).
+### `findOne(criteria, options)`
+
+Find the first record matching the criteria.
 
 ```javascript
-await db.removeDatabase()  // Same as: await db.deleteDatabase()
+const user = await db.findOne({ id: 1 })
 ```
 
-#### Properties
+### `count(criteria)`
 
-- `length`: Number of records in the database
-- `indexStats`: Statistics about database indexes
-
-#### Events
-
-- `init`: Emitted when database is initialized
-- `insert`: Emitted when a record is inserted
-- `update`: Emitted when records are updated
-- `delete`: Emitted when records are deleted
-- `save`: Emitted when database is saved
-- `before-save`: Emitted before database is saved
-
-**Auto-Save Events:**
-- `buffer-flush`: Emitted when buffer is flushed (count parameter)
-- `buffer-full`: Emitted when buffer reaches threshold
-- `auto-save-timer`: Emitted when time-based auto-save triggers
-- `save-complete`: Emitted when save operation completes
-- `close-save-complete`: Emitted when database closes with final save
-- `close`: Emitted when database is closed
-- `performance-configured`: Emitted when performance settings are changed
-
-### Query Operators
-
-The database supports MongoDB-style query operators:
-
-- `$eq`: Equal to
-- `$ne`: Not equal to
-- `$gt`: Greater than
-- `$gte`: Greater than or equal to
-- `$lt`: Less than
-- `$lte`: Less than or equal to
-- `$in`: In array
-- `$nin`: Not in array
-- `$regex`: Regular expression match
-
-### Nested Field Queries
-
-You can query nested fields using dot notation:
+Count records matching the criteria.
 
 ```javascript
-const results = await db.find({
-  'metadata.preferences.theme': 'dark',
-  'metadata.loginCount': { $gt: 10 }
+const userCount = await db.count({ status: 'active' })
+```
+
+### `score(fieldName, scores, options)`
+
+Score and rank records based on weighted terms in an indexed `array:string` field. This method is optimized for in-memory operations and provides 10x+ performance improvement over equivalent `find()` queries.
+
+```javascript
+// Basic scoring
+const results = await db.score('tags', {
+  'javascript': 1.0,
+  'node': 0.8,
+  'typescript': 0.9
+})
+
+// With options
+const results = await db.score('terms', {
+  'action': 1.0,
+  'comedy': 0.8
+}, {
+  limit: 10,
+  sort: 'desc',
+  includeScore: true
 })
 ```
 
-### Query Options
+**Parameters:**
 
-- `limit`: Limit number of results
-- `skip`: Skip number of results
-- `sort`: Sort results by field
-- `caseInsensitive`: Case-insensitive string matching
+- `fieldName` (string, required): Name of the indexed `array:string` field to score
+- `scores` (object, required): Map of terms to numeric weights (e.g., `{ 'action': 1.0, 'comedy': 0.8 }`)
+- `options` (object, optional):
+  - `limit` (number): Maximum results (default: 100)
+  - `sort` (string): "desc" or "asc" (default: "desc")
+  - `includeScore` (boolean): Include score in results (default: true)
 
-## Auto-Save Intelligence
+**Returns:**
 
-JexiDB features intelligent auto-save capabilities that automatically manage data persistence without manual intervention.
-
-### Auto-Save Modes
-
-**Intelligent Auto-Save (Default):**
-- Automatically flushes buffer when it reaches the threshold (default: 50 records)
-- Automatically flushes buffer every N milliseconds (default: 5000ms)
-- Always saves when closing the database
-- Provides real-time feedback through events
-
-**Manual Mode:**
-- Disable auto-save with `autoSave: false`
-- Manually call `flush()` and `save()` when needed
-- Useful for applications requiring precise control over persistence timing
-
-### Auto-Save Configuration
+Array of records ordered by score, with optional score property:
 
 ```javascript
-const db = new Database('data.jdb', {
-  // Enable intelligent auto-save
-  autoSave: true,
-  autoSaveThreshold: 50,    // Flush every 50 records
-  autoSaveInterval: 5000,   // Flush every 5 seconds
-  forceSaveOnClose: true,   // Always save on close
+// With includeScore: true (default)
+[
+  { _: 123, score: 1.8, title: "Action Comedy", terms: ["action", "comedy"] },
+  { _: 456, score: 1.0, title: "Action Movie", terms: ["action", "movie"] },
+  { _: 789, score: 0.8, title: "Comedy Show", terms: ["comedy", "show"] }
+]
+
+// With includeScore: false
+[
+  { _: 123, title: "Action Comedy", terms: ["action", "comedy"] },
+  { _: 456, title: "Action Movie", terms: ["action", "movie"] },
+  { _: 789, title: "Comedy Show", terms: ["comedy", "show"] }
+]
+```
+
+**Score Calculation:**
+
+For each record, the score is the sum of weights for matching terms:
+
+```javascript
+// Record: { title: "Action Comedy", terms: ["action", "comedy"] }
+// Scores: { 'action': 1.0, 'comedy': 0.8 }
+// Result: score = 1.0 + 0.8 = 1.8
+```
+
+**Example Use Cases:**
+
+```javascript
+// Content recommendation system
+const recommendations = await db.score('categories', {
+  'technology': 1.0,
+  'programming': 0.9,
+  'web': 0.8
+}, { limit: 20 })
+
+// Search with weighted keywords
+const searchResults = await db.score('keywords', {
+  'urgent': 2.0,
+  'important': 1.5,
+  'notable': 1.0
+}, { sort: 'desc', limit: 50 })
+
+// Product recommendations
+const productMatches = await db.score('tags', {
+  'wireless': 1.2,
+  'bluetooth': 1.0,
+  'rechargeable': 0.9,
+  'compact': 0.8
+}, { includeScore: false })
+```
+
+**Performance Notes:**
+
+- ⚡ **Memory-only operations** - Uses in-memory indices exclusively
+- ⚡ **No physical I/O for scoring** - Only final record fetch requires disk access
+- ⚡ **10x+ faster** than equivalent `find()` + manual scoring
+- ⚡ **O(T × N) complexity** - T = terms in scores, N = avg records per term
+- ⚡ **Optimal for selective queries** - Best when scoring subset of total records
+
+**Requirements:**
+
+- Field must be indexed as `array:string` type
+- Field must be present in `indexes` configuration
+- Returns empty array if no terms match
+- Records with zero scores are excluded
+
+**Error Handling:**
+
+```javascript
+try {
+  const results = await db.score('tags', { 'javascript': 1.0 })
+} catch (error) {
+  // Error: Field "tags" is not indexed
+  // Error: Field "tags" must be of type "array:string"
+  // Error: scores must be an object
+  // Error: Score value for term "javascript" must be a number
+}
+```
+
+### Query Operators
+
+| Operator | Description | Example |
+|----------|-------------|---------|
+| `>` | Greater than | `{ age: { '>': 18 } }` |
+| `>=` | Greater than or equal | `{ score: { '>=': 80 } }` |
+| `<` | Less than | `{ price: { '<': 100 } }` |
+| `<=` | Less than or equal | `{ rating: { '<=': 5 } }` |
+| `!=` | Not equal | `{ status: { '!=': 'deleted' } }` |
+| `$in` | In array | `{ category: { '$in': ['A', 'B'] } }` |
+| `$not` | Not | `{ name: { '$not': 'John' } }` |
+| `$and` | Logical AND | `{ '$and': [{ age: { '>': 18 } }, { status: 'active' }] }` |
+| `$or` | Logical OR | `{ '$or': [{ type: 'admin' }, { type: 'moderator' }] }` |
+
+### Complex Queries
+
+```javascript
+// Multiple conditions (AND by default)
+const results = await db.find({
+  age: { '>': 18 },
+  status: 'active',
+  category: { '$in': ['premium', 'vip'] }
+})
+
+// Using logical operators
+const results = await db.find({
+  '$or': [
+    { type: 'admin' },
+    { '$and': [
+      { type: 'user' },
+      { verified: true }
+    ]}
+  ]
+})
+
+// Array field queries
+const results = await db.find({
+  tags: 'javascript',        // Contains 'javascript'
+  tags: { '$all': ['js', 'node'] }  // Contains all specified tags
+})
+```
+
+## Advanced Features
+
+### Indexed Query Mode
+
+Control whether queries are restricted to indexed fields only.
+
+```javascript
+// Strict mode - only indexed fields allowed in queries
+const db = new Database('db.jdb', {
+  fields: {                    // REQUIRED - Define schema
+    id: 'number',
+    name: 'string', 
+    age: 'number',
+    email: 'string'
+  },
+  indexes: {                   // OPTIONAL - Only fields you query frequently
+    name: 'string',            // ✅ Search by name
+    age: 'number'              // ✅ Filter by age
+  },
+  indexedQueryMode: 'strict'
+})
+
+// This will throw an error in strict mode
+await db.find({ email: 'test@example.com' }) // Error: email is not indexed
+
+// Permissive mode (default) - allows any field
+const db = new Database('db.jdb', {
+  fields: {                    // REQUIRED - Define schema
+    id: 'number',
+    name: 'string', 
+    age: 'number',
+    email: 'string'
+  },
+  indexes: {                   // OPTIONAL - Only fields you query frequently
+    name: 'string',            // ✅ Search by name
+    age: 'number'              // ✅ Filter by age
+  },
+  indexedQueryMode: 'permissive'
+})
+
+// This works in permissive mode, but will be slower than strict mode
+await db.find({ email: 'test@example.com' }) // OK
+```
+
+### Query Performance
+
+**Index Strategy Guidelines:**
+
+1. **Always index primary keys** (usually `id`)
+2. **Index frequently queried fields** (filters, searches)
+3. **Don't index everything** - each index uses memory
+4. **Use specific criteria** rather than broad queries
+
+**Performance Examples:**
+
+```javascript
+// ✅ Good: Index only what you need
+const db = new Database('users.jdb', {
+  fields: {                    // REQUIRED - Define schema
+    id: 'number',
+    email: 'string',
+    status: 'string',
+    name: 'string',
+    phone: 'string'
+  },
+  indexes: {                   // OPTIONAL - Only fields you query frequently
+    email: 'string',         // ✅ Login queries
+    status: 'string'          // ✅ Filter active/inactive users
+  }
+})
+
+// ❌ Bad: Over-indexing wastes memory
+const db = new Database('users.jdb', {
+  fields: {                    // REQUIRED - Define schema
+    id: 'number',
+    name: 'string',
+    email: 'string',
+    phone: 'string',
+    address: 'string',
+    city: 'string',
+    country: 'string',
+    createdAt: 'number',
+    updatedAt: 'number'
+  },
+  indexes: {                   // OPTIONAL - Performance optimization (too many!)
+    name: 'string',          // ❌ Only if you search by name frequently
+    email: 'string',         // ❌ Only if you search by email frequently
+    phone: 'string',         // ❌ Only if you search by phone frequently  
+    address: 'string',       // ❌ Only if you search by address frequently
+    city: 'string',          // ❌ Only if you search by city frequently
+    country: 'string',      // ❌ Only if you search by country frequently
+    createdAt: 'number',     // ❌ Only if you filter by date frequently
+    updatedAt: 'number'     // ❌ Only if you filter by date frequently
+  }
+})
+
+// Query performance comparison:
+await db.find({ id: 1 })           // ✅ Fast (indexed)
+await db.find({ email: 'user@example.com' }) // ✅ Fast (indexed)
+await db.find({ status: 'active' }) // ✅ Fast (indexed)
+await db.find({ name: 'John' })    // ⚠️ Slower (not indexed, but works)
+await db.find({ phone: '123-456-7890' }) // ⚠️ Slower (not indexed, but works)
+```
+
+**Memory Impact:**
+- Each index uses additional memory
+- String indexes use more memory than number indexes
+- Array indexes use more memory than single-value indexes
+- **Rule of thumb**: Only index fields you query in 80%+ of your queries
+
+## Term Mapping
+
+Term mapping is a powerful optimization that reduces database size by mapping repetitive string terms to numeric IDs. **It's now enabled by default** and automatically detects which fields benefit from term mapping.
+
+### Benefits
+
+- **77% size reduction** in typical scenarios
+- **Faster queries** with numeric comparisons
+- **Automatic cleanup** of unused terms
+- **Transparent operation** - same API
+- **Auto-detection** of optimal fields
+- **Zero configuration** required
+
+### Automatic Configuration
+
+Term mapping is now **automatically enabled** and detects fields that benefit from optimization:
+
+```javascript
+const db = new Database('my-db.jdb', {
+  fields: {                    // REQUIRED - Define schema
+    id: 'number',
+    name: 'string',
+    tags: 'array:string',
+    scores: 'array:number',
+    price: 'number'
+  },
+  indexes: {                   // OPTIONAL - Only fields you query frequently
+    name: 'string',           // ✅ Search by name (auto term mapping)
+    tags: 'array:string'      // ✅ Search by tags (auto term mapping)
+  }
+})
+
+// Term mapping is automatically enabled
+console.log(db.opts.termMapping) // true
+console.log(db.termManager.termMappingFields) // ['name', 'tags']
+```
+
+### How It Works
+
+Term mapping automatically detects and optimizes fields:
+
+1. **Auto-detection**: Fields with `'string'` or `'array:string'` types are automatically optimized
+2. **Term ID mapping**: Each unique string term gets a numeric ID
+3. **Efficient storage**: Term IDs are stored in optimized structures
+4. **Transparent queries**: Queries automatically convert search terms to IDs
+5. **Automatic cleanup**: Unused terms are automatically cleaned up
+
+### Field Type Behavior
+
+| Field Type | Term Mapping | Storage | Example |
+|------------|--------------|---------|---------|
+| `'string'` | ✅ Enabled | Term IDs | `"Brazil"` → `1` |
+| `'array:string'` | ✅ Enabled | Term IDs | `["Brazil", "Argentina"]` → `[1, 2]` |
+| `'number'` | ❌ Disabled | Direct values | `85` → `"85"` |
+| `'array:number'` | ❌ Disabled | Direct values | `[85, 92]` → `["85", "92"]` |
+| `'boolean'` | ❌ Disabled | Direct values | `true` → `"true"` |
+| `'array:boolean'` | ❌ Disabled | Direct values | `[true, false]` → `["true", "false"]` |
+
+### Example Usage
+
+```javascript
+// Create database with mixed field types
+const db = new Database('products.jdb', {
+  fields: {                    // REQUIRED - Define schema
+    id: 'number',
+    name: 'string',
+    tags: 'array:string',
+    scores: 'array:number',
+    price: 'number'
+  },
+  indexes: {                   // OPTIONAL - Only fields you query frequently
+    name: 'string',           // ✅ Search by name (auto term mapping)
+    tags: 'array:string'      // ✅ Search by tags (auto term mapping)
+  }
+})
+
+// Insert data with repetitive terms
+await db.insert({
+  name: 'Product A',
+  tags: ['electronics', 'gadget', 'wireless'],
+  scores: [85, 92, 78],
+  price: 299.99
+})
+
+await db.insert({
+  name: 'Product B', 
+  tags: ['electronics', 'accessory', 'wireless'],
+  scores: [90, 88, 95],
+  price: 199.99
+})
+
+// Queries work normally - term mapping is transparent
+const results = await db.find({ tags: 'electronics' })
+const expensive = await db.find({ price: { '>': 250 } })
+
+// Check term mapping status
+console.log(db.opts.termMapping) // true
+console.log(db.termManager.termMappingFields) // ['name', 'tags']
+console.log(db.termManager.getStats()) // { totalTerms: 6, nextId: 7, orphanedTerms: 0 }
+```
+
+### Term Manager API
+
+```javascript
+// Get term ID (creates if doesn't exist)
+const termId = db.termManager.getTermId('electronics')
+
+// Get term by ID
+const term = db.termManager.getTerm(1)
+
+// Get statistics
+const stats = db.termManager.getStats()
+
+// Manual cleanup
+const removedCount = await db.termManager.cleanupOrphanedTerms()
+```
+
+## Bulk Operations
+
+### `iterate(criteria, options)`
+
+High-performance bulk update method with streaming support.
+
+```javascript
+// Basic iteration
+for await (const entry of db.iterate({ category: 'products' })) {
+  console.log(`${entry.name}: $${entry.price}`)
+}
+
+// Bulk updates
+for await (const entry of db.iterate({ inStock: true })) {
+  entry.price = Math.round(entry.price * 1.1 * 100) / 100
+  entry.lastUpdated = new Date().toISOString()
+}
+
+// Advanced options
+for await (const entry of db.iterate(
+  { category: 'electronics' },
+  {
+    chunkSize: 1000,           // Process in batches
+    autoSave: false,           // Auto-save after each chunk
+    detectChanges: true,       // Auto-detect modifications
+    progressCallback: (progress) => {
+      console.log(`Processed: ${progress.processed}, Modified: ${progress.modified}`)
+    }
+  }
+)) {
+  entry.processed = true
+}
+```
+
+### Iterate Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `chunkSize` | number | 1000 | Batch size for processing |
+| `strategy` | string | 'streaming' | Processing strategy |
+| `autoSave` | boolean | false | Auto-save after each chunk |
+| `detectChanges` | boolean | true | Auto-detect modifications |
+| `progressCallback` | function | undefined | Progress callback function |
+
+### Progress Callback
+
+```javascript
+{
+  processed: 1500,      // Number of records processed
+  modified: 120,        // Number of records modified
+  deleted: 5,           // Number of records deleted
+  elapsed: 2500,        // Time elapsed in milliseconds
+  completed: false      // Whether the operation is complete
+}
+```
+
+### `beginInsertSession(options)`
+
+High-performance batch insertion method for inserting large amounts of data efficiently.
+
+```javascript
+// Example: EPG (Electronic Program Guide) data insertion
+const session = db.beginInsertSession({
+  batchSize: 500,            // Process in batches of 500
+  enableAutoSave: true       // Auto-save after each batch
+})
+
+// Insert TV program data
+const programmes = [
+  {
+    id: 1,
+    title: 'Breaking News',
+    channel: 'CNN',
+    startTime: 1640995200000,
+    endTime: 1640998800000,
+    terms: ['news', 'breaking', 'politics'],
+    category: 'news'
+  },
+  {
+    id: 2,
+    title: 'Sports Center',
+    channel: 'ESPN',
+    startTime: 1640998800000,
+    endTime: 1641002400000,
+    terms: ['sports', 'football', 'highlights'],
+    category: 'sports'
+  }
+  // ... thousands more programmes
+]
+
+// Add all programmes to the session
+for (const programme of programmes) {
+  await session.add(programme)
+}
+
+// Commit all records at once (much faster than individual inserts)
+await session.commit()
+await db.save()
+
+console.log(`Inserted ${session.totalInserted} programmes`)
+```
+
+### InsertSession Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `batchSize` | number | 100 | Number of records to process in each batch |
+| `enableAutoSave` | boolean | false | Auto-save after each batch |
+
+### InsertSession Methods
+
+```javascript
+const session = db.beginInsertSession({ batchSize: 500 })
+
+// Add a single record
+await session.add({ id: 1, name: 'John', email: 'john@example.com' })
+
+// Add multiple records
+for (const record of records) {
+  await session.add(record)
+}
+
+// Commit all pending records
+await session.commit()
+
+// Get statistics
+console.log(`Inserted ${session.totalInserted} records`)
+```
+
+### When to Use `beginInsertSession()`
+
+**Use `beginInsertSession()` for:**
+- ✅ **Bulk insertions** (1000+ new records)
+- ✅ **Data migration** from other databases
+- ✅ **Initial data loading** (EPG, product catalogs, etc.)
+- ✅ **Batch processing** of external data sources
+
+### Performance Comparison
+
+```javascript
+// ❌ SLOW: Individual inserts (1000 records = 1000 database operations)
+for (let i = 0; i < 1000; i++) {
+  await db.insert({ id: i, name: `Record ${i}` })
+}
+
+// ✅ FAST: Batch insertion (1000 records = 1 database operation)
+const session = db.beginInsertSession({ batchSize: 1000 })
+for (let i = 0; i < 1000; i++) {
+  await session.add({ id: i, name: `Record ${i}` })
+}
+await session.commit()
+```
+
+### Performance Tips
+
+1. **Use `beginInsertSession()`** for bulk insertions of 1000+ records
+2. **Set appropriate batchSize** based on available memory (500-2000 records)
+3. **Enable autoSave** for critical operations to prevent data loss
+4. **Use indexed fields** in your data for better query performance later
+5. **Commit frequently** for very large datasets to avoid memory issues
+
+## Configuration Options
+
+### Database Options
+
+```javascript
+const db = new Database('database.jdb', {
+  // Basic options
+  create: true,                    // Create file if doesn't exist
+  clear: false,                    // Clear existing files
   
-  // Performance tuning
-  batchSize: 50,            // Reduced for faster response
-  adaptiveBatchSize: true,  // Adjust based on usage
-  minBatchSize: 10,         // Minimum flush size
-  maxBatchSize: 200         // Maximum flush size
-});
+  // Schema (REQUIRED - define data structure)
+  fields: {                        // MANDATORY - Define all possible fields
+    id: 'number',
+    name: 'string',
+    email: 'string',
+    phone: 'string',
+    address: 'string',
+    city: 'string',
+    country: 'string',
+    status: 'string',
+    createdAt: 'number',
+    tags: 'array:string'
+  },
+  
+  // Indexing (OPTIONAL - only for performance optimization)
+  indexes: {                       // Only index fields you query frequently
+    id: 'number',                  // Primary key - always index
+    email: 'string',               // Login queries - index this
+    status: 'string'               // Filter queries - index this
+    // Don't index: name, phone, address, etc. unless you query them frequently
+  },
+  
+  // Query mode
+  indexedQueryMode: 'permissive',  // 'strict' or 'permissive'
+  
+  // Term mapping (enabled by default)
+  termMapping: true,               // Enable term mapping (auto-detected)
+  termMappingFields: [],           // Fields to map (auto-detected)
+  termMappingCleanup: true,        // Auto cleanup
+  
+  // Performance
+  chunkSize: 1000,                 // Default chunk size
+  autoSave: false,                 // Auto-save changes
+  
+  // Debug
+  debugMode: false                 // Enable debug logging
+})
 ```
 
-### Event-Driven Monitoring
+### Schema vs Indexes - Complete Guide
+
+**Understanding the Difference:**
 
 ```javascript
-// Monitor auto-save operations
-db.on('buffer-flush', (count) => {
-  console.log(`Flushed ${count} records`);
-});
+// Your data structure (schema) - MUST be defined in fields option
+const userRecord = {
+  id: 1,
+  name: 'John Doe',
+  email: 'john@example.com',
+  phone: '123-456-7890',
+  address: '123 Main St',
+  city: 'New York',
+  country: 'USA',
+  status: 'active',
+  createdAt: 1640995200000,
+  tags: ['premium', 'verified']
+}
 
-db.on('buffer-full', () => {
-  console.log('Buffer reached threshold');
-});
+// Database configuration
+const db = new Database('users.jdb', {
+  fields: {                 // REQUIRED - Define schema structure
+    id: 'number',
+    name: 'string',
+    email: 'string',
+    phone: 'string',
+    address: 'string',
+    city: 'string',
+    country: 'string',
+    status: 'string',
+    createdAt: 'number',
+    tags: 'array:string'
+  },
+  indexes: {                // OPTIONAL - Only for performance optimization
+    id: 'number',           // Primary key - always index
+    email: 'string',        // Login queries - index this
+    status: 'string',       // Filter queries - index this
+    tags: 'array:string'    // Search by tags - index this
+  }
+  // Fields like name, phone, address, city, country, createdAt
+  // are still queryable but will use slower sequential search
+})
 
-db.on('auto-save-timer', () => {
-  console.log('Time-based auto-save triggered');
-});
-
-db.on('save-complete', () => {
-  console.log('Database saved successfully');
-});
+// All these queries work:
+await db.find({ id: 1 })                    // ✅ Fast (indexed)
+await db.find({ email: 'john@example.com' }) // ✅ Fast (indexed)
+await db.find({ status: 'active' })        // ✅ Fast (indexed)
+await db.find({ tags: 'premium' })         // ✅ Fast (indexed)
+await db.find({ name: 'John Doe' })         // ⚠️ Slower (not indexed, but works)
+await db.find({ phone: '123-456-7890' })   // ⚠️ Slower (not indexed, but works)
+await db.find({ city: 'New York' })         // ⚠️ Slower (not indexed, but works)
+await db.find({ createdAt: { '>': 1640000000000 } }) // ⚠️ Slower (not indexed, but works)
 ```
 
-### Buffer Status Monitoring
+**Key Points:**
+- ✅ **All fields are queryable** regardless of indexing
+- ✅ **Schema is auto-detected** from your data
+- ⚠️ **Indexes are optional** - only for performance
+- ⚠️ **Each index uses memory** - use sparingly
+- ⚠️ **Index only what you query frequently** (80%+ of queries)
 
-```javascript
-// Check buffer status anytime
-const status = db.getBufferStatus();
-console.log(`Pending: ${status.pendingCount}/${status.bufferSize}`);
-console.log(`Should flush: ${status.shouldFlush}`);
-console.log(`Auto-save enabled: ${status.autoSaveEnabled}`);
-```
+### Field Types
 
-## Optimization Features
+Supported field types for indexing:
 
-### Adaptive Mode Switching
-
-JexiDB automatically switches between insertion and query optimization modes based on usage patterns.
-
-### Real Compression
-
-- **LZ4**: Fast compression for warm data
-- **Gzip**: High compression for cold data
-- **Automatic fallback**: Graceful degradation if compression fails
-
-### Intelligent Caching
-
-- **Query result caching**: Caches frequently accessed query results
-- **Index caching**: Caches index data for faster lookups
-- **Adaptive eviction**: Automatically manages cache size
-
-### Background Maintenance
-
-- **Automatic compression**: Compresses old data in the background
-- **Index optimization**: Optimizes indexes during idle time
-- **Integrity checks**: Performs periodic integrity validation
+| Type | Term Mapping | Description | Example |
+|------|--------------|-------------|---------|
+| `'string'` | ✅ Auto-enabled | String values | `"Brazil"` |
+| `'array:string'` | ✅ Auto-enabled | Array of strings | `["Brazil", "Argentina"]` |
+| `'number'` | ❌ Disabled | Numeric values | `85` |
+| `'array:number'` | ❌ Disabled | Array of numbers | `[85, 92, 78]` |
+| `'boolean'` | ❌ Disabled | Boolean values | `true` |
+| `'array:boolean'` | ❌ Disabled | Array of booleans | `[true, false]` |
+| `'date'` | ❌ Disabled | Date objects (stored as timestamps) | `new Date()` |
 
 ## Error Handling
 
-Comprehensive error handling with automatic recovery:
+```javascript
+try {
+  await db.init()
+  await db.insert({ id: 1, name: 'Test' })
+  await db.save()
+} catch (error) {
+  console.error('Database error:', error.message)
+} finally {
+  await db.destroy()
+}
+```
 
-- **File corruption recovery**: Repairs corrupted files
-- **Index rebuilding**: Automatically rebuilds corrupted indexes
-- **Memory pressure management**: Handles memory pressure gracefully
-- **Compression fallback**: Falls back to no compression if needed
+## Best Practices
 
-## Performance Characteristics
+### Database Operations
+1. **Always define `fields`** - This is mandatory for schema definition
+2. **Always call `init()`** before using the database
+3. **Use `save()`** to persist changes to disk
+4. **Call `destroy()`** when done to clean up resources
+5. **Handle errors** appropriately
 
-- **Insert**: ~10,000 ops/sec (bulk), ~1,000 ops/sec (single)
-- **Query**: ~5,000 ops/sec (indexed), ~500 ops/sec (unindexed)
-- **Update**: ~1,000 ops/sec
-- **Delete**: ~1,000 ops/sec
-- **Compression**: 20-80% size reduction depending on data type
+### Performance Optimization
+6. **Index strategically** - only fields you query frequently (80%+ of queries)
+7. **Don't over-index** - each index uses additional memory
+8. **Term mapping is automatically enabled** for optimal performance
+9. **Use `iterate()`** for bulk operations on large datasets
+
+### Index Strategy
+10. **Always index primary keys** (usually `id`)
+11. **Index frequently filtered fields** (status, category, type)
+12. **Index search fields** (email, username, tags)
+13. **Don't index descriptive fields** (name, description, comments) unless you search them frequently
+14. **Monitor memory usage** - too many indexes can impact performance
+
+## Migration Guide
+
+### From Previous Versions
+
+If you're upgrading from an older version:
+
+1. **Backup your data** before upgrading
+2. **Check breaking changes** in the changelog
+3. **Update your code** to use new APIs
+4. **Test thoroughly** with your data
+
+### Common Migration Tasks
+
+```javascript
+// Old way
+const results = db.query({ name: 'John' })
+
+// New way  
+const results = await db.find({ name: 'John' })
+
+// Old way
+db.insert({ id: 1, name: 'John' })
+
+// New way
+await db.insert({ id: 1, name: 'John' })
+```
+
+## Migration Guide
+
+### ⚠️ Important: Database Files Are NOT Compatible
+
+**Existing `.jdb` files from version 1.x.x will NOT work with version 2.1.0.**
+
+### Step 1: Export Data from 1.x.x
+
+```javascript
+// In your 1.x.x application
+const oldDb = new Database('old-database.jdb', {
+  indexes: { name: 'string', tags: 'array:string' }
+})
+
+await oldDb.init()
+const allData = await oldDb.find({}) // Export all data
+await oldDb.destroy()
+```
+
+### Step 2: Update Your Code
+
+```javascript
+// ❌ OLD (1.x.x)
+const db = new Database('db.jdb', {
+  indexes: { name: 'string', tags: 'array:string' }
+})
+
+// ✅ NEW (2.1.0)
+const db = new Database('db.jdb', {
+  fields: {                    // REQUIRED - Define schema
+    id: 'number',
+    name: 'string',
+    tags: 'array:string'
+  },
+  indexes: {                   // OPTIONAL - Performance optimization
+    name: 'string',            // ✅ Search by name
+    tags: 'array:string'       // ✅ Search by tags
+  }
+})
+```
+
+### Step 3: Import Data to 2.1.0
+
+```javascript
+// In your 2.1.0 application
+const newDb = new Database('new-database.jdb', {
+  fields: { /* your schema */ },
+  indexes: { /* your indexes */ }
+})
+
+await newDb.init()
+
+// Import all data
+for (const record of allData) {
+  await newDb.insert(record)
+}
+
+await newDb.save()
+```
+
+### Key Changes Summary
+
+| Feature | 1.x.x | 2.1.0 |
+|---------|-------|-------|
+| `fields` | Optional | **MANDATORY** |
+| `termMapping` | `false` (default) | `true` (default) |
+| `termMappingFields` | Manual config | Auto-detected |
+| Database files | Compatible | **NOT compatible** |
+| Performance | Basic | **77% size reduction** |
+

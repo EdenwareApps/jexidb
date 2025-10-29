@@ -1,9 +1,0 @@
-{"id":1,"category":"Electronics","status":"active","_id":0,"_created":1754747670129,"_updated":1754747670129}
-{"id":2,"category":"Books","status":"inactive","_id":1,"_created":1754747670129,"_updated":1754747670129}
-{"id":3,"category":"Electronics","status":"active","_id":2,"_created":1754747670129,"_updated":1754747670129}
-{"id":4,"category":"Clothing","status":"active","_id":3,"_created":1754747670129,"_updated":1754747670129}
-{"id":1,"category":"Electronics","status":"active","_id":4,"_created":1754747697710,"_updated":1754747697710}
-{"id":2,"category":"Books","status":"inactive","_id":5,"_created":1754747697710,"_updated":1754747697710}
-{"id":3,"category":"Electronics","status":"active","_id":6,"_created":1754747697710,"_updated":1754747697710}
-{"id":4,"category":"Clothing","status":"active","_id":7,"_created":1754747697710,"_updated":1754747697710}
-[0,110,216,326,433,543,649,759]
