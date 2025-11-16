@@ -1,4 +1,5 @@
 import { Mutex } from 'async-mutex'
+import { normalizeCriteriaOperators } from '../utils/operatorNormalizer.mjs'
 
 export default class IndexManager {
   constructor(opts, databaseMutex = null, database = null) {
@@ -13,21 +14,107 @@ export default class IndexManager {
     // If no database mutex provided, create a local one (for backward compatibility)
     this.mutex = databaseMutex || new Mutex()
     
-    // Initialize empty structures for each field ONLY if not already present
-    if (this.opts.indexes) {
-      this.indexedFields = Object.keys(this.opts.indexes)
-      Object.keys(this.opts.indexes).forEach(field => {
-        if (!this.index.data[field]) {
-          this.index.data[field] = {}
-        }
-      })
-    } else {
-      this.indexedFields = []
-    }    
+    this.indexedFields = []
+    this.setIndexesConfig(this.opts.indexes)
   }
 
   setTotalLines(total) {
     this.totalLines = total
+  }
+
+  /**
+   * Update indexes configuration and ensure internal structures stay in sync
+   * @param {Object|Array<string>} indexes
+   */
+  setIndexesConfig(indexes) {
+    if (!indexes) {
+      this.opts.indexes = undefined
+      this.indexedFields = []
+      return
+    }
+
+    if (Array.isArray(indexes)) {
+      const fields = indexes.map(field => String(field))
+      this.indexedFields = fields
+
+      const normalizedConfig = {}
+      for (const field of fields) {
+        const existingConfig = (!Array.isArray(this.opts.indexes) && typeof this.opts.indexes === 'object') ? this.opts.indexes[field] : undefined
+        normalizedConfig[field] = existingConfig ?? 'auto'
+        if (!this.index.data[field]) {
+          this.index.data[field] = {}
+        }
+      }
+      this.opts.indexes = normalizedConfig
+      return
+    }
+
+    if (typeof indexes === 'object') {
+      this.opts.indexes = Object.assign({}, indexes)
+      this.indexedFields = Object.keys(this.opts.indexes)
+
+      for (const field of this.indexedFields) {
+        if (!this.index.data[field]) {
+          this.index.data[field] = {}
+        }
+      }
+    }
+  }
+
+  /**
+   * Check if a field is configured as an index
+   * @param {string} field - Field name
+   * @returns {boolean}
+   */
+  isFieldIndexed(field) {
+    if (!field) return false
+    if (!Array.isArray(this.indexedFields)) {
+      return false
+    }
+    return this.indexedFields.includes(field)
+  }
+
+  /**
+   * Determine whether the index has usable data for a given field
+   * @param {string} field - Field name
+   * @returns {boolean}
+   */
+  hasUsableIndexData(field) {
+    if (!field) return false
+    const fieldData = this.index?.data?.[field]
+    if (!fieldData || typeof fieldData !== 'object') {
+      return false
+    }
+
+    for (const key in fieldData) {
+      if (!Object.prototype.hasOwnProperty.call(fieldData, key)) continue
+      const entry = fieldData[key]
+      if (!entry) continue
+
+      if (entry.set && typeof entry.set.size === 'number' && entry.set.size > 0) {
+        return true
+      }
+
+      if (Array.isArray(entry.ranges) && entry.ranges.length > 0) {
+        const hasRangeData = entry.ranges.some(range => {
+          if (range === null || typeof range === 'undefined') {
+            return false
+          }
+          if (typeof range === 'object') {
+            const count = typeof range.count === 'number' ? range.count : 0
+            return count > 0
+          }
+          // When ranges are stored as individual numbers
+          return true
+        })
+
+        if (hasRangeData) {
+          return true
+        }
+      }
+    }
+
+    return false
   }
 
   // Ultra-fast range conversion - only for very large datasets
@@ -338,10 +425,25 @@ export default class IndexManager {
 
   // OPTIMIZATION: Generator-based approach for better memory efficiency
   *_getAllLineNumbersGenerator(hybridData) {
+    const normalizeLineNumber = (value) => {
+      if (typeof value === 'number') {
+        return value
+      }
+      if (typeof value === 'string') {
+        const parsed = Number(value)
+        return Number.isNaN(parsed) ? value : parsed
+      }
+      if (typeof value === 'bigint') {
+        const maxSafe = BigInt(Number.MAX_SAFE_INTEGER)
+        return value <= maxSafe ? Number(value) : value
+      }
+      return value
+    }
+
     // Yield from Set (fastest path)
     if (hybridData.set) {
       for (const num of hybridData.set) {
-        yield num
+        yield normalizeLineNumber(num)
       }
     }
     
@@ -352,11 +454,11 @@ export default class IndexManager {
           // It's a range - use direct loop for better performance
           const end = item.start + item.count
           for (let i = item.start; i < end; i++) {
-            yield i
+            yield normalizeLineNumber(i)
           }
         } else {
           // It's an individual number
-          yield item
+          yield normalizeLineNumber(item)
         }
       }
     }
@@ -377,7 +479,29 @@ export default class IndexManager {
     // OPTIMIZATION 6: Pre-allocate field structures for better performance
     const fields = Object.keys(this.opts.indexes || {})
     for (const field of fields) {
-      const value = row[field]
+      // PERFORMANCE: Check if this is a term mapping field once
+      const isTermMappingField = this.database?.termManager && 
+        this.database.termManager.termMappingFields && 
+        this.database.termManager.termMappingFields.includes(field)
+      
+      // CRITICAL FIX: For term mapping fields, prefer ${field}Ids if available
+      // Records processed by processTermMapping have term IDs in ${field}Ids
+      // Records loaded from file have term IDs directly in ${field} (after restoreTermIdsAfterDeserialization)
+      let value
+      if (isTermMappingField) {
+        const termIdsField = `${field}Ids`
+        const termIds = row[termIdsField]
+        if (termIds && Array.isArray(termIds) && termIds.length > 0) {
+          // Use term IDs from ${field}Ids (preferred - from processTermMapping)
+          value = termIds
+        } else {
+          // Fallback: use field directly (for records loaded from file that have term IDs in field)
+          value = row[field]
+        }
+      } else {
+        value = row[field]
+      }
+      
       if (value !== undefined && value !== null) {
         // OPTIMIZATION 6: Initialize field structure if it doesn't exist
         if (!data[field]) {
@@ -388,30 +512,18 @@ export default class IndexManager {
         for (const val of values) {
           let key
           
-          // Check if this is a term mapping field (array:string fields only)
-          const isTermMappingField = this.database?.termManager && 
-            this.database.termManager.termMappingFields && 
-            this.database.termManager.termMappingFields.includes(field)
-          
           if (isTermMappingField && typeof val === 'number') {
-            // For term mapping fields (array:string), the values are already term IDs
+            // For term mapping fields, values are already term IDs
             key = String(val)
-            if (this.database.opts.debugMode) {
-              console.log(`🔍 IndexManager.add: Using term ID ${val} directly for field "${field}"`)
-            }
           } else if (isTermMappingField && typeof val === 'string') {
-            // For term mapping fields (array:string), convert string to term ID
-            const termId = this.database.termManager.getTermIdWithoutIncrement(val)
+            // Fallback: convert string to term ID
+            // CRITICAL: During indexing (add), we should use getTermId() to create IDs if needed
+            // This is different from queries where we use getTermIdWithoutIncrement() to avoid creating new IDs
+            const termId = this.database.termManager.getTermId(val)
             key = String(termId)
-            if (this.database.opts.debugMode) {
-              console.log(`🔍 IndexManager.add: Using term ID ${termId} for term "${val}"`)
-            }
           } else {
             // For non-term-mapping fields (including array:number), use values directly
             key = String(val)
-            if (this.database?.opts?.debugMode) {
-              console.log(`🔍 IndexManager.add: Using value "${val}" directly for field "${field}"`)
-            }
           }
           
           // OPTIMIZATION 6: Use direct assignment for better performance
@@ -458,36 +570,46 @@ export default class IndexManager {
       const lineNumber = startLineNumber + i
 
       for (const field of fields) {
-        const value = row[field]
+        // PERFORMANCE: Check if this is a term mapping field once
+        const isTermMappingField = this.database?.termManager && 
+          this.database.termManager.termMappingFields && 
+          this.database.termManager.termMappingFields.includes(field)
+        
+        // CRITICAL FIX: For term mapping fields, prefer ${field}Ids if available
+        // Records processed by processTermMapping have term IDs in ${field}Ids
+        // Records loaded from file have term IDs directly in ${field} (after restoreTermIdsAfterDeserialization)
+        let value
+        if (isTermMappingField) {
+          const termIdsField = `${field}Ids`
+          const termIds = row[termIdsField]
+          if (termIds && Array.isArray(termIds) && termIds.length > 0) {
+            // Use term IDs from ${field}Ids (preferred - from processTermMapping)
+            value = termIds
+          } else {
+            // Fallback: use field directly (for records loaded from file that have term IDs in field)
+            value = row[field]
+          }
+        } else {
+          value = row[field]
+        }
+        
         if (value !== undefined && value !== null) {
           const values = Array.isArray(value) ? value : [value]
           for (const val of values) {
             let key
             
-            // Check if this is a term mapping field (array:string fields only)
-            const isTermMappingField = this.database?.termManager && 
-              this.database.termManager.termMappingFields && 
-              this.database.termManager.termMappingFields.includes(field)
-            
             if (isTermMappingField && typeof val === 'number') {
-              // For term mapping fields (array:string), the values are already term IDs
+              // For term mapping fields, values are already term IDs
               key = String(val)
-              if (this.database.opts.debugMode) {
-                console.log(`🔍 IndexManager.addBatch: Using term ID ${val} directly for field "${field}"`)
-              }
             } else if (isTermMappingField && typeof val === 'string') {
-              // For term mapping fields (array:string), convert string to term ID
-              const termId = this.database.termManager.getTermIdWithoutIncrement(val)
+              // Fallback: convert string to term ID
+              // CRITICAL: During indexing (addBatch), we should use getTermId() to create IDs if needed
+              // This is different from queries where we use getTermIdWithoutIncrement() to avoid creating new IDs
+              const termId = this.database.termManager.getTermId(val)
               key = String(termId)
-              if (this.database.opts.debugMode) {
-                console.log(`🔍 IndexManager.addBatch: Using term ID ${termId} for term "${val}"`)
-              }
             } else {
               // For non-term-mapping fields (including array:number), use values directly
               key = String(val)
-              if (this.database?.opts?.debugMode) {
-                console.log(`🔍 IndexManager.addBatch: Using value "${val}" directly for field "${field}"`)
-              }
             }
             
             // OPTIMIZATION 6: Use Map for efficient batch updates
@@ -585,7 +707,7 @@ export default class IndexManager {
     if (!oldRecord || !newRecord) return
     
     // Remove old record by ID
-    await this.remove([oldRecord.id])
+    await this.remove(oldRecord)
     
     // Add new record with provided line number or use hash of the ID
     const actualLineNumber = lineNumber !== null ? lineNumber : this._getIdAsNumber(newRecord.id)
@@ -619,15 +741,56 @@ export default class IndexManager {
     
     // If record is an object, remove by record data
     if (typeof record === 'object' && record.id) {
-      return this._removeRecord(record)
+      return await this._removeRecord(record)
     }
   }
 
   // Remove a specific record from the index
-  _removeRecord(record) {
+  async _removeRecord(record) {
     if (!record) return
     
     const data = this.index.data
+    const database = this.database
+    const persistedCount = Array.isArray(database?.offsets) ? database.offsets.length : 0
+    const lineMatchCache = new Map()
+
+    const doesLineNumberBelongToRecord = async (lineNumber) => {
+      if (lineMatchCache.has(lineNumber)) {
+        return lineMatchCache.get(lineNumber)
+      }
+
+      let belongs = false
+
+      try {
+        if (lineNumber >= persistedCount) {
+          const writeBufferIndex = lineNumber - persistedCount
+          const candidate = database?.writeBuffer?.[writeBufferIndex]
+          belongs = !!candidate && candidate.id === record.id
+        } else if (lineNumber >= 0) {
+          const range = database?.locate?.(lineNumber)
+          if (range && database.fileHandler && database.serializer) {
+            const [start, end] = range
+            const buffer = await database.fileHandler.readRange(start, end)
+            if (buffer && buffer.length > 0) {
+              let line = buffer.toString('utf8')
+              if (line) {
+                line = line.trim()
+                if (line.length > 0) {
+                  const storedRecord = database.serializer.deserialize(line)
+                  belongs = storedRecord && storedRecord.id === record.id
+                }
+              }
+            }
+          }
+        }
+      } catch (error) {
+        belongs = false
+      }
+
+      lineMatchCache.set(lineNumber, belongs)
+      return belongs
+    }
+
     for (const field in data) {
       if (record[field] !== undefined && record[field] !== null) {
         const values = Array.isArray(record[field]) ? record[field] : [record[field]]
@@ -663,11 +826,16 @@ export default class IndexManager {
           // Note: TermManager notification is handled by Database.mjs
           // to avoid double decrementation during updates
           
-          if (data[field][key]) {
-            const lineNumbers = this._getAllLineNumbers(data[field][key])
-            // Find and remove the specific record's line number
-            const recordLineNumber = this._getIdAsNumber(record.id)
-            const filteredLineNumbers = lineNumbers.filter(ln => ln !== recordLineNumber)
+          const indexEntry = data[field][key]
+          if (indexEntry) {
+            const lineNumbers = this._getAllLineNumbers(indexEntry)
+            const filteredLineNumbers = []
+
+            for (const lineNumber of lineNumbers) {
+              if (!(await doesLineNumberBelongToRecord(lineNumber))) {
+                filteredLineNumbers.push(lineNumber)
+              }
+            }
             
             if (filteredLineNumbers.length === 0) {
               delete data[field][key]
@@ -842,7 +1010,8 @@ export default class IndexManager {
       
       if (typeof data[field] === 'undefined') continue;
       
-      const criteriaValue = criteria[field];
+      const originalCriteriaValue = criteria[field];
+      const criteriaValue = normalizeCriteriaOperators(originalCriteriaValue, { target: 'legacy', preserveOriginal: true });
       let lineNumbersForField = new Set();
       const isNumericField = this.opts.indexes[field] === 'number';
   
@@ -859,45 +1028,69 @@ export default class IndexManager {
         // Handle $in operator for array queries
         if (criteriaValue.$in !== undefined) {
           const inValues = Array.isArray(criteriaValue.$in) ? criteriaValue.$in : [criteriaValue.$in];
+          
+          // PERFORMANCE: Cache term mapping field check once
+          const isTermMappingField = this.database?.termManager && 
+            this.database.termManager.termMappingFields && 
+            this.database.termManager.termMappingFields.includes(field)
+          
+          // PERFORMANCE: Track if any term was found and matched
+          let foundAnyMatch = false
+          
           for (const inValue of inValues) {
             // SPACE OPTIMIZATION: Convert search term to term ID for lookup
             let searchTermId
-            
-            // Check if this is a term mapping field
-            const isTermMappingField = this.database?.termManager && 
-              this.database.termManager.termMappingFields && 
-              this.database.termManager.termMappingFields.includes(field)
             
             if (isTermMappingField && typeof inValue === 'number') {
               // For term mapping fields (array:string), the search value is already a term ID
               searchTermId = String(inValue)
             } else if (isTermMappingField && typeof inValue === 'string') {
               // For term mapping fields (array:string), convert string to term ID
-              searchTermId = this.database?.termManager?.getTermIdWithoutIncrement(String(inValue)) || String(inValue)
+              const termId = this.database?.termManager?.getTermIdWithoutIncrement(String(inValue))
+              if (termId === undefined) {
+                // Term not found in termManager - skip this search value
+                // This means the term was never saved to the database
+                if (this.opts?.debugMode) {
+                  console.log(`⚠️  Term "${inValue}" not found in termManager for field "${field}" - skipping`)
+                }
+                continue // Skip this value, no matches possible
+              }
+              searchTermId = String(termId)
             } else {
               // For non-term-mapping fields (including array:number), use values directly
               searchTermId = String(inValue)
             }
             
-            // Handle case-insensitive for $in
+            // PERFORMANCE: Direct lookup instead of iteration
+            let matched = false
             if (caseInsensitive && typeof inValue === 'string') {
+              const searchLower = searchTermId.toLowerCase()
               for (const value in fieldIndex) {
-                if (value.toLowerCase() === searchTermId.toLowerCase()) {
+                if (value.toLowerCase() === searchLower) {
                   const numbers = this._getAllLineNumbers(fieldIndex[value]);
                   for (const lineNumber of numbers) {
                     lineNumbersForField.add(lineNumber);
                   }
+                  matched = true
+                  foundAnyMatch = true
                 }
               }
             } else {
-              if (fieldIndex[searchTermId]) {
-                const numbers = this._getAllLineNumbers(fieldIndex[searchTermId]);
+              const indexData = fieldIndex[searchTermId]
+              if (indexData) {
+                const numbers = this._getAllLineNumbers(indexData);
                 for (const lineNumber of numbers) {
                   lineNumbersForField.add(lineNumber);
                 }
+                matched = true
+                foundAnyMatch = true
               }
             }
           }
+          
+          // CRITICAL FIX: If no matches found at all (all terms were unknown or not in index),
+          // lineNumbersForField remains empty which is correct (no results for $in)
+          // This is handled correctly by the caller - empty Set means no matches
         }
         // Handle $nin operator (not in) - returns complement of $in
         else if (criteriaValue.$nin !== undefined) {
@@ -910,30 +1103,39 @@ export default class IndexManager {
           // Get line numbers that match any of the $nin values
           const matchingLines = new Set();
           
+          // PERFORMANCE: Cache term mapping field check once
+          const isTermMappingField = this.database?.termManager && 
+            this.database.termManager.termMappingFields && 
+            this.database.termManager.termMappingFields.includes(field)
+          
           for (const ninValue of ninValues) {
             // SPACE OPTIMIZATION: Convert search term to term ID for lookup
             let searchTermId
-            
-            // Check if this is a term mapping field
-            const isTermMappingField = this.database?.termManager && 
-              this.database.termManager.termMappingFields && 
-              this.database.termManager.termMappingFields.includes(field)
             
             if (isTermMappingField && typeof ninValue === 'number') {
               // For term mapping fields (array:string), the search value is already a term ID
               searchTermId = String(ninValue)
             } else if (isTermMappingField && typeof ninValue === 'string') {
               // For term mapping fields (array:string), convert string to term ID
-              searchTermId = this.database?.termManager?.getTermIdWithoutIncrement(String(ninValue)) || String(ninValue)
+              const termId = this.database?.termManager?.getTermIdWithoutIncrement(String(ninValue))
+              if (termId === undefined) {
+                // Term not found - skip this value (can't exclude what doesn't exist)
+                if (this.opts?.debugMode) {
+                  console.log(`⚠️  Term "${ninValue}" not found in termManager for field "${field}" - skipping`)
+                }
+                continue
+              }
+              searchTermId = String(termId)
             } else {
               // For non-term-mapping fields (including array:number), use values directly
               searchTermId = String(ninValue)
             }
             
-            // Handle case-insensitive for $nin
+            // PERFORMANCE: Direct lookup instead of iteration
             if (caseInsensitive && typeof ninValue === 'string') {
+              const searchLower = searchTermId.toLowerCase()
               for (const value in fieldIndex) {
-                if (value.toLowerCase() === searchTermId.toLowerCase()) {
+                if (value.toLowerCase() === searchLower) {
                   const numbers = this._getAllLineNumbers(fieldIndex[value]);
                   for (const lineNumber of numbers) {
                     matchingLines.add(lineNumber);
@@ -941,8 +1143,9 @@ export default class IndexManager {
                 }
               }
             } else {
-              if (fieldIndex[searchTermId]) {
-                const numbers = this._getAllLineNumbers(fieldIndex[searchTermId]);
+              const indexData = fieldIndex[searchTermId]
+              if (indexData) {
+                const numbers = this._getAllLineNumbers(indexData);
                 for (const lineNumber of numbers) {
                   matchingLines.add(lineNumber);
                 }
@@ -978,9 +1181,40 @@ export default class IndexManager {
         // Handle $all operator for array queries - FIXED FOR TERM MAPPING
         else if (criteriaValue.$all !== undefined) {
           const allValues = Array.isArray(criteriaValue.$all) ? criteriaValue.$all : [criteriaValue.$all];
+
+          const isTermMappingField = this.database?.termManager && 
+            this.database.termManager.termMappingFields && 
+            this.database.termManager.termMappingFields.includes(field)
+
+          const normalizeValue = (value) => {
+            if (isTermMappingField) {
+              if (typeof value === 'number') {
+                return String(value)
+              }
+              if (typeof value === 'string') {
+                const termId = this.database?.termManager?.getTermIdWithoutIncrement(value)
+                if (termId !== undefined) {
+                  return String(termId)
+                }
+                return null
+              }
+              return null
+            }
+            return String(value)
+          }
+
+          const normalizedValues = []
+          for (const value of allValues) {
+            const normalized = normalizeValue(value)
+            if (normalized === null) {
+              // Term not found in term manager, no matches possible
+              return lineNumbersForField
+            }
+            normalizedValues.push(normalized)
+          }
           
           // Early exit optimization
-          if (allValues.length === 0) {
+          if (normalizedValues.length === 0) {
             // Empty $all matches everything
             for (const value in fieldIndex) {
               const numbers = this._getAllLineNumbers(fieldIndex[value]);
@@ -994,7 +1228,7 @@ export default class IndexManager {
             
             // First, get all line numbers that contain each individual term
             const termLineNumbers = new Map();
-            for (const term of allValues) {
+            for (const term of normalizedValues) {
               if (fieldIndex[term]) {
                 termLineNumbers.set(term, new Set(this._getAllLineNumbers(fieldIndex[term])));
               } else {
@@ -1114,7 +1348,7 @@ export default class IndexManager {
           // SPACE OPTIMIZATION: Convert search term to term ID for lookup
           let searchTermId
           
-          // Check if this is a term mapping field
+          // PERFORMANCE: Cache term mapping field check once per field
           const isTermMappingField = this.database?.termManager && 
             this.database.termManager.termMappingFields && 
             this.database.termManager.termMappingFields.includes(field)
@@ -1124,7 +1358,15 @@ export default class IndexManager {
             searchTermId = String(searchValue)
           } else if (isTermMappingField && typeof searchValue === 'string') {
             // For term mapping fields (array:string), convert string to term ID
-            searchTermId = this.database?.termManager?.getTermIdWithoutIncrement(String(searchValue)) || String(searchValue)
+            const termId = this.database?.termManager?.getTermIdWithoutIncrement(String(searchValue))
+            if (termId === undefined) {
+              // Term not found - skip this value
+              if (this.opts?.debugMode) {
+                console.log(`⚠️  Term "${searchValue}" not found in termManager for field "${field}" - skipping`)
+              }
+              continue // Skip this value, no matches possible
+            }
+            searchTermId = String(termId)
           } else {
             // For non-term-mapping fields (including array:number), use values directly
             searchTermId = String(searchValue)
@@ -1170,6 +1412,406 @@ export default class IndexManager {
     }
     return matchingLines || new Set();
   } 
+
+  /**
+   * Check if any records exist for given field and terms (index-only, ultra-fast)
+   * Stops at first match for maximum performance - no disk I/O required
+   * 
+   * @param {string} fieldName - Indexed field name (e.g., 'nameTerms', 'groupTerms')
+   * @param {string|Array<string>} terms - Single term or array of terms to check
+   * @param {Object} options - Options: { $all: true/false, caseInsensitive: true/false, excludes: Array<string> }
+   * @returns {boolean} - True if at least one match exists
+   * 
+   * @example
+   * // Check if any record has 'channel' in nameTerms
+   * indexManager.exists('nameTerms', 'channel')
+   * 
+   * @example
+   * // Check if any record has ALL terms ['a', 'e'] in nameTerms ($all)
+   * indexManager.exists('nameTerms', ['a', 'e'], { $all: true })
+   * 
+   * @example
+   * // Check if any record has ANY of the terms ['channel', 'tv'] in nameTerms
+   * indexManager.exists('nameTerms', ['channel', 'tv'], { $all: false })
+   * 
+   * @example
+   * // Check if any record has 'tv' but NOT 'globo' in nameTerms
+   * indexManager.exists('nameTerms', 'tv', { excludes: ['globo'] })
+   * 
+   * @example
+   * // Check if any record has ['tv', 'news'] but NOT 'sports' in nameTerms
+   * indexManager.exists('nameTerms', ['tv', 'news'], { $all: true, excludes: ['sports'] })
+   */
+  exists(fieldName, terms, options = {}) {
+    // Early exit: validate fieldName
+    if (!fieldName || typeof fieldName !== 'string') {
+      return false;
+    }
+    
+    // Early exit: check if field is indexed
+    if (!this.isFieldIndexed(fieldName)) {
+      return false;
+    }
+    
+    const fieldIndex = this.index.data[fieldName];
+    if (!fieldIndex || typeof fieldIndex !== 'object') {
+      return false;
+    }
+    
+    // Normalize terms to array
+    const termsArray = Array.isArray(terms) ? terms : [terms];
+    if (termsArray.length === 0) {
+      return false;
+    }
+    
+    const { $all = false, caseInsensitive = false, excludes = [] } = options;
+    const hasExcludes = Array.isArray(excludes) && excludes.length > 0;
+    const isTermMappingField = this.database?.termManager && 
+      this.database.termManager.termMappingFields && 
+      this.database.termManager.termMappingFields.includes(fieldName);
+    
+    // Helper: check if termData has any line numbers (ULTRA LIGHT - no expansion)
+    const hasData = (termData) => {
+      if (!termData) return false;
+      // Check Set size (O(1))
+      if (termData.set && termData.set.size > 0) {
+        return true;
+      }
+      // Check ranges length (O(1))
+      if (termData.ranges && termData.ranges.length > 0) {
+        return true;
+      }
+      return false;
+    };
+    
+    // Helper: get term key with term mapping and case-insensitive support
+    const getTermKey = (term, useCaseInsensitive = false) => {
+      if (isTermMappingField && typeof term === 'string') {
+        let termId;
+        if (useCaseInsensitive) {
+          // For case-insensitive, search termManager for case-insensitive match
+          const searchLower = String(term).toLowerCase();
+          termId = null;
+          if (this.database?.termManager?.termToId) {
+            for (const [termStr, id] of this.database.termManager.termToId.entries()) {
+              if (termStr.toLowerCase() === searchLower) {
+                termId = id;
+                break;
+              }
+            }
+          }
+        } else {
+          termId = this.database?.termManager?.getTermIdWithoutIncrement(String(term));
+        }
+        
+        if (termId === undefined || termId === null) {
+          return null;
+        }
+        return String(termId);
+      }
+      
+      // For non-term-mapping fields
+      if (useCaseInsensitive && typeof term === 'string') {
+        const searchLower = String(term).toLowerCase();
+        for (const key in fieldIndex) {
+          if (key.toLowerCase() === searchLower) {
+            return key;
+          }
+        }
+        return null;
+      }
+      
+      return String(term);
+    };
+    
+    // Handle $all (all terms must exist and have intersection)
+    if ($all) {
+      // Collect term data for all terms first (with early exit)
+      const termDataArray = [];
+      
+      for (const term of termsArray) {
+        // Get term key (with term mapping if applicable)
+        let termKey;
+        if (isTermMappingField && typeof term === 'string') {
+          let termId;
+          if (caseInsensitive) {
+            // For case-insensitive, search termManager for case-insensitive match
+            const searchLower = String(term).toLowerCase();
+            termId = null;
+            for (const [termStr, id] of this.database.termManager.termToId.entries()) {
+              if (termStr.toLowerCase() === searchLower) {
+                termId = id;
+                break;
+              }
+            }
+          } else {
+            termId = this.database?.termManager?.getTermIdWithoutIncrement(String(term));
+          }
+          
+          if (termId === undefined || termId === null) {
+            return false; // Early exit: term doesn't exist in mapping
+          }
+          termKey = String(termId);
+        } else {
+          termKey = String(term);
+          // For non-term-mapping fields with case-insensitive, search index keys
+          if (caseInsensitive && typeof term === 'string') {
+            const searchLower = termKey.toLowerCase();
+            let foundKey = null;
+            for (const key in fieldIndex) {
+              if (key.toLowerCase() === searchLower) {
+                foundKey = key;
+                break;
+              }
+            }
+            if (foundKey === null) {
+              return false; // Early exit: term doesn't exist
+            }
+            termKey = foundKey;
+          }
+        }
+        
+        // Check if term exists in index
+        const termData = fieldIndex[termKey];
+        if (!termData || !hasData(termData)) {
+          return false; // Early exit: term doesn't exist or has no data
+        }
+        
+        termDataArray.push(termData);
+      }
+      
+      // If we got here, all terms exist and have data
+      // Now check if there's intersection (only if more than one term)
+      if (termDataArray.length === 1) {
+        // Single term - check excludes if any
+        if (!hasExcludes) {
+          return true; // Single term, already verified it has data, no excludes
+        }
+        // Need to check excludes - expand line numbers
+        const lineNumbers = this._getAllLineNumbers(termDataArray[0]);
+        const candidateLines = new Set(lineNumbers);
+        
+        // Remove lines that have exclude terms
+        for (const excludeTerm of excludes) {
+          const excludeKey = getTermKey(excludeTerm, caseInsensitive);
+          if (excludeKey === null) continue;
+          
+          const excludeData = fieldIndex[excludeKey];
+          if (!excludeData) continue;
+          
+          const excludeLines = this._getAllLineNumbers(excludeData);
+          for (const line of excludeLines) {
+            candidateLines.delete(line);
+          }
+          
+          // Early exit if all candidates excluded
+          if (candidateLines.size === 0) {
+            return false;
+          }
+        }
+        
+        return candidateLines.size > 0;
+      }
+      
+      // For multiple terms, we need to check intersection
+      // But we want to do this as lightly as possible
+      // Get line numbers only for intersection check (unavoidable for $all)
+      const termLineNumberSets = [];
+      for (const termData of termDataArray) {
+        const lineNumbers = this._getAllLineNumbers(termData);
+        if (lineNumbers.length === 0) {
+          return false; // Early exit: no line numbers (shouldn't happen, but safety check)
+        }
+        termLineNumberSets.push(new Set(lineNumbers));
+      }
+      
+      // Calculate intersection incrementally with early exit
+      let intersection = termLineNumberSets[0];
+      for (let i = 1; i < termLineNumberSets.length; i++) {
+        // Filter intersection to only include items in current set
+        intersection = new Set([...intersection].filter(x => termLineNumberSets[i].has(x)));
+        if (intersection.size === 0) {
+          return false; // Early exit: intersection is empty
+        }
+      }
+      
+      // Apply excludes if any
+      if (hasExcludes) {
+        for (const excludeTerm of excludes) {
+          const excludeKey = getTermKey(excludeTerm, caseInsensitive);
+          if (excludeKey === null) continue;
+          
+          const excludeData = fieldIndex[excludeKey];
+          if (!excludeData) continue;
+          
+          const excludeLines = this._getAllLineNumbers(excludeData);
+          for (const line of excludeLines) {
+            intersection.delete(line);
+          }
+          
+          // Early exit if all candidates excluded
+          if (intersection.size === 0) {
+            return false;
+          }
+        }
+      }
+      
+      return intersection.size > 0;
+    }
+    
+    // Handle $in behavior (any term exists) - default - ULTRA LIGHT
+    // If no excludes, use ultra-fast path (no expansion needed)
+    if (!hasExcludes) {
+      for (const term of termsArray) {
+        // Handle case-insensitive FIRST (before normal conversion)
+        if (caseInsensitive && typeof term === 'string') {
+          if (isTermMappingField && this.database?.termManager?.termToId) {
+            // For term mapping fields, we need to find the term in termManager first
+            // (case-insensitive), then convert to ID
+            const searchLower = String(term).toLowerCase();
+            let foundTermId = null;
+            
+            // Search termManager for case-insensitive match
+            for (const [termStr, termId] of this.database.termManager.termToId.entries()) {
+              if (termStr.toLowerCase() === searchLower) {
+                foundTermId = termId;
+                break;
+              }
+            }
+            
+            if (foundTermId !== null) {
+              const termData = fieldIndex[String(foundTermId)];
+              if (hasData(termData)) {
+                return true; // Early exit: found a match
+              }
+            }
+            // If not found, continue to next term
+            continue;
+          } else {
+            // For non-term-mapping fields, search index keys directly
+            const searchLower = String(term).toLowerCase();
+            for (const key in fieldIndex) {
+              if (key.toLowerCase() === searchLower) {
+                const termData = fieldIndex[key];
+                if (hasData(termData)) {
+                  return true; // Early exit: found a match
+                }
+              }
+            }
+            // If not found, continue to next term
+            continue;
+          }
+        }
+        
+        // Normal (case-sensitive) lookup
+        const termKey = getTermKey(term, false);
+        if (termKey === null) {
+          continue; // Term not in mapping, try next
+        }
+        
+        // Direct lookup (fastest path) - O(1) hash lookup
+        const termData = fieldIndex[termKey];
+        if (hasData(termData)) {
+          return true; // Early exit: found a match
+        }
+      }
+      
+      return false;
+    }
+    
+    // With excludes, we need to collect candidates and filter
+    const candidateLines = new Set();
+    
+    for (const term of termsArray) {
+      // Handle case-insensitive FIRST (before normal conversion)
+      if (caseInsensitive && typeof term === 'string') {
+        if (isTermMappingField && this.database?.termManager?.termToId) {
+          // For term mapping fields, we need to find the term in termManager first
+          // (case-insensitive), then convert to ID
+          const searchLower = String(term).toLowerCase();
+          let foundTermId = null;
+          
+          // Search termManager for case-insensitive match
+          for (const [termStr, termId] of this.database.termManager.termToId.entries()) {
+            if (termStr.toLowerCase() === searchLower) {
+              foundTermId = termId;
+              break;
+            }
+          }
+          
+          if (foundTermId !== null) {
+            const termData = fieldIndex[String(foundTermId)];
+            if (hasData(termData)) {
+              // Add line numbers to candidates (need to expand for excludes check)
+              const lineNumbers = this._getAllLineNumbers(termData);
+              for (const line of lineNumbers) {
+                candidateLines.add(line);
+              }
+            }
+          }
+          continue;
+        } else {
+          // For non-term-mapping fields, search index keys directly
+          const searchLower = String(term).toLowerCase();
+          for (const key in fieldIndex) {
+            if (key.toLowerCase() === searchLower) {
+              const termData = fieldIndex[key];
+              if (hasData(termData)) {
+                // Add line numbers to candidates
+                const lineNumbers = this._getAllLineNumbers(termData);
+                for (const line of lineNumbers) {
+                  candidateLines.add(line);
+                }
+              }
+            }
+          }
+          continue;
+        }
+      }
+      
+      // Normal (case-sensitive) lookup
+      const termKey = getTermKey(term, false);
+      if (termKey === null) {
+        continue; // Term not in mapping, try next
+      }
+      
+      // Direct lookup
+      const termData = fieldIndex[termKey];
+      if (hasData(termData)) {
+        // Add line numbers to candidates (need to expand for excludes check)
+        const lineNumbers = this._getAllLineNumbers(termData);
+        for (const line of lineNumbers) {
+          candidateLines.add(line);
+        }
+      }
+    }
+    
+    // If no candidates found, return false
+    if (candidateLines.size === 0) {
+      return false;
+    }
+    
+    // Apply excludes
+    for (const excludeTerm of excludes) {
+      const excludeKey = getTermKey(excludeTerm, caseInsensitive);
+      if (excludeKey === null) continue;
+      
+      const excludeData = fieldIndex[excludeKey];
+      if (!excludeData) continue;
+      
+      const excludeLines = this._getAllLineNumbers(excludeData);
+      for (const line of excludeLines) {
+        candidateLines.delete(line);
+      }
+      
+      // Early exit if all candidates excluded
+      if (candidateLines.size === 0) {
+        return false;
+      }
+    }
+    
+    return candidateLines.size > 0;
+  }
  
   // Ultra-fast load with minimal conversions
   load(index) {
@@ -1238,6 +1880,11 @@ export default class IndexManager {
 
       processedIndex.data[field] = {}
       
+      // CRITICAL FIX: Check if this is a term mapping field for conversion
+      const isTermMappingField = this.database?.termManager && 
+        this.database.termManager.termMappingFields && 
+        this.database.termManager.termMappingFields.includes(field)
+      
       const terms = Object.keys(fieldData)
       for(const term of terms) {
         if (!term || typeof term !== 'string') {
@@ -1245,6 +1892,24 @@ export default class IndexManager {
         }
 
         const termData = fieldData[term]
+        
+        // CRITICAL FIX: Convert term strings to term IDs for term mapping fields
+        // If the key is a string term (not a numeric ID), convert it to term ID
+        let termKey = term
+        if (isTermMappingField && typeof term === 'string' && !/^\d+$/.test(term)) {
+          // Key is a term string, convert to term ID
+          const termId = this.database?.termManager?.getTermIdWithoutIncrement(term)
+          if (termId !== undefined) {
+            termKey = String(termId)
+          } else {
+            // Term not found in termManager - skip this key (orphaned term from old index)
+            // This can happen if termMapping wasn't loaded yet or term was removed
+            if (this.opts?.debugMode) {
+              console.log(`⚠️  IndexManager.load: Term "${term}" not found in termManager for field "${field}" - skipping (orphaned from old index)`)
+            }
+            continue
+          }
+        }
         
         // Convert various formats to new hybrid format
         if (Array.isArray(termData)) {
@@ -1261,13 +1926,13 @@ export default class IndexManager {
                     return range
                   }
                 })
-                processedIndex.data[field][term] = {
+                processedIndex.data[field][termKey] = {
                   set: new Set(termData[0]),
                   ranges: ranges
                 }
               } else {
                 // Legacy array format (just set data)
-                processedIndex.data[field][term] = { set: new Set(termData), ranges: [] }
+                processedIndex.data[field][termKey] = { set: new Set(termData), ranges: [] }
               }
         } else if (termData && typeof termData === 'object') {
           if (termData.set || termData.ranges) {
@@ -1281,14 +1946,14 @@ export default class IndexManager {
               // Fallback to empty Set
               setObject = new Set()
             }
-            processedIndex.data[field][term] = { 
+            processedIndex.data[field][termKey] = { 
               set: setObject, 
               ranges: hybridData.ranges || [] 
             }
           } else {
             // Convert from Set format to hybrid
             const numbers = Array.from(termData || [])
-            processedIndex.data[field][term] = { set: new Set(numbers), ranges: [] }
+            processedIndex.data[field][termKey] = { set: new Set(numbers), ranges: [] }
           }
         }
       }
@@ -1345,11 +2010,37 @@ export default class IndexManager {
   toJSON() {
     const serializable = { data: {} }
     
+    // Check if this is a term mapping field for conversion
+    const isTermMappingField = (field) => {
+      return this.database?.termManager && 
+        this.database.termManager.termMappingFields && 
+        this.database.termManager.termMappingFields.includes(field)
+    }
+    
     for (const field in this.index.data) {
       serializable.data[field] = {}
+      const isTermField = isTermMappingField(field)
       
       for (const term in this.index.data[field]) {
         const hybridData = this.index.data[field][term]
+        
+        // CRITICAL FIX: Convert term strings to term IDs for term mapping fields
+        // If the key is a string term (not a numeric ID), convert it to term ID
+        let termKey = term
+        if (isTermField && typeof term === 'string' && !/^\d+$/.test(term)) {
+          // Key is a term string, convert to term ID
+          const termId = this.database?.termManager?.getTermIdWithoutIncrement(term)
+          if (termId !== undefined) {
+            termKey = String(termId)
+          } else {
+            // Term not found in termManager, keep original key
+            // This prevents data loss when term mapping is incomplete
+            termKey = term
+            if (this.opts?.debugMode) {
+              console.log(`⚠️  IndexManager.toJSON: Term "${term}" not found in termManager for field "${field}" - using original key`)
+            }
+          }
+        }
         
         // OPTIMIZATION: Create ranges before serialization if beneficial
         if (hybridData.set && hybridData.set.size >= this.rangeThreshold) {
@@ -1370,11 +2061,11 @@ export default class IndexManager {
         if (ranges.length > 0) {
           // Convert ranges to ultra-compact format: [start, count] instead of {start, count}
           const compactRanges = ranges.map(range => [range.start, range.count])
-          serializable.data[field][term] = [setArray, compactRanges]
+          serializable.data[field][termKey] = [setArray, compactRanges]
         } else {
           // CRITICAL FIX: Always use the [setArray, []] format for consistency
           // This ensures the load() method can properly deserialize the data
-          serializable.data[field][term] = [setArray, []]
+          serializable.data[field][termKey] = [setArray, []]
         }
       }
     }

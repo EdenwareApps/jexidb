@@ -1,3 +1,5 @@
+import { normalizeOperator } from '../utils/operatorNormalizer.mjs'
+
 /**
  * QueryManager - Handles all query operations and strategies
  * 
@@ -35,6 +37,9 @@ export class QueryManager {
     if (this.database.destroyed) throw new Error('Database is destroyed')
     if (!this.database.initialized) await this.database.init()
     
+    // Rebuild indexes if needed (when index was corrupted/missing)
+    await this.database._rebuildIndexesIfNeeded()
+    
     // Manual save is now the responsibility of the application
     
     // Preprocess query to handle array field syntax automatically
@@ -44,8 +49,8 @@ export class QueryManager {
     
     // Validate strict indexed mode before processing
     if (this.opts.indexedQueryMode === 'strict') {
-      this.validateStrictQuery(finalCriteria);
-    }    
+      this.validateStrictQuery(finalCriteria, options);
+    }
     
     const startTime = Date.now();
     this.usageStats.totalQueries++;
@@ -99,7 +104,7 @@ export class QueryManager {
     
     // Validate strict indexed mode before processing
     if (this.opts.indexedQueryMode === 'strict') {
-      this.validateStrictQuery(processedCriteria);
+      this.validateStrictQuery(processedCriteria, options);
     }
     
     const startTime = Date.now();
@@ -147,11 +152,15 @@ export class QueryManager {
   async count(criteria, options = {}) {
     if (this.database.destroyed) throw new Error('Database is destroyed')
     if (!this.database.initialized) await this.database.init()
+    
+    // Rebuild indexes if needed (when index was corrupted/missing)
+    await this.database._rebuildIndexesIfNeeded()
+    
     // Manual save is now the responsibility of the application
     
     // Validate strict indexed mode before processing
     if (this.opts.indexedQueryMode === 'strict') {
-      this.validateStrictQuery(criteria);
+      this.validateStrictQuery(criteria, options);
     }
     
     // Use the same strategy as find method
@@ -164,9 +173,50 @@ export class QueryManager {
       const results = await this.findWithStreaming(criteria, options);
       count = results.length;
     } else {
-      // Use indexed approach for indexed fields
-      const results = await this.findWithIndexed(criteria, options);
-      count = results.length;
+      // OPTIMIZATION: For indexed strategy, use indexManager.query().size directly
+      // This avoids reading actual records from the file - much faster!
+      const lineNumbers = this.indexManager.query(criteria, options);
+      
+      if (lineNumbers.size === 0) {
+        const missingIndexedFields = this._getIndexedFieldsWithMissingData(criteria)
+        if (missingIndexedFields.length > 0 && this._hasAnyRecords()) {
+          // Try to rebuild index before falling back to streaming (only if allowIndexRebuild is true)
+          if (this.database.opts.allowIndexRebuild) {
+            if (this.opts.debugMode) {
+              console.log(`⚠️ Indexed count returned 0 because index data is missing for: ${missingIndexedFields.join(', ')}. Attempting index rebuild...`);
+            }
+            this.database._indexRebuildNeeded = true
+            await this.database._rebuildIndexesIfNeeded()
+            
+            // Retry indexed query after rebuild
+            const retryLineNumbers = this.indexManager.query(criteria, options)
+            if (retryLineNumbers.size > 0) {
+              if (this.opts.debugMode) {
+                console.log(`✅ Index rebuild successful, using indexed strategy.`);
+              }
+              count = retryLineNumbers.size
+            } else {
+              // Still no results after rebuild, fall back to streaming
+              if (this.opts.debugMode) {
+                console.log(`⚠️ Index rebuild did not help, falling back to streaming count.`);
+              }
+              const streamingResults = await this.findWithStreaming(criteria, { ...options, forceFullScan: true })
+              count = streamingResults.length
+            }
+          } else {
+            // allowIndexRebuild is false, fall back to streaming
+            if (this.opts.debugMode) {
+              console.log(`⚠️ Indexed count returned 0 because index data is missing for: ${missingIndexedFields.join(', ')}. Falling back to streaming count.`);
+            }
+            const streamingResults = await this.findWithStreaming(criteria, { ...options, forceFullScan: true })
+            count = streamingResults.length
+          }
+        } else {
+          count = 0
+        }
+      } else {
+        count = lineNumbers.size;
+      }
     }
     
     return count;
@@ -189,33 +239,43 @@ export class QueryManager {
    * @returns {Promise<Array>} - Query results
    */
   async findWithStreaming(criteria, options = {}) {
+    const streamingOptions = { ...options }
+    const forceFullScan = streamingOptions.forceFullScan === true
+    delete streamingOptions.forceFullScan
+
     if (this.opts.debugMode) {
-      console.log('🌊 Using streaming strategy');
+      if (forceFullScan) {
+        console.log('🌊 Using streaming strategy (forced full scan to bypass missing index data)');
+      } else {
+        console.log('🌊 Using streaming strategy');
+      }
     }
     
-    // OPTIMIZATION: Try to use indices for pre-filtering when possible
-    const indexableFields = this._getIndexableFields(criteria);
-    if (indexableFields.length > 0) {
-      if (this.opts.debugMode) {
-        console.log(`🌊 Using pre-filtered streaming with ${indexableFields.length} indexable fields`);
+    if (!forceFullScan) {
+      // OPTIMIZATION: Try to use indices for pre-filtering when possible
+      const indexableFields = this._getIndexableFields(criteria);
+      if (indexableFields.length > 0) {
+        if (this.opts.debugMode) {
+          console.log(`🌊 Using pre-filtered streaming with ${indexableFields.length} indexable fields`);
+        }
+        
+        // Use indices to pre-filter and reduce streaming scope
+        const preFilteredLines = this.indexManager.query(
+          this._extractIndexableCriteria(criteria), 
+          streamingOptions
+        );
+        
+        // Stream only the pre-filtered records
+        return this._streamPreFilteredRecords(preFilteredLines, criteria, streamingOptions);
       }
-      
-      // Use indices to pre-filter and reduce streaming scope
-      const preFilteredLines = this.indexManager.query(
-        this._extractIndexableCriteria(criteria), 
-        options
-      );
-      
-      // Stream only the pre-filtered records
-      return this._streamPreFilteredRecords(preFilteredLines, criteria, options);
     }
     
     // Fallback to full streaming
     if (this.opts.debugMode) {
-      console.log('🌊 Using full streaming (no indexable fields found)');
+      console.log('🌊 Using full streaming (no indexable fields found or forced)');
     }
     
-    return this._streamAllRecords(criteria, options);
+    return this._streamAllRecords(criteria, streamingOptions);
   }
 
   /**
@@ -292,6 +352,96 @@ export class QueryManager {
     }
     
     return indexableCriteria;
+  }
+
+  /**
+   * Determine whether the database currently has any records (persisted or pending)
+   * @returns {boolean}
+   */
+  _hasAnyRecords() {
+    if (!this.database) {
+      return false
+    }
+
+    if (Array.isArray(this.database.offsets) && this.database.offsets.length > 0) {
+      return true
+    }
+
+    if (Array.isArray(this.database.writeBuffer) && this.database.writeBuffer.length > 0) {
+      return true
+    }
+
+    if (typeof this.database.length === 'number' && this.database.length > 0) {
+      return true
+    }
+
+    return false
+  }
+
+  /**
+   * Extract all indexed fields referenced in the criteria
+   * @param {Object} criteria
+   * @param {Set<string>} accumulator
+   * @returns {Array<string>}
+   */
+  _extractIndexedFields(criteria, accumulator = new Set()) {
+    if (!criteria) {
+      return Array.from(accumulator)
+    }
+
+    if (Array.isArray(criteria)) {
+      for (const item of criteria) {
+        this._extractIndexedFields(item, accumulator)
+      }
+      return Array.from(accumulator)
+    }
+
+    if (typeof criteria !== 'object') {
+      return Array.from(accumulator)
+    }
+
+    for (const [key, value] of Object.entries(criteria)) {
+      if (key.startsWith('$')) {
+        this._extractIndexedFields(value, accumulator)
+        continue
+      }
+
+      accumulator.add(key)
+
+      if (Array.isArray(value)) {
+        for (const nested of value) {
+          this._extractIndexedFields(nested, accumulator)
+        }
+      }
+    }
+
+    return Array.from(accumulator)
+  }
+
+  /**
+   * Identify indexed fields present in criteria whose index data is missing
+   * @param {Object} criteria
+   * @returns {Array<string>}
+   */
+  _getIndexedFieldsWithMissingData(criteria) {
+    if (!this.indexManager || !criteria) {
+      return []
+    }
+
+    const indexedFields = this._extractIndexedFields(criteria)
+    const missing = []
+
+    for (const field of indexedFields) {
+      if (!this.indexManager.isFieldIndexed(field)) {
+        continue
+      }
+
+      if (!this.indexManager.hasUsableIndexData(field)) {
+        missing.push(field)
+      }
+    }
+
+    return missing
   }
 
   /**
@@ -498,6 +648,45 @@ export class QueryManager {
       console.log(`🔍 IndexManager returned ${lineNumbers.size} line numbers:`, Array.from(lineNumbers))
     }
     
+    if (lineNumbers.size === 0) {
+      const missingIndexedFields = this._getIndexedFieldsWithMissingData(criteria)
+      if (missingIndexedFields.length > 0 && this._hasAnyRecords()) {
+        // Try to rebuild index before falling back to streaming (only if allowIndexRebuild is true)
+        if (this.database.opts.allowIndexRebuild) {
+          if (this.opts.debugMode) {
+            console.log(`⚠️ Indexed query returned no results because index data is missing for: ${missingIndexedFields.join(', ')}. Attempting index rebuild...`)
+          }
+          this.database._indexRebuildNeeded = true
+          await this.database._rebuildIndexesIfNeeded()
+          
+          // Retry indexed query after rebuild
+          const retryLineNumbers = this.indexManager.query(criteria, options)
+          if (retryLineNumbers.size > 0) {
+            if (this.opts.debugMode) {
+              console.log(`✅ Index rebuild successful, using indexed strategy.`)
+            }
+            // Update lineNumbers to use rebuilt index results
+            lineNumbers.clear()
+            for (const lineNumber of retryLineNumbers) {
+              lineNumbers.add(lineNumber)
+            }
+          } else {
+            // Still no results after rebuild, fall back to streaming
+            if (this.opts.debugMode) {
+              console.log(`⚠️ Index rebuild did not help, falling back to streaming.`)
+            }
+            return this.findWithStreaming(criteria, { ...options, forceFullScan: true })
+          }
+        } else {
+          // allowIndexRebuild is false, fall back to streaming
+          if (this.opts.debugMode) {
+            console.log(`⚠️ Indexed query returned no results because index data is missing for: ${missingIndexedFields.join(', ')}. Falling back to streaming.`)
+          }
+          return this.findWithStreaming(criteria, { ...options, forceFullScan: true })
+        }
+      }
+    }
+    
     // Read specific records using the line numbers
     if (lineNumbers.size > 0) {
       const lineNumbersArray = Array.from(lineNumbers)
@@ -666,7 +855,8 @@ export class QueryManager {
     // Handle object conditions (operators)
     if (typeof condition === 'object' && !Array.isArray(condition)) {
       for (const [operator, operatorValue] of Object.entries(condition)) {
-        if (!this.matchesOperator(value, operator, operatorValue, options)) {
+        const normalizedOperator = normalizeOperator(operator);
+        if (!this.matchesOperator(value, normalizedOperator, operatorValue, options)) {
           return false;
         }
       }
@@ -697,6 +887,8 @@ export class QueryManager {
    */
   matchesOperator(value, operator, operatorValue, options = {}) {
     switch (operator) {
+      case '$eq':
+        return value === operatorValue;
       case '$gt':
         return value > operatorValue;
       case '$gte':
@@ -756,6 +948,7 @@ export class QueryManager {
         return false;
     }
   }
+
 
   /**
    * Preprocess query to handle array field syntax automatically
@@ -913,16 +1106,23 @@ export class QueryManager {
           }
           
           if (typeof condition === 'object' && !Array.isArray(condition)) {
-            const operators = Object.keys(condition);
+            const operators = Object.keys(condition).map(op => normalizeOperator(op));
+            const indexType = this.indexManager?.opts?.indexes?.[field]
+            const isNumericIndex = indexType === 'number' || indexType === 'auto' || indexType === 'array:number'
+            const disallowedForNumeric = ['$all', '$in', '$not', '$regex', '$contains', '$exists', '$size']
+            const disallowedDefault = ['$all', '$in', '$gt', '$gte', '$lt', '$lte', '$ne', '$not', '$regex', '$contains', '$exists', '$size']
             
-            if (this.opts.termMapping && Object.keys(this.opts.indexes || {}).includes(field)) {
-              return operators.every(op => {
-                return !['$gt', '$gte', '$lt', '$lte', '$ne', '$regex', '$contains', '$exists', '$size'].includes(op);
-              });
+            // Check if this is a term mapping field (array:string or string fields with term mapping)
+            const isTermMappingField = this.database.termManager && 
+              this.database.termManager.termMappingFields && 
+              this.database.termManager.termMappingFields.includes(field)
+            
+            if (isTermMappingField) {
+              const termMappingDisallowed = ['$gt', '$gte', '$lt', '$lte', '$ne', '$regex', '$contains', '$exists', '$size']
+              return operators.every(op => !termMappingDisallowed.includes(op));
             } else {
-              return operators.every(op => {
-                return !['$all', '$in', '$gt', '$gte', '$lt', '$lte', '$ne', '$not', '$regex', '$contains', '$exists', '$size'].includes(op);
-              });
+              const disallowed = isNumericIndex ? disallowedForNumeric : disallowedDefault
+              return operators.every(op => !disallowed.includes(op));
             }
           }
           return true;
@@ -960,23 +1160,34 @@ export class QueryManager {
       }
       
       if (typeof condition === 'object' && !Array.isArray(condition)) {
-        const operators = Object.keys(condition);
+        const operators = Object.keys(condition).map(op => normalizeOperator(op));
         if (this.opts.debugMode) {
           console.log(`🔍 Field '${field}' has operators:`, operators)
         }
         
-        // With term mapping enabled, we can support complex operators via partial reads
-        if (this.opts.termMapping && Object.keys(this.opts.indexes || {}).includes(field)) {
-          // Term mapping fields can use complex operators with partial reads
-          return operators.every(op => {
-            // Support $in, $nin, $all, $not for term mapping fields (converted to multiple equality checks)
-            return !['$gt', '$gte', '$lt', '$lte', '$ne', '$regex', '$contains', '$exists', '$size'].includes(op);
-          });
+        const indexType = this.indexManager?.opts?.indexes?.[field]
+        const isNumericIndex = indexType === 'number' || indexType === 'auto' || indexType === 'array:number'
+        const isArrayStringIndex = indexType === 'array:string'
+        const disallowedForNumeric = ['$all', '$in', '$not', '$regex', '$contains', '$exists', '$size']
+        const disallowedDefault = ['$all', '$in', '$gt', '$gte', '$lt', '$lte', '$ne', '$not', '$regex', '$contains', '$exists', '$size']
+        
+        // Check if this is a term mapping field (array:string or string fields with term mapping)
+        const isTermMappingField = this.database.termManager && 
+          this.database.termManager.termMappingFields && 
+          this.database.termManager.termMappingFields.includes(field)
+        
+        // With term mapping enabled on THIS FIELD, we can support complex operators via partial reads
+        // Also support $all for array:string indexed fields (IndexManager.query supports it via Set intersection)
+        if (isTermMappingField) {
+          const termMappingDisallowed = ['$gt', '$gte', '$lt', '$lte', '$ne', '$regex', '$contains', '$exists', '$size']
+          return operators.every(op => !termMappingDisallowed.includes(op));
         } else {
-          // Non-term-mapping fields only support simple equality operations
-          return operators.every(op => {
-            return !['$all', '$in', '$gt', '$gte', '$lt', '$lte', '$ne', '$not', '$regex', '$contains', '$exists', '$size'].includes(op);
-          });
+          let disallowed = isNumericIndex ? disallowedForNumeric : disallowedDefault
+          // Remove $all from disallowed if field is array:string (IndexManager supports $all via Set intersection)
+          if (isArrayStringIndex) {
+            disallowed = disallowed.filter(op => op !== '$all')
+          }
+          return operators.every(op => !disallowed.includes(op));
         }
       }
       return true;
@@ -1150,28 +1361,34 @@ export class QueryManager {
   /**
    * Validate strict query mode
    * @param {Object} criteria - Query criteria
+   * @param {Object} options - Query options
    */
-  validateStrictQuery(criteria) {
+  validateStrictQuery(criteria, options = {}) {
+    // Allow bypassing strict mode validation with allowNonIndexed option
+    if (options.allowNonIndexed === true) {
+      return; // Skip validation for this query
+    }
+
     if (!criteria || Object.keys(criteria).length === 0) {
       return; // Empty criteria are always allowed
     }
 
     // Handle logical operators at the top level
     if (criteria.$not) {
-      this.validateStrictQuery(criteria.$not);
+      this.validateStrictQuery(criteria.$not, options);
       return;
     }
 
     if (criteria.$or && Array.isArray(criteria.$or)) {
       for (const orCondition of criteria.$or) {
-        this.validateStrictQuery(orCondition);
+        this.validateStrictQuery(orCondition, options);
       }
       return;
     }
 
     if (criteria.$and && Array.isArray(criteria.$and)) {
       for (const andCondition of criteria.$and) {
-        this.validateStrictQuery(andCondition);
+        this.validateStrictQuery(andCondition, options);
       }
       return;
     }

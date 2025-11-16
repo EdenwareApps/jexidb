@@ -172,6 +172,66 @@ describe('Score Method Tests', () => {
     })
   })
 
+  describe('Mode Options', () => {
+    test('should support max mode', async () => {
+      await db.insert({ id: 1, title: 'Action Only', terms: ['action'] })
+      await db.insert({ id: 2, title: 'Action Comedy', terms: ['action', 'comedy'] })
+      await db.insert({ id: 3, title: 'Comedy Only', terms: ['comedy'] })
+      await db.save()
+
+      const results = await db.score('terms', {
+        'action': 2.0,
+        'comedy': 1.0
+      }, { mode: 'max' })
+
+      expect(results).toHaveLength(3)
+      expect(results[0].title).toBe('Action Only')
+      expect(results[0].score).toBe(2.0)
+      expect(results[1].title).toBe('Action Comedy')
+      expect(results[1].score).toBe(2.0)
+      expect(results[2].title).toBe('Comedy Only')
+      expect(results[2].score).toBe(1.0)
+    })
+
+    test('should support avg mode', async () => {
+      await db.insert({ id: 1, title: 'Mixed', terms: ['action', 'comedy'] })
+      await db.insert({ id: 2, title: 'Action Only', terms: ['action'] })
+      await db.insert({ id: 3, title: 'Comedy Only', terms: ['comedy'] })
+      await db.save()
+
+      const results = await db.score('terms', {
+        'action': 1.5,
+        'comedy': 0.9
+      }, { mode: 'avg' })
+
+      expect(results).toHaveLength(3)
+      expect(results[0].title).toBe('Action Only')
+      expect(results[0].score).toBeCloseTo(1.5)
+      expect(results[1].title).toBe('Mixed')
+      expect(results[1].score).toBeCloseTo((1.5 + 0.9) / 2)
+      expect(results[2].title).toBe('Comedy Only')
+      expect(results[2].score).toBeCloseTo(0.9)
+    })
+
+    test('should support first mode with term priority', async () => {
+      await db.insert({ id: 1, title: 'High Priority', terms: ['primary', 'secondary'] })
+      await db.insert({ id: 2, title: 'Secondary Only', terms: ['secondary'] })
+      await db.insert({ id: 3, title: 'Unmatched', terms: ['other'] })
+      await db.save()
+
+      const results = await db.score('terms', {
+        'primary': 5,
+        'secondary': 2
+      }, { mode: 'first' })
+
+      expect(results).toHaveLength(2)
+      expect(results[0].title).toBe('High Priority')
+      expect(results[0].score).toBe(5)
+      expect(results[1].title).toBe('Secondary Only')
+      expect(results[1].score).toBe(2)
+    })
+  })
+
   describe('Edge Cases', () => {
     test('should return empty array for empty scores', async () => {
       await db.insert({ id: 1, title: 'Test', terms: ['a'] })

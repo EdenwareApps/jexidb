@@ -38,19 +38,19 @@ export default class TermManager {
   /**
    * Get term ID without incrementing count (for IndexManager use)
    * @param {string} term - Term to get ID for
-   * @returns {number} - Numeric ID for the term
+   * @returns {number|undefined} - Numeric ID for the term, or undefined if not found
+   * CRITICAL: Does NOT create new IDs - only returns existing ones
+   * This prevents creating invalid term IDs during queries when terms haven't been loaded yet
    */
   getTermIdWithoutIncrement(term) {
     if (this.termToId.has(term)) {
       return this.termToId.get(term)
     }
     
-    const id = this.nextId++
-    this.termToId.set(term, id)
-    this.idToTerm.set(id, term)
-    this.termCounts.set(id, 0) // Start with 0 count
-    
-    return id
+    // CRITICAL FIX: Don't create new IDs during queries
+    // If term doesn't exist, return undefined
+    // This ensures queries only work with terms that were actually saved to the database
+    return undefined
   }
 
   /**

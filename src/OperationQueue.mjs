@@ -1,6 +1,6 @@
 /**
- * OperationQueue - Sistema de fila para operações do banco de dados
- * Resolve race conditions entre operações concorrentes
+ * OperationQueue - Queue system for database operations
+ * Resolves race conditions between concurrent operations
  */
 
 export class OperationQueue {
@@ -20,9 +20,9 @@ export class OperationQueue {
   }
   
   /**
-   * Adiciona uma operação à fila
-   * @param {Function} operation - Função assíncrona a ser executada
-   * @returns {Promise} - Promise que resolve quando a operação é concluída
+   * Adds an operation to the queue
+   * @param {Function} operation - Asynchronous function to be executed
+   * @returns {Promise} - Promise that resolves when the operation is completed
    */
   async enqueue(operation) {
     const id = ++this.operationId
@@ -48,13 +48,13 @@ export class OperationQueue {
         startTime: Date.now()
       })
       
-      // Processar imediatamente se não estiver processando
+      // Process immediately if not already processing
       this.process().catch(reject)
     })
   }
   
   /**
-   * Processa todas as operações na fila sequencialmente
+   * Processes all operations in the queue sequentially
    */
   async process() {
     if (this.processing || this.queue.length === 0) {
@@ -116,9 +116,9 @@ export class OperationQueue {
   }
   
   /**
-   * Aguarda todas as operações pendentes serem processadas
-   * @param {number|null} maxWaitTime - Tempo máximo de espera em ms (null = wait indefinitely)
-   * @returns {Promise<boolean>} - true se todas foram processadas, false se timeout
+   * Waits for all pending operations to be processed
+   * @param {number|null} maxWaitTime - Maximum wait time in ms (null = wait indefinitely)
+   * @returns {Promise<boolean>} - true if all operations were processed, false if a timeout occurred
    */
   async waitForCompletion(maxWaitTime = 5000) {
     const startTime = Date.now()
@@ -167,21 +167,21 @@ export class OperationQueue {
   }
   
   /**
-   * Retorna o tamanho atual da fila
+   * Returns the current queue length
    */
   getQueueLength() {
     return this.queue.length
   }
   
   /**
-   * Verifica se está processando operações
+   * Checks whether operations are currently being processed
    */
   isProcessing() {
     return this.processing
   }
   
   /**
-   * Retorna estatísticas da fila
+   * Returns queue statistics
    */
   getStats() {
     return {
@@ -194,7 +194,7 @@ export class OperationQueue {
   }
   
   /**
-   * Limpa a fila (para casos de emergência)
+   * Clears the queue (for emergency situations)
    */
   clear() {
     const clearedCount = this.queue.length
@@ -208,9 +208,9 @@ export class OperationQueue {
   }
 
   /**
-   * Detecta operações travadas e retorna informações detalhadas
-   * @param {number} stuckThreshold - Tempo em ms para considerar uma operação travada
-   * @returns {Array} - Lista de operações travadas com stack traces
+   * Detects stuck operations and returns detailed information
+   * @param {number} stuckThreshold - Time in ms to consider an operation stuck
+   * @returns {Array} - List of stuck operations with stack traces
    */
   detectStuckOperations(stuckThreshold = 10000) {
     const now = Date.now()
@@ -225,15 +225,15 @@ export class OperationQueue {
   }
 
   /**
-   * Força a limpeza de operações travadas (último recurso)
-   * @param {number} stuckThreshold - Tempo em ms para considerar uma operação travada
-   * @returns {number} - Número de operações removidas
+   * Force-cleans stuck operations (last resort)
+   * @param {number} stuckThreshold - Time in ms to consider an operation stuck
+   * @returns {number} - Number of operations removed
    */
   forceCleanupStuckOperations(stuckThreshold = 10000) {
     const stuckOps = this.detectStuckOperations(stuckThreshold)
     
     if (stuckOps.length > 0) {
-      // Rejeitar todas as operações travadas
+      // Reject all stuck operations
       stuckOps.forEach(stuckOp => {
         const opIndex = this.queue.findIndex(op => op.id === stuckOp.id)
         if (opIndex !== -1) {
@@ -255,14 +255,14 @@ export class OperationQueue {
   }
   
   /**
-   * Verifica se a fila está vazia
+   * Checks whether the queue is empty
    */
   isEmpty() {
     return this.queue.length === 0
   }
   
   /**
-   * Retorna informações sobre a próxima operação na fila
+   * Returns information about the next operation in the queue
    */
   peekNext() {
     if (this.queue.length === 0) {

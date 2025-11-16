@@ -259,42 +259,69 @@ export default class Serializer {
   optimizedStringify(obj) {
     // CRITICAL: Normalize encoding for all string fields before stringify
     const normalizedObj = this.deepNormalizeEncoding(obj)
-    
+    return this._stringifyNormalizedValue(normalizedObj)
+  }
+
+  _stringifyNormalizedValue(value) {
     // Fast path for null and undefined
-    if (normalizedObj === null) return 'null'
-    if (normalizedObj === undefined) return 'null'
+    if (value === null || value === undefined) {
+      return 'null'
+    }
+
+    const type = typeof value
 
     // Fast path for primitives
-    if (typeof normalizedObj === 'boolean') return normalizedObj ? 'true' : 'false'
-    if (typeof normalizedObj === 'number') return normalizedObj.toString()
-    if (typeof normalizedObj === 'string') {
+    if (type === 'boolean') {
+      return value ? 'true' : 'false'
+    }
+
+    if (type === 'number') {
+      return Number.isFinite(value) ? value.toString() : 'null'
+    }
+
+    if (type === 'string') {
       // Fast path for simple strings (no escaping needed)
-      if (!/[\\"\u0000-\u001f]/.test(normalizedObj)) {
-        return '"' + normalizedObj + '"'
+      if (!/[\\"\u0000-\u001f]/.test(value)) {
+        return '"' + value + '"'
       }
       // Fall back to JSON.stringify for complex strings
-      return JSON.stringify(normalizedObj)
+      return JSON.stringify(value)
     }
 
-    // Fast path for arrays
-    if (Array.isArray(normalizedObj)) {
-      if (normalizedObj.length === 0) return '[]'
-      
-      // For arrays, always use JSON.stringify to avoid concatenation issues
-      return JSON.stringify(normalizedObj)
+    if (Array.isArray(value)) {
+      return this._stringifyNormalizedArray(value)
     }
 
-    // Fast path for objects
-    if (typeof normalizedObj === 'object') {
-      const keys = Object.keys(normalizedObj)
+    if (type === 'object') {
+      const keys = Object.keys(value)
       if (keys.length === 0) return '{}'
-
-      // For objects, always use JSON.stringify to avoid concatenation issues
-      return JSON.stringify(normalizedObj)
+      // Use native stringify for object to leverage stable handling of undefined, Dates, etc.
+      return JSON.stringify(value)
     }
 
-    // Fallback to JSON.stringify for unknown types
-    return JSON.stringify(normalizedObj)
+    // Fallback to JSON.stringify for unknown types (BigInt, symbols, etc.)
+    return JSON.stringify(value)
+  }
+
+  _stringifyNormalizedArray(arr) {
+    const length = arr.length
+    if (length === 0) return '[]'
+
+    let result = '['
+    for (let i = 0; i < length; i++) {
+      if (i > 0) result += ','
+      const element = arr[i]
+
+      // JSON spec: undefined, functions, and symbols are serialized as null within arrays
+      if (element === undefined || typeof element === 'function' || typeof element === 'symbol') {
+        result += 'null'
+        continue
+      }
+
+      result += this._stringifyNormalizedValue(element)
+    }
+    result += ']'
+    return result
   }
 
   /**
@@ -350,12 +377,176 @@ export default class Serializer {
       // Fast path for empty strings
       if (strLength === 0) return null
 
+      // CRITICAL FIX: Detect and handle multiple JSON objects in the same line
+      // This can happen if data was corrupted during concurrent writes or offset calculation errors
+      const firstBrace = str.indexOf('{')
+      const firstBracket = str.indexOf('[')
+      
+      // Helper function to extract first complete JSON object/array from a string
+      // CRITICAL FIX: Must handle strings and escaped characters correctly
+      // to avoid counting braces/brackets that are inside string values
+      const extractFirstJson = (jsonStr, startChar) => {
+        if (startChar === '{') {
+          let braceCount = 0
+          let endPos = -1
+          let inString = false
+          let escapeNext = false
+          
+          for (let i = 0; i < jsonStr.length; i++) {
+            const char = jsonStr[i]
+            
+            if (escapeNext) {
+              escapeNext = false
+              continue
+            }
+            
+            if (char === '\\') {
+              escapeNext = true
+              continue
+            }
+            
+            if (char === '"' && !escapeNext) {
+              inString = !inString
+              continue
+            }
+            
+            if (!inString) {
+              if (char === '{') braceCount++
+              if (char === '}') {
+                braceCount--
+                if (braceCount === 0) {
+                  endPos = i + 1
+                  break
+                }
+              }
+            }
+          }
+          return endPos > 0 ? jsonStr.substring(0, endPos) : null
+        } else if (startChar === '[') {
+          let bracketCount = 0
+          let endPos = -1
+          let inString = false
+          let escapeNext = false
+          
+          for (let i = 0; i < jsonStr.length; i++) {
+            const char = jsonStr[i]
+            
+            if (escapeNext) {
+              escapeNext = false
+              continue
+            }
+            
+            if (char === '\\') {
+              escapeNext = true
+              continue
+            }
+            
+            if (char === '"' && !escapeNext) {
+              inString = !inString
+              continue
+            }
+            
+            if (!inString) {
+              if (char === '[') bracketCount++
+              if (char === ']') {
+                bracketCount--
+                if (bracketCount === 0) {
+                  endPos = i + 1
+                  break
+                }
+              }
+            }
+          }
+          return endPos > 0 ? jsonStr.substring(0, endPos) : null
+        }
+        return null
+      }
+      
+      // Check if JSON starts at the beginning of the string
+      const jsonStartsAtZero = (firstBrace === 0) || (firstBracket === 0)
+      let hasValidJson = false
+      
+      if (jsonStartsAtZero) {
+        // JSON starts at beginning - check for multiple JSON objects/arrays
+        if (firstBrace === 0) {
+          const secondBrace = str.indexOf('{', 1)
+          if (secondBrace !== -1) {
+            // Multiple objects detected - extract first
+            const extracted = extractFirstJson(str, '{')
+            if (extracted) {
+              str = extracted
+              hasValidJson = true
+              if (this.opts && this.opts.debugMode) {
+                console.warn(`⚠️ Deserialize: Multiple JSON objects detected, using first object only`)
+              }
+            }
+          } else {
+            hasValidJson = true // Single valid object starting at 0
+          }
+        } else if (firstBracket === 0) {
+          const secondBracket = str.indexOf('[', 1)
+          if (secondBracket !== -1) {
+            // Multiple arrays detected - extract first
+            const extracted = extractFirstJson(str, '[')
+            if (extracted) {
+              str = extracted
+              hasValidJson = true
+              if (this.opts && this.opts.debugMode) {
+                console.warn(`⚠️ Deserialize: Multiple JSON arrays detected, using first array only`)
+              }
+            }
+          } else {
+            hasValidJson = true // Single valid array starting at 0
+          }
+        }
+      } else {
+        // JSON doesn't start at beginning - try to find and extract first valid JSON
+        const jsonStart = firstBrace !== -1 ? (firstBracket !== -1 ? Math.min(firstBrace, firstBracket) : firstBrace) : firstBracket
+        
+        if (jsonStart !== -1 && jsonStart > 0) {
+          // Found JSON but not at start - extract from that position
+          const jsonStr = str.substring(jsonStart)
+          const startChar = jsonStr[0]
+          const extracted = extractFirstJson(jsonStr, startChar)
+          
+          if (extracted) {
+            str = extracted
+            hasValidJson = true
+            if (this.opts && this.opts.debugMode) {
+              console.warn(`⚠️ Deserialize: Found JSON after ${jsonStart} chars of invalid text, extracted first ${startChar === '{' ? 'object' : 'array'}`)
+            }
+          }
+        }
+      }
+
+      // CRITICAL FIX: If no valid JSON structure found, throw error before attempting parse
+      // This allows walk() and other callers to catch and skip invalid lines
+      if (!hasValidJson && firstBrace === -1 && firstBracket === -1) {
+        const errorStr = Buffer.isBuffer(data) ? data.toString('utf8').trim() : data.trim()
+        const error = new Error(`Failed to deserialize JSON data: No valid JSON structure found in "${errorStr.substring(0, 100)}..."`)
+        // Mark this as a "no valid JSON" error so it can be handled appropriately
+        error.noValidJson = true
+        throw error
+      }
+
+      // If we tried to extract but got nothing valid, also throw error
+      if (hasValidJson && (!str || str.trim().length === 0)) {
+        const error = new Error(`Failed to deserialize JSON data: Extracted JSON is empty`)
+        error.noValidJson = true
+        throw error
+      }
+
       // Parse JSON data
       const parsedData = JSON.parse(str)
       
       // Convert from array format back to object if needed
       return this.convertFromArrayFormat(parsedData)
     } catch (e) {
+      // If error was already formatted with noValidJson flag, re-throw as-is
+      if (e.noValidJson) {
+        throw e
+      }
+      // Otherwise, format the error message
       const str = Buffer.isBuffer(data) ? data.toString('utf8').trim() : data.trim()
       throw new Error(`Failed to deserialize JSON data: "${str.substring(0, 100)}..." - ${e.message}`)
     }

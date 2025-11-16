@@ -277,6 +277,7 @@ const results = await db.score('terms', {
   - `limit` (number): Maximum results (default: 100)
   - `sort` (string): "desc" or "asc" (default: "desc")
   - `includeScore` (boolean): Include score in results (default: true)
+  - `mode` (string): Score aggregation strategy: `"sum"` (default), `"max"`, `"avg"`, or `"first"`
 
 **Returns:**
 
@@ -298,14 +299,18 @@ Array of records ordered by score, with optional score property:
 ]
 ```
 
-**Score Calculation:**
+**Score Calculation Modes:**
 
-For each record, the score is the sum of weights for matching terms:
+- `sum` *(default)*: score is the sum of all weights for the matched keywords.
+- `max`: score is the highest weight among the matched keywords.
+- `avg`: score is the arithmetic average of the weights for the matched keywords.
+- `first`: score uses the weight of the first keyword that appears in the `scores` object and matches the record (subsequent keywords are ignored).
 
 ```javascript
-// Record: { title: "Action Comedy", terms: ["action", "comedy"] }
-// Scores: { 'action': 1.0, 'comedy': 0.8 }
-// Result: score = 1.0 + 0.8 = 1.8
+await db.score('terms', { a: 1.0, b: 0.5 }, { mode: 'sum'  })  // -> 1.5
+await db.score('terms', { a: 1.0, b: 0.5 }, { mode: 'max'  })  // -> 1.0
+await db.score('terms', { a: 1.0, b: 0.5 }, { mode: 'avg'  })  // -> 0.75
+await db.score('terms', { a: 1.0, b: 0.5 }, { mode: 'first'})  // -> 1.0
 ```
 
 **Example Use Cases:**
@@ -787,10 +792,11 @@ await session.commit()
 ### Performance Tips
 
 1. **Use `beginInsertSession()`** for bulk insertions of 1000+ records
-2. **Set appropriate batchSize** based on available memory (500-2000 records)
-3. **Enable autoSave** for critical operations to prevent data loss
-4. **Use indexed fields** in your data for better query performance later
-5. **Commit frequently** for very large datasets to avoid memory issues
+2. **Pre-initialize the schema** (via `fields` or `schema` options) before heavy ingestion to skip per-record auto-detection.
+3. **Tune `batchSize` to your hardware**: start around 500–2000 records and watch memory/flush times; lower the value if auto-flush starts queuing.
+4. **Enable autoSave** for critical operations to prevent data loss
+5. **Use indexed fields** in your data for better query performance later
+6. **Commit frequently** for very large datasets to avoid memory issues
 
 ## Configuration Options
 

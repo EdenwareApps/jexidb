@@ -6,10 +6,12 @@ import pLimit from 'p-limit'
 export default class FileHandler {
   constructor(file, fileMutex = null, opts = {}) {
     this.file = file
-    this.indexFile = file.replace(/\.jdb$/, '.idx.jdb')
+    this.indexFile = file ? file.replace(/\.jdb$/, '.idx.jdb') : null
     this.fileMutex = fileMutex
     this.opts = opts
     this.maxBufferSize = opts.maxBufferSize || 4 * 1024 * 1024 // 4MB default
+    // Global I/O limiter to prevent file descriptor exhaustion in concurrent operations
+    this.readLimiter = pLimit(opts.maxConcurrentReads || 4)
   }
 
   async truncate(offset) {
@@ -174,7 +176,7 @@ export default class FileHandler {
   }
   
   async readRanges(ranges, mapper) {
-    const lines = {}, limit = pLimit(4)
+    const lines = {}
     
     // Check if file exists before trying to read it
     if (!await this.exists()) {
@@ -185,7 +187,7 @@ export default class FileHandler {
     const groupedRanges = await this.groupedRanges(ranges)
     try {
       await Promise.allSettled(groupedRanges.map(async (groupedRange) => {
-        await limit(async () => {
+        await this.readLimiter(async () => {
           for await (const row of this.readGroupedRange(groupedRange, fd)) {
             lines[row.start] = mapper ? (await mapper(row.line, { start: row.start, end: row.start + row.line.length })) : row.line
           }
@@ -255,6 +257,10 @@ export default class FileHandler {
         lineString = actualBuffer.toString('utf8', { replacement: '?' })
       }
       
+      // CRITICAL FIX: Remove trailing newlines and whitespace for single range too
+      // Optimized: Use trimEnd() which efficiently removes all trailing whitespace (faster than manual checks)
+      lineString = lineString.trimEnd()
+      
       yield { 
         line: lineString, 
         start: range.start,
@@ -301,14 +307,42 @@ export default class FileHandler {
         }
       }
     } else {
-      // Original logic for non-adjacent ranges
+      // CRITICAL FIX: For non-adjacent ranges, use the range.end directly
+      // because range.end already excludes the newline (calculated as offsets[n+1] - 1)
+      // We just need to find the line start (beginning of the line in the buffer)
       for (let i = 0; i < groupedRange.length; i++) {
         const range = groupedRange[i]
         const relativeStart = range.start - firstRange.start
         const relativeEnd = range.end - firstRange.start
         
-        // Extract the specific range content
-        const rangeContent = content.substring(relativeStart, relativeEnd)
+        // OPTIMIZATION 2: Find line start only if necessary
+        // Check if we're already at a line boundary to avoid unnecessary backwards search
+        let lineStart = relativeStart
+        if (relativeStart > 0 && content[relativeStart - 1] !== '\n') {
+          // Only search backwards if we're not already at a line boundary
+          while (lineStart > 0 && content[lineStart - 1] !== '\n') {
+            lineStart--
+          }
+        }
+        
+        // OPTIMIZATION 3: Use slice() instead of substring() for better performance
+        // CRITICAL FIX: range.end = offsets[n+1] - 1 points to the newline character
+        // slice(start, end) includes characters from start to end-1 (end is exclusive)
+        // So if relativeEnd points to the newline, slice will include it
+        let rangeContent = content.slice(lineStart, relativeEnd)
+        
+        // OPTIMIZATION 4: Direct character check instead of regex/trimEnd
+        // Remove trailing newlines and whitespace efficiently
+        // trimEnd() is actually optimized in V8, but we can check if there's anything to trim first
+        const len = rangeContent.length
+        if (len > 0) {
+          // Quick check: if last char is not whitespace, skip trimEnd
+          const lastChar = rangeContent[len - 1]
+          if (lastChar === '\n' || lastChar === '\r' || lastChar === ' ' || lastChar === '\t') {
+            // Only call trimEnd if we detected trailing whitespace
+            rangeContent = rangeContent.trimEnd()
+          }
+        }
         
         if (rangeContent.length === 0) continue
         
@@ -543,45 +577,48 @@ export default class FileHandler {
   }
 
   async readLastLine() {
-    // Check if file exists before trying to read it
-    if (!await this.exists()) {
-      return null // Return null if file doesn't exist
-    }
-    
-    const reader = await fs.promises.open(this.file, 'r')
-    try {
-      const { size } = await reader.stat()
-      if (size < 1) throw 'empty file'
-      this.size = size
-      const bufferSize = 16384
-      let buffer, isFirstRead = true, lastReadSize, readPosition = Math.max(size - bufferSize, 0)
-      while (readPosition >= 0) {
-        const readSize = Math.min(bufferSize, size - readPosition)
-        if (readSize !== lastReadSize) {
-          lastReadSize = readSize
-          buffer = Buffer.alloc(readSize)
-        }
-        const { bytesRead } = await reader.read(buffer, 0, isFirstRead ? (readSize - 1) : readSize, readPosition)
-        if (isFirstRead) isFirstRead = false
-        if (bytesRead === 0) break
-        const newlineIndex = buffer.lastIndexOf(10)
-        const start = readPosition + newlineIndex + 1
-        if (newlineIndex !== -1) {
-          const lastLine = Buffer.alloc(size - start)
-          await reader.read(lastLine, 0, size - start, start)
-          if (!lastLine || !lastLine.length) {
-            throw 'no metadata or empty file'
-          }
-          return lastLine
-        } else {
-          readPosition -= bufferSize
-        }
+    // Use global read limiter to prevent file descriptor exhaustion
+    return this.readLimiter(async () => {
+      // Check if file exists before trying to read it
+      if (!await this.exists()) {
+        return null // Return null if file doesn't exist
       }
-    } catch (e) {
-      String(e).includes('empty file') || console.error('Error reading last line:', e)
-    } finally {
-      reader.close()
-    }
+      
+      const reader = await fs.promises.open(this.file, 'r')
+      try {
+        const { size } = await reader.stat()
+        if (size < 1) throw 'empty file'
+        this.size = size
+        const bufferSize = 16384
+        let buffer, isFirstRead = true, lastReadSize, readPosition = Math.max(size - bufferSize, 0)
+        while (readPosition >= 0) {
+          const readSize = Math.min(bufferSize, size - readPosition)
+          if (readSize !== lastReadSize) {
+            lastReadSize = readSize
+            buffer = Buffer.alloc(readSize)
+          }
+          const { bytesRead } = await reader.read(buffer, 0, isFirstRead ? (readSize - 1) : readSize, readPosition)
+          if (isFirstRead) isFirstRead = false
+          if (bytesRead === 0) break
+          const newlineIndex = buffer.lastIndexOf(10)
+          const start = readPosition + newlineIndex + 1
+          if (newlineIndex !== -1) {
+            const lastLine = Buffer.alloc(size - start)
+            await reader.read(lastLine, 0, size - start, start)
+            if (!lastLine || !lastLine.length) {
+              throw 'no metadata or empty file'
+            }
+            return lastLine
+          } else {
+            readPosition -= bufferSize
+          }
+        }
+      } catch (e) {
+        String(e).includes('empty file') || console.error('Error reading last line:', e)
+      } finally {
+        reader.close()
+      }
+    })
   }
 
   /**
@@ -597,10 +634,12 @@ export default class FileHandler {
       return this.fileMutex.runExclusive(async () => {
         // Add a small delay to ensure any pending operations complete
         await new Promise(resolve => setTimeout(resolve, 5));
-        return this._readWithStreamingInternal(criteria, options, matchesCriteria, serializer);
+        // Use global read limiter to prevent file descriptor exhaustion
+        return this.readLimiter(() => this._readWithStreamingInternal(criteria, options, matchesCriteria, serializer));
       });
     } else {
-      return this._readWithStreamingInternal(criteria, options, matchesCriteria, serializer);
+      // Use global read limiter to prevent file descriptor exhaustion
+      return this.readLimiter(() => this._readWithStreamingInternal(criteria, options, matchesCriteria, serializer));
     }
   }
 

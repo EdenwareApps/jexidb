@@ -90,11 +90,15 @@ class InsertSession {
   constructor(database, sessionOptions = {}) {
     this.database = database;
     this.batchSize = sessionOptions.batchSize || 100;
+    this.enableAutoSave = sessionOptions.enableAutoSave !== undefined ? sessionOptions.enableAutoSave : true;
     this.totalInserted = 0;
     this.flushing = false;
     this.batches = []; // Array of batches to avoid slice() in flush()
     this.currentBatch = []; // Current batch being filled
     this.sessionId = Math.random().toString(36).substr(2, 9);
+
+    // Track pending auto-flush operations
+    this.pendingAutoFlushes = new Set();
 
     // Register this session as active
     this.database.activeInsertSessions.add(this);
@@ -118,42 +122,141 @@ class InsertSession {
     this.currentBatch.push(finalRecord);
     this.totalInserted++;
 
-    // If batch is full, move it to batches array
+    // If batch is full, move it to batches array and trigger auto-flush
     if (this.currentBatch.length >= this.batchSize) {
       this.batches.push(this.currentBatch);
       this.currentBatch = [];
+
+      // Auto-flush in background (non-blocking)
+      // This ensures batches are flushed automatically without blocking add()
+      this.autoFlush().catch(err => {
+        // Log error but don't throw - we don't want to break the add() flow
+        console.error('Auto-flush error in InsertSession:', err);
+      });
     }
     return finalRecord;
   }
-  async flush() {
-    // Check if there's anything to flush
-    if (this.batches.length === 0 && this.currentBatch.length === 0) return;
-
-    // Prevent concurrent flushes
+  async autoFlush() {
+    // Only flush if not already flushing
+    // This method will process all pending batches
     if (this.flushing) return;
-    this.flushing = true;
-    try {
-      // Process all complete batches
-      for (const batch of this.batches) {
-        await this.database.insertBatch(batch);
-      }
 
-      // Process remaining records in current batch
-      if (this.currentBatch.length > 0) {
-        await this.database.insertBatch(this.currentBatch);
-      }
+    // Create a promise for this auto-flush operation
+    const flushPromise = this._doFlush();
+    this.pendingAutoFlushes.add(flushPromise);
 
-      // Clear all batches
+    // Remove from pending set when complete (success or error)
+    flushPromise.then(() => {
+      this.pendingAutoFlushes.delete(flushPromise);
+    }).catch(err => {
+      this.pendingAutoFlushes.delete(flushPromise);
+      throw err;
+    });
+    return flushPromise;
+  }
+  async _doFlush() {
+    // Check if database is destroyed or closed before starting
+    if (this.database.destroyed || this.database.closed) {
+      // Clear batches if database is closed/destroyed
       this.batches = [];
       this.currentBatch = [];
+      return;
+    }
+
+    // Prevent concurrent flushes - if already flushing, wait for it
+    if (this.flushing) {
+      // Wait for the current flush to complete
+      while (this.flushing) {
+        await new Promise(resolve => setTimeout(resolve, 1));
+      }
+      // After waiting, check if there's anything left to flush
+      // If another flush completed everything, we're done
+      if (this.batches.length === 0 && this.currentBatch.length === 0) return;
+
+      // Check again if database was closed during wait
+      if (this.database.destroyed || this.database.closed) {
+        this.batches = [];
+        this.currentBatch = [];
+        return;
+      }
+    }
+    this.flushing = true;
+    try {
+      // Process continuously until queue is completely empty
+      // This handles the case where new data is added during the flush
+      while (this.batches.length > 0 || this.currentBatch.length > 0) {
+        // Check if database was closed during processing
+        if (this.database.destroyed || this.database.closed) {
+          // Clear remaining batches
+          this.batches = [];
+          this.currentBatch = [];
+          return;
+        }
+
+        // Process all complete batches that exist at this moment
+        // Note: new batches may be added to this.batches during this loop
+        const batchesToProcess = this.batches.length;
+        for (let i = 0; i < batchesToProcess; i++) {
+          // Check again before each batch
+          if (this.database.destroyed || this.database.closed) {
+            this.batches = [];
+            this.currentBatch = [];
+            return;
+          }
+          const batch = this.batches.shift(); // Remove from front
+          await this.database.insertBatch(batch);
+        }
+
+        // Process current batch if it has data
+        // Note: new records may be added to currentBatch during processing
+        if (this.currentBatch.length > 0) {
+          // Check if database was closed
+          if (this.database.destroyed || this.database.closed) {
+            this.batches = [];
+            this.currentBatch = [];
+            return;
+          }
+
+          // Check if currentBatch reached batchSize during processing
+          if (this.currentBatch.length >= this.batchSize) {
+            // Move it to batches array and process in next iteration
+            this.batches.push(this.currentBatch);
+            this.currentBatch = [];
+            continue;
+          }
+
+          // Process the current batch
+          const batchToProcess = this.currentBatch;
+          this.currentBatch = []; // Clear before processing to allow new adds
+          await this.database.insertBatch(batchToProcess);
+        }
+      }
     } finally {
       this.flushing = false;
+    }
+  }
+  async flush() {
+    // Wait for any pending auto-flushes to complete first
+    await this.waitForAutoFlushes();
+
+    // Then do a final flush to ensure everything is processed
+    await this._doFlush();
+  }
+  async waitForAutoFlushes() {
+    // Wait for all pending auto-flush operations to complete
+    if (this.pendingAutoFlushes.size > 0) {
+      await Promise.all(Array.from(this.pendingAutoFlushes));
     }
   }
   async commit() {
     // CRITICAL FIX: Make session auto-reusable by removing committed state
     // Allow multiple commits on the same session
 
+    // First, wait for all pending auto-flushes to complete
+    await this.waitForAutoFlushes();
+
+    // Then flush any remaining data (including currentBatch)
+    // This ensures everything is inserted before commit returns
     await this.flush();
 
     // Reset session state for next commit cycle
@@ -168,6 +271,9 @@ class InsertSession {
   async waitForOperations(maxWaitTime = null) {
     const startTime = Date.now();
     const hasTimeout = maxWaitTime !== null && maxWaitTime !== undefined;
+
+    // Wait for auto-flushes first
+    await this.waitForAutoFlushes();
     while (this.flushing || this.batches.length > 0 || this.currentBatch.length > 0) {
       // Check timeout only if we have one
       if (hasTimeout && Date.now() - startTime >= maxWaitTime) {
@@ -182,7 +288,7 @@ class InsertSession {
    * Check if this session has pending operations
    */
   hasPendingOperations() {
-    return this.flushing || this.batches.length > 0 || this.currentBatch.length > 0;
+    return this.pendingAutoFlushes.size > 0 || this.flushing || this.batches.length > 0 || this.currentBatch.length > 0;
   }
 
   /**
@@ -197,6 +303,7 @@ class InsertSession {
     this.currentBatch = [];
     this.totalInserted = 0;
     this.flushing = false;
+    this.pendingAutoFlushes.clear();
   }
 }
 
@@ -255,7 +362,10 @@ class Database extends _events.EventEmitter {
       streamingThreshold: opts.streamingThreshold || 0.8,
       // Use streaming when limit > 80% of total records
       // Serialization options
-      enableArraySerialization: opts.enableArraySerialization !== false // Enable array serialization by default
+      enableArraySerialization: opts.enableArraySerialization !== false,
+      // Enable array serialization by default
+      // Index rebuild options
+      allowIndexRebuild: opts.allowIndexRebuild === true // Allow automatic index rebuild when corrupted (default false - throws error)
     }, opts);
 
     // CRITICAL FIX: Initialize AbortController for lifecycle management
@@ -282,6 +392,8 @@ class Database extends _events.EventEmitter {
     this.isSaving = false;
     this.lastSaveTime = null;
     this.initialized = false;
+    this._offsetRecoveryInProgress = false;
+    this.writeBufferTotalSize = 0;
 
     // Initialize managers
     this.initializeManagers();
@@ -327,10 +439,11 @@ class Database extends _events.EventEmitter {
 
     // Validate indexes array (new format) - but only if we have fields
     if (this.opts.originalIndexes && Array.isArray(this.opts.originalIndexes)) {
-      if (!this.opts.fields) {
-        throw new Error('Index fields array requires fields configuration. Use: { fields: {...}, indexes: [...] }');
+      if (this.opts.fields) {
+        this.validateIndexFields(this.opts.originalIndexes);
+      } else if (this.opts.debugMode) {
+        console.log('⚠️  Skipping index field validation because no fields configuration was provided');
       }
-      this.validateIndexFields(this.opts.originalIndexes);
     }
     if (this.opts.debugMode) {
       const fieldCount = this.opts.fields ? Object.keys(this.opts.fields).length : 0;
@@ -345,9 +458,13 @@ class Database extends _events.EventEmitter {
    * Validate field types
    */
   validateFieldTypes(fields, configType) {
-    const supportedTypes = ['string', 'number', 'boolean', 'array:string', 'array:number', 'array:boolean', 'array', 'object'];
+    const supportedTypes = ['string', 'number', 'boolean', 'array:string', 'array:number', 'array:boolean', 'array', 'object', 'auto'];
     const errors = [];
     for (const [fieldName, fieldType] of Object.entries(fields)) {
+      if (fieldType === 'auto') {
+        continue;
+      }
+
       // Check if type is supported
       if (!supportedTypes.includes(fieldType)) {
         errors.push(`Unsupported ${configType} type '${fieldType}' for field '${fieldName}'. Supported types: ${supportedTypes.join(', ')}`);
@@ -393,25 +510,21 @@ class Database extends _events.EventEmitter {
    * Prepare index configuration for IndexManager
    */
   prepareIndexConfiguration() {
-    // Convert new fields/indexes format to legacy format for IndexManager
-    if (this.opts.fields && Array.isArray(this.opts.indexes)) {
-      // New format: { fields: {...}, indexes: [...] }
+    if (Array.isArray(this.opts.indexes)) {
       const indexedFields = {};
-      const originalIndexes = [...this.opts.indexes]; // Keep original for validation
-
+      const originalIndexes = [...this.opts.indexes];
+      const hasFieldConfig = this.opts.fields && typeof this.opts.fields === 'object';
       for (const fieldName of this.opts.indexes) {
-        if (this.opts.fields[fieldName]) {
+        if (hasFieldConfig && this.opts.fields[fieldName]) {
           indexedFields[fieldName] = this.opts.fields[fieldName];
+        } else {
+          indexedFields[fieldName] = 'auto';
         }
       }
-
-      // Store original indexes for validation
       this.opts.originalIndexes = originalIndexes;
-
-      // Replace indexes array with object for IndexManager
       this.opts.indexes = indexedFields;
       if (this.opts.debugMode) {
-        console.log(`🔍 Converted fields/indexes format: ${Object.keys(indexedFields).join(', ')} [${this.instanceId}]`);
+        console.log(`🔍 Normalized indexes array to object: ${Object.keys(indexedFields).join(', ')} [${this.instanceId}]`);
       }
     }
     // Legacy format (indexes as object) is already compatible
@@ -445,6 +558,18 @@ class Database extends _events.EventEmitter {
     this.termManager.termMappingFields = termMappingFields;
     this.opts.termMapping = true; // Always enable term mapping for optimal performance
 
+    // Validation: Ensure all array:string indexed fields are in term mapping fields
+    if (this.opts.indexes) {
+      const arrayStringFields = [];
+      for (const [field, type] of Object.entries(this.opts.indexes)) {
+        if (type === 'array:string' && !termMappingFields.includes(field)) {
+          arrayStringFields.push(field);
+        }
+      }
+      if (arrayStringFields.length > 0) {
+        console.warn(`⚠️  Warning: The following array:string indexed fields were not added to term mapping: ${arrayStringFields.join(', ')}. This may impact performance.`);
+      }
+    }
     if (this.opts.debugMode) {
       if (termMappingFields.length > 0) {
         console.log(`🔍 TermManager initialized for fields: ${termMappingFields.join(', ')} [${this.instanceId}]`);
@@ -471,6 +596,7 @@ class Database extends _events.EventEmitter {
     this.writeBuffer = [];
     this.writeBufferOffsets = []; // Track offsets for writeBuffer records
     this.writeBufferSizes = []; // Track sizes for writeBuffer records
+    this.writeBufferTotalSize = 0;
     this.isInsideOperationQueue = false; // Flag to prevent deadlock in save() calls
 
     // Initialize other managers
@@ -491,8 +617,8 @@ class Database extends _events.EventEmitter {
     // Auto-detect fields that benefit from term mapping
     const termMappingFields = [];
     for (const [field, type] of Object.entries(this.opts.indexes)) {
-      // Fields that should use term mapping
-      if (type === 'array:string' || type === 'string') {
+      // Fields that should use term mapping (only array fields)
+      if (type === 'array:string') {
         termMappingFields.push(field);
       }
     }
@@ -690,6 +816,9 @@ class Database extends _events.EventEmitter {
       // Don't load the entire file - just initialize empty state
       // The actual record count will come from loaded offsets
       this.writeBuffer = []; // writeBuffer is only for new unsaved records
+      this.writeBufferOffsets = [];
+      this.writeBufferSizes = [];
+      this.writeBufferTotalSize = 0;
 
       // recordCount will be determined from loaded offsets
       // If no offsets were loaded, we'll count records only if needed
@@ -699,13 +828,49 @@ class Database extends _events.EventEmitter {
         const idxPath = this.normalizedFile.replace('.jdb', '.idx.jdb');
         try {
           const idxFileHandler = new _FileHandler.default(idxPath, this.fileMutex, this.opts);
+
+          // Check if file exists BEFORE trying to read it
+          const fileExists = await idxFileHandler.exists();
+          if (!fileExists) {
+            // File doesn't exist - this will be handled by catch block
+            throw new Error('Index file does not exist');
+          }
           const idxData = await idxFileHandler.readAll();
-          if (idxData && idxData.trim()) {
+
+          // If file exists but is empty or has no content, treat as corrupted
+          if (!idxData || !idxData.trim()) {
+            // File exists but is empty - treat as corrupted
+            const fileExists = await this.fileHandler.exists();
+            if (fileExists) {
+              const stats = await this.fileHandler.getFileStats();
+              if (stats && stats.size > 0) {
+                // Data file has content but index is empty - corrupted
+                if (!this.opts.allowIndexRebuild) {
+                  throw new Error(`Index file is corrupted: ${idxPath} exists but contains no index data, ` + `while the data file has ${stats.size} bytes. ` + `Set allowIndexRebuild: true to automatically rebuild the index, ` + `or manually fix/delete the corrupted index file.`);
+                }
+                // Schedule rebuild if allowed
+                if (this.opts.debugMode) {
+                  console.log(`⚠️ Index file exists but is empty while data file has ${stats.size} bytes - scheduling rebuild`);
+                }
+                this._scheduleIndexRebuild();
+                // Continue execution - rebuild will happen on first query
+                // Don't return - let the code continue to load other things if needed
+              }
+            }
+            // If data file is also empty, just continue (no error needed)
+            // Don't return - let the code continue to load other things if needed
+          } else {
+            // File has content - parse and load it
             const parsedIdxData = JSON.parse(idxData);
 
             // Always load offsets if available (even without indexed fields)
             if (parsedIdxData.offsets && Array.isArray(parsedIdxData.offsets)) {
               this.offsets = parsedIdxData.offsets;
+              // CRITICAL FIX: Update IndexManager totalLines to match offsets length
+              // This ensures queries and length property work correctly even if offsets are reset later
+              if (this.indexManager && this.offsets.length > 0) {
+                this.indexManager.setTotalLines(this.offsets.length);
+              }
               if (this.opts.debugMode) {
                 console.log(`📂 Loaded ${this.offsets.length} offsets from ${idxPath}`);
               }
@@ -719,23 +884,8 @@ class Database extends _events.EventEmitter {
               }
             }
 
-            // Load index data only if available and we have indexed fields
-            if (parsedIdxData && parsedIdxData.index && this.indexManager.indexedFields && this.indexManager.indexedFields.length > 0) {
-              this.indexManager.load(parsedIdxData.index);
-
-              // Load term mapping data from .idx file if it exists
-              if (parsedIdxData.termMapping && this.termManager) {
-                await this.termManager.loadTerms(parsedIdxData.termMapping);
-                if (this.opts.debugMode) {
-                  console.log(`📂 Loaded term mapping from ${idxPath}`);
-                }
-              }
-              if (this.opts.debugMode) {
-                console.log(`📂 Loaded index data from ${idxPath}`);
-              }
-            }
-
             // Load configuration from .idx file if database exists
+            // CRITICAL: Load config FIRST so indexes are available for term mapping detection
             if (parsedIdxData.config) {
               const config = parsedIdxData.config;
 
@@ -748,10 +898,86 @@ class Database extends _events.EventEmitter {
               }
               if (config.indexes) {
                 this.opts.indexes = config.indexes;
+                if (this.indexManager) {
+                  this.indexManager.setIndexesConfig(config.indexes);
+                }
                 if (this.opts.debugMode) {
                   console.log(`📂 Loaded indexes config from ${idxPath}:`, Object.keys(config.indexes));
                 }
               }
+
+              // CRITICAL FIX: Update term mapping fields AFTER loading indexes from config
+              // This ensures termManager knows which fields use term mapping
+              // (getTermMappingFields() was called during init() before indexes were loaded)
+              if (this.termManager && config.indexes) {
+                const termMappingFields = this.getTermMappingFields();
+                this.termManager.termMappingFields = termMappingFields;
+                if (this.opts.debugMode && termMappingFields.length > 0) {
+                  console.log(`🔍 Updated term mapping fields after loading indexes: ${termMappingFields.join(', ')}`);
+                }
+              }
+            }
+
+            // Load term mapping data from .idx file if it exists
+            // CRITICAL: Load termMapping even if index is empty (terms are needed for queries)
+            // NOTE: termMappingFields should already be set above from config.indexes
+            if (parsedIdxData.termMapping && this.termManager && this.termManager.termMappingFields && this.termManager.termMappingFields.length > 0) {
+              await this.termManager.loadTerms(parsedIdxData.termMapping);
+              if (this.opts.debugMode) {
+                console.log(`📂 Loaded term mapping from ${idxPath} (${Object.keys(parsedIdxData.termMapping).length} terms)`);
+              }
+            }
+
+            // Load index data only if available and we have indexed fields
+            if (parsedIdxData && parsedIdxData.index && this.indexManager.indexedFields && this.indexManager.indexedFields.length > 0) {
+              this.indexManager.load(parsedIdxData.index);
+              if (this.opts.debugMode) {
+                console.log(`📂 Loaded index data from ${idxPath}`);
+              }
+
+              // Check if loaded index is actually empty (corrupted)
+              let hasAnyIndexData = false;
+              for (const field of this.indexManager.indexedFields) {
+                if (this.indexManager.hasUsableIndexData(field)) {
+                  hasAnyIndexData = true;
+                  break;
+                }
+              }
+              if (this.opts.debugMode) {
+                console.log(`📊 Index check: hasAnyIndexData=${hasAnyIndexData}, indexedFields=${this.indexManager.indexedFields.join(',')}`);
+              }
+
+              // Schedule rebuild if index is empty AND file exists with data
+              if (!hasAnyIndexData) {
+                // Check if the actual .jdb file has data
+                const fileExists = await this.fileHandler.exists();
+                if (this.opts.debugMode) {
+                  console.log(`📊 File check: exists=${fileExists}`);
+                }
+                if (fileExists) {
+                  const stats = await this.fileHandler.getFileStats();
+                  if (this.opts.debugMode) {
+                    console.log(`📊 File stats: size=${stats?.size}`);
+                  }
+                  if (stats && stats.size > 0) {
+                    // File has data but index is empty - corrupted index detected
+                    if (!this.opts.allowIndexRebuild) {
+                      const idxPath = this.normalizedFile.replace('.jdb', '.idx.jdb');
+                      throw new Error(`Index file is corrupted: ${idxPath} exists but contains no index data, ` + `while the data file has ${stats.size} bytes. ` + `Set allowIndexRebuild: true to automatically rebuild the index, ` + `or manually fix/delete the corrupted index file.`);
+                    }
+                    // Schedule rebuild if allowed
+                    if (this.opts.debugMode) {
+                      console.log(`⚠️ Index loaded but empty while file has ${stats.size} bytes - scheduling rebuild`);
+                    }
+                    this._scheduleIndexRebuild();
+                  }
+                }
+              }
+            }
+
+            // Continue with remaining config loading
+            if (parsedIdxData.config) {
+              const config = parsedIdxData.config;
               if (config.originalIndexes) {
                 this.opts.originalIndexes = config.originalIndexes;
                 if (this.opts.debugMode) {
@@ -770,11 +996,75 @@ class Database extends _events.EventEmitter {
           }
         } catch (idxError) {
           // Index file doesn't exist or is corrupted, rebuild from data
-          if (this.opts.debugMode) {
-            console.log('📂 No index file found, rebuilding indexes from data');
+          // BUT: if error is about rebuild being disabled, re-throw it immediately
+          if (idxError.message && (idxError.message.includes('allowIndexRebuild') || idxError.message.includes('corrupted'))) {
+            throw idxError;
           }
-          // We can't rebuild index without violating no-memory-storage rule
-          // Index will be rebuilt as needed during queries
+
+          // If error is "Index file does not exist", check if we should throw or rebuild
+          if (idxError.message && idxError.message.includes('does not exist')) {
+            // Check if the actual .jdb file has data that needs indexing
+            try {
+              const fileExists = await this.fileHandler.exists();
+              if (fileExists) {
+                const stats = await this.fileHandler.getFileStats();
+                if (stats && stats.size > 0) {
+                  // File has data but index is missing
+                  if (!this.opts.allowIndexRebuild) {
+                    const idxPath = this.normalizedFile.replace('.jdb', '.idx.jdb');
+                    throw new Error(`Index file is missing or corrupted: ${idxPath} does not exist or is invalid, ` + `while the data file has ${stats.size} bytes. ` + `Set allowIndexRebuild: true to automatically rebuild the index, ` + `or manually create/fix the index file.`);
+                  }
+                  // Schedule rebuild if allowed
+                  if (this.opts.debugMode) {
+                    console.log(`⚠️ .jdb file has ${stats.size} bytes but index missing - scheduling rebuild`);
+                  }
+                  this._scheduleIndexRebuild();
+                  return; // Exit early
+                }
+              }
+            } catch (statsError) {
+              if (this.opts.debugMode) {
+                console.log('⚠️ Could not check file stats:', statsError.message);
+              }
+              // Re-throw if it's our error about rebuild being disabled
+              if (statsError.message && statsError.message.includes('allowIndexRebuild')) {
+                throw statsError;
+              }
+            }
+            // If no data file or empty, just continue (no error needed)
+            return;
+          }
+          if (this.opts.debugMode) {
+            console.log('📂 No index file found or corrupted, checking if rebuild is needed...');
+          }
+
+          // Check if the actual .jdb file has data that needs indexing
+          try {
+            const fileExists = await this.fileHandler.exists();
+            if (fileExists) {
+              const stats = await this.fileHandler.getFileStats();
+              if (stats && stats.size > 0) {
+                // File has data but index is missing or corrupted
+                if (!this.opts.allowIndexRebuild) {
+                  const idxPath = this.normalizedFile.replace('.jdb', '.idx.jdb');
+                  throw new Error(`Index file is missing or corrupted: ${idxPath} does not exist or is invalid, ` + `while the data file has ${stats.size} bytes. ` + `Set allowIndexRebuild: true to automatically rebuild the index, ` + `or manually create/fix the index file.`);
+                }
+                // Schedule rebuild if allowed
+                if (this.opts.debugMode) {
+                  console.log(`⚠️ .jdb file has ${stats.size} bytes but index missing - scheduling rebuild`);
+                }
+                this._scheduleIndexRebuild();
+              }
+            }
+          } catch (statsError) {
+            if (this.opts.debugMode) {
+              console.log('⚠️ Could not check file stats:', statsError.message);
+            }
+            // Re-throw if it's our error about rebuild being disabled
+            if (statsError.message && statsError.message.includes('allowIndexRebuild')) {
+              throw statsError;
+            }
+          }
         }
       } else {
         // No indexed fields, no need to rebuild indexes
@@ -798,6 +1088,23 @@ class Database extends _events.EventEmitter {
     this._validateInitialization('save');
     if (this.opts.debugMode) {
       console.log(`💾 save() called: writeBuffer.length=${this.writeBuffer.length}, offsets.length=${this.offsets.length}`);
+    }
+
+    // CRITICAL FIX: Wait for all active insert sessions to complete their auto-flushes
+    // This prevents race conditions where save() writes data while auto-flushes are still adding to writeBuffer
+    if (this.activeInsertSessions && this.activeInsertSessions.size > 0) {
+      if (this.opts.debugMode) {
+        console.log(`⏳ save(): Waiting for ${this.activeInsertSessions.size} active insert sessions to complete auto-flushes`);
+      }
+      const sessionPromises = Array.from(this.activeInsertSessions).map(session => session.waitForAutoFlushes().catch(err => {
+        if (this.opts.debugMode) {
+          console.warn(`⚠️ save(): Error waiting for insert session: ${err.message}`);
+        }
+      }));
+      await Promise.all(sessionPromises);
+      if (this.opts.debugMode) {
+        console.log(`✅ save(): All insert sessions completed auto-flushes`);
+      }
     }
 
     // Auto-save removed - no need to pause anything
@@ -1165,8 +1472,33 @@ class Database extends _events.EventEmitter {
             }
 
             // Rebuild index from the saved records
+            // CRITICAL: Process term mapping for records loaded from file to ensure ${field}Ids are available
             for (let i = 0; i < allData.length; i++) {
-              const record = allData[i];
+              let record = allData[i];
+
+              // CRITICAL FIX: Ensure records have ${field}Ids for term mapping fields
+              // Records from writeBuffer already have ${field}Ids from processTermMapping
+              // Records from file need to be processed to restore ${field}Ids
+              const termMappingFields = this.getTermMappingFields();
+              if (termMappingFields.length > 0 && this.termManager) {
+                for (const field of termMappingFields) {
+                  if (record[field] && Array.isArray(record[field])) {
+                    // Check if field contains term IDs (numbers) or terms (strings)
+                    const firstValue = record[field][0];
+                    if (typeof firstValue === 'number') {
+                      // Already term IDs, create ${field}Ids
+                      record[`${field}Ids`] = record[field];
+                    } else if (typeof firstValue === 'string') {
+                      // Terms, need to convert to term IDs
+                      const termIds = record[field].map(term => {
+                        const termId = this.termManager.getTermIdWithoutIncrement(term);
+                        return termId !== undefined ? termId : this.termManager.getTermId(term);
+                      });
+                      record[`${field}Ids`] = termIds;
+                    }
+                  }
+                }
+              }
               await this.indexManager.add(record, i);
             }
           }
@@ -1199,6 +1531,8 @@ class Database extends _events.EventEmitter {
           this.writeBuffer = [];
           this.writeBufferOffsets = [];
           this.writeBufferSizes = [];
+          this.writeBufferTotalSize = 0;
+          this.writeBufferTotalSize = 0;
         }
 
         // indexOffset already set correctly to currentOffset (total file size) above
@@ -1404,18 +1738,15 @@ class Database extends _events.EventEmitter {
     }
 
     // OPTIMIZATION: Process records using pre-computed term IDs
-    return records.map(record => {
-      const processedRecord = {
-        ...record
-      };
+    for (const record of records) {
       for (const field of termMappingFields) {
         if (record[field] && Array.isArray(record[field])) {
           const termIds = record[field].map(term => termIdMap.get(term));
-          processedRecord[`${field}Ids`] = termIds;
+          record[`${field}Ids`] = termIds;
         }
       }
-      return processedRecord;
-    });
+    }
+    return records;
   }
 
   /**
@@ -1507,17 +1838,18 @@ class Database extends _events.EventEmitter {
         // OPTIMIZATION: Calculate and store offset and size for writeBuffer record
         // SPACE OPTIMIZATION: Remove term IDs before serialization
         const cleanRecord = this.removeTermIdsForSerialization(record);
-        const recordJson = this.serializer.serialize(cleanRecord).toString('utf8');
-        const recordSize = Buffer.byteLength(recordJson, 'utf8');
+        const recordBuffer = this.serializer.serialize(cleanRecord);
+        const recordSize = recordBuffer.length;
 
         // Calculate offset based on end of file + previous writeBuffer sizes
-        const previousWriteBufferSize = this.writeBufferSizes.reduce((sum, size) => sum + size, 0);
+        const previousWriteBufferSize = this.writeBufferTotalSize;
         const recordOffset = this.indexOffset + previousWriteBufferSize;
         this.writeBufferOffsets.push(recordOffset);
         this.writeBufferSizes.push(recordSize);
+        this.writeBufferTotalSize += recordSize;
 
-        // OPTIMIZATION: Use the current writeBuffer size as the line number (0-based index)
-        const lineNumber = this.writeBuffer.length - 1;
+        // OPTIMIZATION: Use the absolute line number (persisted records + writeBuffer index)
+        const lineNumber = this._getAbsoluteLineNumber(this.writeBuffer.length - 1);
 
         // OPTIMIZATION: Defer index updates to batch processing
         // Store the record for batch index processing
@@ -1587,7 +1919,7 @@ class Database extends _events.EventEmitter {
       console.log(`💾 _insertBatchInternal: processing size=${dataArray.length}, startWriteBuffer=${this.writeBuffer.length}`);
     }
     const records = [];
-    const startLineNumber = this.writeBuffer.length;
+    const existingWriteBufferLength = this.writeBuffer.length;
 
     // Initialize schema if not already done (auto-detect from first record)
     if (this.serializer && !this.serializer.schemaManager.isInitialized && dataArray.length > 0) {
@@ -1621,25 +1953,26 @@ class Database extends _events.EventEmitter {
     this.writeBuffer.push(...schemaEnforcedRecords);
 
     // OPTIMIZATION: Calculate offsets and sizes in batch (O(n))
-    let runningTotalSize = this.writeBufferSizes.reduce((sum, size) => sum + size, 0);
+    let runningTotalSize = this.writeBufferTotalSize;
     for (let i = 0; i < processedRecords.length; i++) {
       const record = processedRecords[i];
       // SPACE OPTIMIZATION: Remove term IDs before serialization
       const cleanRecord = this.removeTermIdsForSerialization(record);
-      const recordJson = this.serializer.serialize(cleanRecord).toString('utf8');
-      const recordSize = Buffer.byteLength(recordJson, 'utf8');
+      const recordBuffer = this.serializer.serialize(cleanRecord);
+      const recordSize = recordBuffer.length;
       const recordOffset = this.indexOffset + runningTotalSize;
       runningTotalSize += recordSize;
       this.writeBufferOffsets.push(recordOffset);
       this.writeBufferSizes.push(recordSize);
     }
+    this.writeBufferTotalSize = runningTotalSize;
 
     // OPTIMIZATION: Batch process index updates
     if (!this.pendingIndexUpdates) {
       this.pendingIndexUpdates = [];
     }
     for (let i = 0; i < processedRecords.length; i++) {
-      const lineNumber = startLineNumber + i;
+      const lineNumber = this._getAbsoluteLineNumber(existingWriteBufferLength + i);
       this.pendingIndexUpdates.push({
         record: processedRecords[i],
         lineNumber
@@ -1678,7 +2011,7 @@ class Database extends _events.EventEmitter {
     try {
       // Validate indexed query mode if enabled
       if (this.opts.indexedQueryMode === 'strict') {
-        this._validateIndexedQuery(criteria);
+        this._validateIndexedQuery(criteria, options);
       }
 
       // Get results from file (QueryManager already handles term ID restoration)
@@ -1740,8 +2073,14 @@ class Database extends _events.EventEmitter {
   /**
    * Validate indexed query mode for strict mode
    * @private
+   * @param {Object} criteria - Query criteria
+   * @param {Object} options - Query options
    */
-  _validateIndexedQuery(criteria) {
+  _validateIndexedQuery(criteria, options = {}) {
+    // Allow bypassing strict mode validation with allowNonIndexed option
+    if (options.allowNonIndexed === true) {
+      return; // Skip validation for this query
+    }
     if (!criteria || typeof criteria !== 'object') {
       return; // Allow null/undefined criteria
     }
@@ -2014,7 +2353,7 @@ class Database extends _events.EventEmitter {
           if (index !== -1) {
             // Record is already in writeBuffer, update it
             this.writeBuffer[index] = updated;
-            lineNumber = index;
+            lineNumber = this._getAbsoluteLineNumber(index);
             if (this.opts.debugMode) {
               console.log(`🔄 UPDATE: Updated existing writeBuffer record at index ${index}`);
             }
@@ -2022,7 +2361,7 @@ class Database extends _events.EventEmitter {
             // Record is in file, add updated version to writeBuffer
             // This will ensure the updated record is saved and replaces the file version
             this.writeBuffer.push(updated);
-            lineNumber = this.writeBuffer.length - 1;
+            lineNumber = this._getAbsoluteLineNumber(this.writeBuffer.length - 1);
             if (this.opts.debugMode) {
               console.log(`🔄 UPDATE: Added new record to writeBuffer at index ${lineNumber}`);
             }
@@ -2195,6 +2534,21 @@ class Database extends _events.EventEmitter {
     const savedRecords = this.offsets.length;
     const writeBufferRecords = this.writeBuffer.length;
 
+    // CRITICAL FIX: If offsets are empty but indexOffset exists, use fallback calculation
+    // This handles cases where offsets weren't loaded or were reset
+    if (savedRecords === 0 && this.indexOffset > 0 && this.initialized) {
+      // Try to use IndexManager totalLines if available
+      if (this.indexManager && this.indexManager.totalLines > 0) {
+        return this.indexManager.totalLines + writeBufferRecords;
+      }
+
+      // Fallback: estimate from indexOffset (less accurate but better than 0)
+      // This is a defensive fix for cases where offsets are missing but file has data
+      if (this.opts.debugMode) {
+        console.log(`⚠️  LENGTH: offsets array is empty but indexOffset=${this.indexOffset}, using IndexManager.totalLines or estimation`);
+      }
+    }
+
     // CRITICAL FIX: Validate that offsets array is consistent with actual data
     // This prevents the bug where database reassignment causes desynchronization
     if (this.initialized && savedRecords > 0) {
@@ -2238,21 +2592,7 @@ class Database extends _events.EventEmitter {
    * Calculate current writeBuffer size in bytes (similar to published v1.1.0)
    */
   currentWriteBufferSize() {
-    if (!this.writeBuffer || this.writeBuffer.length === 0) {
-      return 0;
-    }
-
-    // Calculate total size of all records in writeBuffer
-    let totalSize = 0;
-    for (const record of this.writeBuffer) {
-      if (record) {
-        // SPACE OPTIMIZATION: Remove term IDs before size calculation
-        const cleanRecord = this.removeTermIdsForSerialization(record);
-        const recordJson = JSON.stringify(cleanRecord) + '\n';
-        totalSize += Buffer.byteLength(recordJson, 'utf8');
-      }
-    }
-    return totalSize;
+    return this.writeBufferTotalSize || 0;
   }
 
   /**
@@ -2281,6 +2621,206 @@ class Database extends _events.EventEmitter {
    */
   async init() {
     return this.initialize();
+  }
+
+  /**
+   * Schedule index rebuild when index data is missing or corrupted
+   * @private
+   */
+  _scheduleIndexRebuild() {
+    // Mark that rebuild is needed
+    this._indexRebuildNeeded = true;
+
+    // Rebuild will happen lazily on first query if index is empty
+    // This avoids blocking init() but ensures index is available when needed
+  }
+
+  /**
+   * Rebuild indexes from data file if needed
+   * @private
+   */
+  async _rebuildIndexesIfNeeded() {
+    if (this.opts.debugMode) {
+      console.log(`🔍 _rebuildIndexesIfNeeded called: _indexRebuildNeeded=${this._indexRebuildNeeded}`);
+    }
+    if (!this._indexRebuildNeeded) return;
+    if (!this.indexManager || !this.indexManager.indexedFields || this.indexManager.indexedFields.length === 0) return;
+
+    // Check if index actually needs rebuilding
+    let needsRebuild = false;
+    for (const field of this.indexManager.indexedFields) {
+      if (!this.indexManager.hasUsableIndexData(field)) {
+        needsRebuild = true;
+        break;
+      }
+    }
+    if (!needsRebuild) {
+      this._indexRebuildNeeded = false;
+      return;
+    }
+
+    // Check if rebuild is allowed
+    if (!this.opts.allowIndexRebuild) {
+      const idxPath = this.normalizedFile.replace('.jdb', '.idx.jdb');
+      throw new Error(`Index rebuild required but disabled: Index file ${idxPath} is corrupted or missing, ` + `and allowIndexRebuild is set to false. ` + `Set allowIndexRebuild: true to automatically rebuild the index, ` + `or manually fix/delete the corrupted index file.`);
+    }
+    if (this.opts.debugMode) {
+      console.log('🔨 Rebuilding indexes from data file...');
+    }
+    try {
+      // Read all records and rebuild index
+      let count = 0;
+      const startTime = Date.now();
+
+      // Auto-detect schema from first line if not initialized
+      if (!this.serializer.schemaManager.isInitialized) {
+        const fs = await Promise.resolve().then(() => _interopRequireWildcard(require('fs')));
+        const readline = await Promise.resolve().then(() => _interopRequireWildcard(require('readline')));
+        const stream = fs.createReadStream(this.fileHandler.file, {
+          highWaterMark: 64 * 1024,
+          encoding: 'utf8'
+        });
+        const rl = readline.createInterface({
+          input: stream,
+          crlfDelay: Infinity
+        });
+        var _iteratorAbruptCompletion = false;
+        var _didIteratorError = false;
+        var _iteratorError;
+        try {
+          for (var _iterator = _asyncIterator(rl), _step; _iteratorAbruptCompletion = !(_step = await _iterator.next()).done; _iteratorAbruptCompletion = false) {
+            const line = _step.value;
+            {
+              if (line && line.trim()) {
+                try {
+                  const firstRecord = JSON.parse(line);
+                  if (Array.isArray(firstRecord)) {
+                    // Try to infer schema from opts.fields if available
+                    if (this.opts.fields && typeof this.opts.fields === 'object') {
+                      const fieldNames = Object.keys(this.opts.fields);
+                      if (fieldNames.length >= firstRecord.length) {
+                        // Use first N fields from opts.fields to match array length
+                        const schema = fieldNames.slice(0, firstRecord.length);
+                        this.serializer.initializeSchema(schema);
+                        if (this.opts.debugMode) {
+                          console.log(`🔍 Inferred schema from opts.fields: ${schema.join(', ')}`);
+                        }
+                      } else {
+                        throw new Error(`Cannot rebuild index: array has ${firstRecord.length} elements but opts.fields only defines ${fieldNames.length} fields. Schema must be explicitly provided.`);
+                      }
+                    } else {
+                      throw new Error('Cannot rebuild index: schema missing, file uses array format, and opts.fields not provided. The .idx.jdb file is corrupted.');
+                    }
+                  } else {
+                    // Object format, initialize from object keys
+                    this.serializer.initializeSchema(firstRecord, true);
+                    if (this.opts.debugMode) {
+                      console.log(`🔍 Auto-detected schema from object: ${Object.keys(firstRecord).join(', ')}`);
+                    }
+                  }
+                  break;
+                } catch (error) {
+                  if (this.opts.debugMode) {
+                    console.error('❌ Failed to auto-detect schema:', error.message);
+                  }
+                  throw error;
+                }
+              }
+            }
+          }
+        } catch (err) {
+          _didIteratorError = true;
+          _iteratorError = err;
+        } finally {
+          try {
+            if (_iteratorAbruptCompletion && _iterator.return != null) {
+              await _iterator.return();
+            }
+          } finally {
+            if (_didIteratorError) {
+              throw _iteratorError;
+            }
+          }
+        }
+        stream.destroy();
+      }
+
+      // Use streaming to read records without loading everything into memory
+      // Also rebuild offsets while we're at it
+      const fs = await Promise.resolve().then(() => _interopRequireWildcard(require('fs')));
+      const readline = await Promise.resolve().then(() => _interopRequireWildcard(require('readline')));
+      this.offsets = [];
+      let currentOffset = 0;
+      const stream = fs.createReadStream(this.fileHandler.file, {
+        highWaterMark: 64 * 1024,
+        encoding: 'utf8'
+      });
+      const rl = readline.createInterface({
+        input: stream,
+        crlfDelay: Infinity
+      });
+      try {
+        var _iteratorAbruptCompletion2 = false;
+        var _didIteratorError2 = false;
+        var _iteratorError2;
+        try {
+          for (var _iterator2 = _asyncIterator(rl), _step2; _iteratorAbruptCompletion2 = !(_step2 = await _iterator2.next()).done; _iteratorAbruptCompletion2 = false) {
+            const line = _step2.value;
+            {
+              if (line && line.trim()) {
+                try {
+                  // Record the offset for this line
+                  this.offsets.push(currentOffset);
+                  const record = this.serializer.deserialize(line);
+                  const recordWithTerms = this.restoreTermIdsAfterDeserialization(record);
+                  await this.indexManager.add(recordWithTerms, count);
+                  count++;
+                } catch (error) {
+                  // Skip invalid lines
+                  if (this.opts.debugMode) {
+                    console.log(`⚠️ Rebuild: Failed to deserialize line ${count}:`, error.message);
+                  }
+                }
+              }
+              // Update offset for next line (including newline character)
+              currentOffset += Buffer.byteLength(line, 'utf8') + 1;
+            }
+          }
+        } catch (err) {
+          _didIteratorError2 = true;
+          _iteratorError2 = err;
+        } finally {
+          try {
+            if (_iteratorAbruptCompletion2 && _iterator2.return != null) {
+              await _iterator2.return();
+            }
+          } finally {
+            if (_didIteratorError2) {
+              throw _iteratorError2;
+            }
+          }
+        }
+      } finally {
+        stream.destroy();
+      }
+
+      // Update indexManager totalLines
+      if (this.indexManager) {
+        this.indexManager.setTotalLines(this.offsets.length);
+      }
+      this._indexRebuildNeeded = false;
+      if (this.opts.debugMode) {
+        console.log(`✅ Index rebuilt from ${count} records in ${Date.now() - startTime}ms`);
+      }
+
+      // Save the rebuilt index
+      await this._saveIndexDataToFile();
+    } catch (error) {
+      if (this.opts.debugMode) {
+        console.error('❌ Failed to rebuild indexes:', error.message);
+      }
+      // Don't throw - queries will fall back to streaming
+    }
   }
 
   /**
@@ -2396,6 +2936,8 @@ class Database extends _events.EventEmitter {
       this.writeBuffer = [];
       this.writeBufferOffsets = [];
       this.writeBufferSizes = [];
+      this.writeBufferTotalSize = 0;
+      this.writeBufferTotalSize = 0;
       this.deletedIds.clear();
       this.pendingOperations.clear();
       this.pendingIndexUpdates = [];
@@ -2460,8 +3002,393 @@ class Database extends _events.EventEmitter {
    */
   async count(criteria = {}, options = {}) {
     this._validateInitialization('count');
-    const results = await this.find(criteria, options);
-    return results.length;
+
+    // OPTIMIZATION: Use queryManager.count() instead of find() for better performance
+    // This is especially faster for indexed queries which can use indexManager.query().size
+    const fileCount = await this.queryManager.count(criteria, options);
+
+    // Count matching records in writeBuffer
+    const writeBufferCount = this.writeBuffer.filter(record => this.queryManager.matchesCriteria(record, criteria, options)).length;
+    return fileCount + writeBufferCount;
+  }
+
+  /**
+   * Check if any records exist for given field and terms (index-only, ultra-fast)
+   * Delegates to IndexManager.exists() for maximum performance
+   * 
+   * @param {string} fieldName - Indexed field name
+   * @param {string|Array<string>} terms - Single term or array of terms
+   * @param {Object} options - Options: { $all: true/false, caseInsensitive: true/false, excludes: Array<string> }
+   * @returns {Promise<boolean>} - True if at least one match exists
+   * 
+   * @example
+   * // Check if channel exists
+   * const exists = await db.exists('nameTerms', ['a', 'e'], { $all: true });
+   * 
+   * @example
+   * // Check if 'tv' exists but not 'globo'
+   * const exists = await db.exists('nameTerms', 'tv', { excludes: ['globo'] });
+   */
+  async exists(fieldName, terms, options = {}) {
+    this._validateInitialization('exists');
+    return this.indexManager.exists(fieldName, terms, options);
+  }
+
+  /**
+   * Calculate coverage for grouped include/exclude term sets
+   * @param {string} fieldName - Name of the indexed field
+   * @param {Array<object>} groups - Array of { terms, excludes } objects
+   * @param {object} options - Optional settings
+   * @returns {Promise<number>} Coverage percentage between 0 and 100
+   */
+  async coverage(fieldName, groups, options = {}) {
+    this._validateInitialization('coverage');
+    if (typeof fieldName !== 'string' || !fieldName.trim()) {
+      throw new Error('fieldName must be a non-empty string');
+    }
+    if (!Array.isArray(groups)) {
+      throw new Error('groups must be an array');
+    }
+    if (groups.length === 0) {
+      return 0;
+    }
+    if (!this.opts.indexes || !this.opts.indexes[fieldName]) {
+      throw new Error(`Field "${fieldName}" is not indexed`);
+    }
+    const fieldType = this.opts.indexes[fieldName];
+    const supportedTypes = ['array:string', 'string'];
+    if (!supportedTypes.includes(fieldType)) {
+      throw new Error(`coverage() only supports fields of type ${supportedTypes.join(', ')} (found: ${fieldType})`);
+    }
+    const fieldIndex = this.indexManager?.index?.data?.[fieldName];
+    if (!fieldIndex) {
+      return 0;
+    }
+    const isTermMapped = this.termManager && this.termManager.termMappingFields && this.termManager.termMappingFields.includes(fieldName);
+    const normalizeTerm = term => {
+      if (term === undefined || term === null) {
+        return '';
+      }
+      return String(term).trim();
+    };
+    const resolveKey = term => {
+      if (isTermMapped) {
+        const termId = this.termManager.getTermIdWithoutIncrement(term);
+        if (termId === null || termId === undefined) {
+          return null;
+        }
+        return String(termId);
+      }
+      return String(term);
+    };
+    let matchedGroups = 0;
+    for (const group of groups) {
+      if (!group || typeof group !== 'object') {
+        throw new Error('Each coverage group must be an object');
+      }
+      const includeTermsRaw = Array.isArray(group.terms) ? group.terms : [];
+      const excludeTermsRaw = Array.isArray(group.excludes) ? group.excludes : [];
+      const includeTerms = Array.from(new Set(includeTermsRaw.map(normalizeTerm).filter(term => term.length > 0)));
+      if (includeTerms.length === 0) {
+        throw new Error('Each coverage group must define at least one term');
+      }
+      const excludeTerms = Array.from(new Set(excludeTermsRaw.map(normalizeTerm).filter(term => term.length > 0)));
+      let candidateLines = null;
+      let groupMatched = true;
+      for (const term of includeTerms) {
+        const key = resolveKey(term);
+        if (key === null) {
+          groupMatched = false;
+          break;
+        }
+        const termData = fieldIndex[key];
+        if (!termData) {
+          groupMatched = false;
+          break;
+        }
+        const lineNumbers = this.indexManager._getAllLineNumbers(termData);
+        if (!lineNumbers || lineNumbers.length === 0) {
+          groupMatched = false;
+          break;
+        }
+        if (candidateLines === null) {
+          candidateLines = new Set(lineNumbers);
+        } else {
+          const termSet = new Set(lineNumbers);
+          for (const line of Array.from(candidateLines)) {
+            if (!termSet.has(line)) {
+              candidateLines.delete(line);
+            }
+          }
+        }
+        if (!candidateLines || candidateLines.size === 0) {
+          groupMatched = false;
+          break;
+        }
+      }
+      if (!groupMatched || !candidateLines || candidateLines.size === 0) {
+        continue;
+      }
+      for (const term of excludeTerms) {
+        const key = resolveKey(term);
+        if (key === null) {
+          continue;
+        }
+        const termData = fieldIndex[key];
+        if (!termData) {
+          continue;
+        }
+        const excludeLines = this.indexManager._getAllLineNumbers(termData);
+        if (!excludeLines || excludeLines.length === 0) {
+          continue;
+        }
+        for (const line of excludeLines) {
+          if (!candidateLines.size) {
+            break;
+          }
+          candidateLines.delete(line);
+        }
+        if (!candidateLines.size) {
+          break;
+        }
+      }
+      if (candidateLines && candidateLines.size > 0) {
+        matchedGroups++;
+      }
+    }
+    if (matchedGroups === 0) {
+      return 0;
+    }
+    const precision = typeof options.precision === 'number' && options.precision >= 0 ? options.precision : 2;
+    const coverageValue = matchedGroups / groups.length * 100;
+    return Number(coverageValue.toFixed(precision));
+  }
+
+  /**
+   * Score records based on weighted terms in an indexed array:string field
+   * @param {string} fieldName - Name of indexed array:string field
+   * @param {object} scores - Map of terms to numeric weights
+   * @param {object} options - Query options
+   * @returns {Promise<Array>} Records with scores, sorted by score
+   */
+  async score(fieldName, scores, options = {}) {
+    // Validate initialization
+    this._validateInitialization('score');
+
+    // Set default options
+    const opts = {
+      limit: options.limit ?? 100,
+      sort: options.sort ?? 'desc',
+      includeScore: options.includeScore !== false,
+      mode: options.mode ?? 'sum'
+    };
+
+    // Validate fieldName
+    if (typeof fieldName !== 'string' || !fieldName) {
+      throw new Error('fieldName must be a non-empty string');
+    }
+
+    // Validate scores object
+    if (!scores || typeof scores !== 'object' || Array.isArray(scores)) {
+      throw new Error('scores must be an object');
+    }
+
+    // Handle empty scores - return empty array as specified
+    if (Object.keys(scores).length === 0) {
+      return [];
+    }
+
+    // Validate scores values are numeric
+    for (const [term, weight] of Object.entries(scores)) {
+      if (typeof weight !== 'number' || isNaN(weight)) {
+        throw new Error(`Score value for term "${term}" must be a number`);
+      }
+    }
+
+    // Validate mode
+    const allowedModes = new Set(['sum', 'max', 'avg', 'first']);
+    if (!allowedModes.has(opts.mode)) {
+      throw new Error(`Invalid score mode "${opts.mode}". Must be one of: ${Array.from(allowedModes).join(', ')}`);
+    }
+
+    // Check if field is indexed and is array:string type
+    if (!this.opts.indexes || !this.opts.indexes[fieldName]) {
+      throw new Error(`Field "${fieldName}" is not indexed`);
+    }
+    const fieldType = this.opts.indexes[fieldName];
+    if (fieldType !== 'array:string') {
+      throw new Error(`Field "${fieldName}" must be of type "array:string" (found: ${fieldType})`);
+    }
+
+    // Check if this is a term-mapped field
+    const isTermMapped = this.termManager && this.termManager.termMappingFields && this.termManager.termMappingFields.includes(fieldName);
+
+    // Access the index for this field
+    const fieldIndex = this.indexManager.index.data[fieldName];
+    if (!fieldIndex) {
+      return [];
+    }
+
+    // Accumulate scores for each line number
+    const scoreMap = new Map();
+    const countMap = opts.mode === 'avg' ? new Map() : null;
+
+    // Iterate through each term in the scores object
+    for (const [term, weight] of Object.entries(scores)) {
+      // Get term ID if this is a term-mapped field
+      let termKey;
+      if (isTermMapped) {
+        // For term-mapped fields, convert term to term ID
+        const termId = this.termManager.getTermIdWithoutIncrement(term);
+        if (termId === null || termId === undefined) {
+          // Term doesn't exist, skip it
+          continue;
+        }
+        termKey = String(termId);
+      } else {
+        termKey = String(term);
+      }
+
+      // Look up line numbers for this term
+      const termData = fieldIndex[termKey];
+      if (!termData) {
+        // Term doesn't exist in index, skip
+        continue;
+      }
+
+      // Get all line numbers for this term
+      const lineNumbers = this.indexManager._getAllLineNumbers(termData);
+
+      // Add weight to score for each line number
+      for (const lineNumber of lineNumbers) {
+        const currentScore = scoreMap.get(lineNumber);
+        switch (opts.mode) {
+          case 'sum':
+            {
+              const nextScore = (currentScore || 0) + weight;
+              scoreMap.set(lineNumber, nextScore);
+              break;
+            }
+          case 'max':
+            {
+              if (currentScore === undefined) {
+                scoreMap.set(lineNumber, weight);
+              } else {
+                scoreMap.set(lineNumber, Math.max(currentScore, weight));
+              }
+              break;
+            }
+          case 'avg':
+            {
+              const previous = currentScore || 0;
+              scoreMap.set(lineNumber, previous + weight);
+              const count = (countMap.get(lineNumber) || 0) + 1;
+              countMap.set(lineNumber, count);
+              break;
+            }
+          case 'first':
+            {
+              if (currentScore === undefined) {
+                scoreMap.set(lineNumber, weight);
+              }
+              break;
+            }
+        }
+      }
+    }
+
+    // For average mode, divide total by count
+    if (opts.mode === 'avg') {
+      for (const [lineNumber, totalScore] of scoreMap.entries()) {
+        const count = countMap.get(lineNumber) || 1;
+        scoreMap.set(lineNumber, totalScore / count);
+      }
+    }
+
+    // Filter out zero scores and sort by score
+    const scoredEntries = Array.from(scoreMap.entries()).filter(([, score]) => score > 0);
+
+    // Sort by score
+    scoredEntries.sort((a, b) => {
+      return opts.sort === 'asc' ? a[1] - b[1] : b[1] - a[1];
+    });
+
+    // Apply limit
+    const limitedEntries = opts.limit > 0 ? scoredEntries.slice(0, opts.limit) : scoredEntries;
+    if (limitedEntries.length === 0) {
+      return [];
+    }
+
+    // Fetch actual records
+    const lineNumbers = limitedEntries.map(([lineNumber]) => lineNumber);
+    const scoresByLineNumber = new Map(limitedEntries);
+
+    // Use getRanges and fileHandler to read records
+    const ranges = this.getRanges(lineNumbers);
+    const groupedRanges = await this.fileHandler.groupedRanges(ranges);
+    const fs = await Promise.resolve().then(() => _interopRequireWildcard(require('fs')));
+    const fd = await fs.promises.open(this.fileHandler.file, 'r');
+    const results = [];
+    try {
+      for (const groupedRange of groupedRanges) {
+        var _iteratorAbruptCompletion3 = false;
+        var _didIteratorError3 = false;
+        var _iteratorError3;
+        try {
+          for (var _iterator3 = _asyncIterator(this.fileHandler.readGroupedRange(groupedRange, fd)), _step3; _iteratorAbruptCompletion3 = !(_step3 = await _iterator3.next()).done; _iteratorAbruptCompletion3 = false) {
+            const row = _step3.value;
+            {
+              try {
+                const record = this.serializer.deserialize(row.line);
+
+                // Get line number from the row
+                const lineNumber = row._ || 0;
+
+                // Restore term IDs to terms
+                const recordWithTerms = this.restoreTermIdsAfterDeserialization(record);
+
+                // Add line number
+                recordWithTerms._ = lineNumber;
+
+                // Add score if includeScore is true
+                if (opts.includeScore) {
+                  recordWithTerms.score = scoresByLineNumber.get(lineNumber) || 0;
+                }
+                results.push(recordWithTerms);
+              } catch (error) {
+                // Skip invalid lines
+                if (this.opts.debugMode) {
+                  console.error('Error deserializing record in score():', error);
+                }
+              }
+            }
+          }
+        } catch (err) {
+          _didIteratorError3 = true;
+          _iteratorError3 = err;
+        } finally {
+          try {
+            if (_iteratorAbruptCompletion3 && _iterator3.return != null) {
+              await _iterator3.return();
+            }
+          } finally {
+            if (_didIteratorError3) {
+              throw _iteratorError3;
+            }
+          }
+        }
+      }
+    } finally {
+      await fd.close();
+    }
+
+    // Re-sort results to maintain score order (since reads might be out of order)
+    results.sort((a, b) => {
+      const scoreA = scoresByLineNumber.get(a._) || 0;
+      const scoreB = scoresByLineNumber.get(b._) || 0;
+      return opts.sort === 'asc' ? scoreA - scoreB : scoreB - scoreA;
+    });
+    return results;
   }
 
   /**
@@ -2656,10 +3583,47 @@ class Database extends _events.EventEmitter {
     }
 
     // CRITICAL FIX: Only remove processed items from writeBuffer after all async operations complete
-    // OPTIMIZATION: Use Set.has() for O(1) lookup - same Set used for processing
     const beforeLength = this.writeBuffer.length;
-    this.writeBuffer = this.writeBuffer.filter(item => !itemsToProcess.has(item));
+    if (beforeLength > 0) {
+      const originalRecords = this.writeBuffer;
+      const originalOffsets = this.writeBufferOffsets;
+      const originalSizes = this.writeBufferSizes;
+      const retainedRecords = [];
+      const retainedOffsets = [];
+      const retainedSizes = [];
+      let retainedTotal = 0;
+      let removedCount = 0;
+      for (let i = 0; i < originalRecords.length; i++) {
+        const record = originalRecords[i];
+        if (itemsToProcess.has(record)) {
+          removedCount++;
+          continue;
+        }
+        retainedRecords.push(record);
+        if (originalOffsets && i < originalOffsets.length) {
+          retainedOffsets.push(originalOffsets[i]);
+        }
+        if (originalSizes && i < originalSizes.length) {
+          const size = originalSizes[i];
+          if (size !== undefined) {
+            retainedSizes.push(size);
+            retainedTotal += size;
+          }
+        }
+      }
+      if (removedCount > 0) {
+        this.writeBuffer = retainedRecords;
+        this.writeBufferOffsets = retainedOffsets;
+        this.writeBufferSizes = retainedSizes;
+        this.writeBufferTotalSize = retainedTotal;
+      }
+    }
     const afterLength = this.writeBuffer.length;
+    if (afterLength === 0) {
+      this.writeBufferOffsets = [];
+      this.writeBufferSizes = [];
+      this.writeBufferTotalSize = 0;
+    }
     if (this.opts.debugMode && beforeLength !== afterLength) {
       console.log(`💾 _processWriteBuffer: Removed ${beforeLength - afterLength} items from writeBuffer (${beforeLength} -> ${afterLength})`);
     }
@@ -3231,28 +4195,239 @@ class Database extends _events.EventEmitter {
   }
 
   /**
+   * Get the base line number for writeBuffer entries (number of persisted records)
+   * @private
+   */
+  _getWriteBufferBaseLineNumber() {
+    return Array.isArray(this.offsets) ? this.offsets.length : 0;
+  }
+
+  /**
+   * Convert a writeBuffer index into an absolute line number
+   * @param {number} writeBufferIndex - Index inside writeBuffer (0-based)
+   * @returns {number} Absolute line number (0-based)
+   * @private
+   */
+  _getAbsoluteLineNumber(writeBufferIndex) {
+    if (typeof writeBufferIndex !== 'number' || writeBufferIndex < 0) {
+      throw new Error('Invalid writeBuffer index');
+    }
+    return this._getWriteBufferBaseLineNumber() + writeBufferIndex;
+  }
+  _streamingRecoveryGenerator(_x, _x2) {
+    var _this = this;
+    return _wrapAsyncGenerator(function* (criteria, options, alreadyYielded = 0, map = null, remainingSkipValue = 0) {
+      if (_this._offsetRecoveryInProgress) {
+        return;
+      }
+      if (!_this.fileHandler || !_this.fileHandler.file) {
+        return;
+      }
+      _this._offsetRecoveryInProgress = true;
+      const fsModule = _this._fsModule || (_this._fsModule = yield _awaitAsyncGenerator(Promise.resolve().then(() => _interopRequireWildcard(require('fs')))));
+      let fd;
+      try {
+        fd = yield _awaitAsyncGenerator(fsModule.promises.open(_this.fileHandler.file, 'r'));
+      } catch (error) {
+        _this._offsetRecoveryInProgress = false;
+        if (_this.opts.debugMode) {
+          console.warn(`⚠️ Offset recovery skipped: ${error.message}`);
+        }
+        return;
+      }
+      const chunkSize = _this.opts.offsetRecoveryChunkSize || 64 * 1024;
+      let buffer = Buffer.alloc(0);
+      let readOffset = 0;
+      const originalOffsets = Array.isArray(_this.offsets) ? [..._this.offsets] : [];
+      const newOffsets = [];
+      let offsetAdjusted = false;
+      let limitReached = false;
+      let lineIndex = 0;
+      let lastLineEnd = 0;
+      let producedTotal = alreadyYielded || 0;
+      let remainingSkip = remainingSkipValue || 0;
+      let remainingAlreadyYielded = alreadyYielded || 0;
+      const limit = typeof options?.limit === 'number' ? options.limit : null;
+      const includeOffsets = options?.includeOffsets === true;
+      const includeLinePosition = _this.opts.includeLinePosition;
+      const mapSet = map instanceof Set ? new Set(map) : Array.isArray(map) ? new Set(map) : null;
+      const criteriaIsObject = criteria && typeof criteria === 'object' && !Array.isArray(criteria) && !(criteria instanceof Set);
+      const hasCriteria = criteriaIsObject && Object.keys(criteria).length > 0;
+      const decodeLineBuffer = lineBuffer => {
+        let trimmed = lineBuffer;
+        if (trimmed.length > 0 && trimmed[trimmed.length - 1] === 0x0A) {
+          trimmed = trimmed.subarray(0, trimmed.length - 1);
+        }
+        if (trimmed.length > 0 && trimmed[trimmed.length - 1] === 0x0D) {
+          trimmed = trimmed.subarray(0, trimmed.length - 1);
+        }
+        return trimmed;
+      };
+      const processLine = async (lineBuffer, lineStart) => {
+        const lineLength = lineBuffer.length;
+        newOffsets[lineIndex] = lineStart;
+        const expected = originalOffsets[lineIndex];
+        if (expected !== undefined && expected !== lineStart) {
+          offsetAdjusted = true;
+          if (_this.opts.debugMode) {
+            console.warn(`⚠️ Offset mismatch detected at line ${lineIndex}: expected ${expected}, actual ${lineStart}`);
+          }
+        } else if (expected === undefined) {
+          offsetAdjusted = true;
+        }
+        lastLineEnd = Math.max(lastLineEnd, lineStart + lineLength);
+        let entryWithTerms = null;
+        let shouldYield = false;
+        const decodedBuffer = decodeLineBuffer(lineBuffer);
+        if (decodedBuffer.length > 0) {
+          let lineString;
+          try {
+            lineString = decodedBuffer.toString('utf8');
+          } catch (error) {
+            lineString = decodedBuffer.toString('utf8', {
+              replacement: '?'
+            });
+          }
+          try {
+            const record = await _this.serializer.deserialize(lineString);
+            if (record && typeof record === 'object') {
+              entryWithTerms = _this.restoreTermIdsAfterDeserialization(record);
+              if (includeLinePosition) {
+                entryWithTerms._ = lineIndex;
+              }
+              if (mapSet) {
+                shouldYield = mapSet.has(lineIndex);
+                if (shouldYield) {
+                  mapSet.delete(lineIndex);
+                }
+              } else if (hasCriteria) {
+                shouldYield = _this.queryManager.matchesCriteria(entryWithTerms, criteria, options);
+              } else {
+                shouldYield = true;
+              }
+            }
+          } catch (error) {
+            if (_this.opts.debugMode) {
+              console.warn(`⚠️ Offset recovery failed to deserialize line ${lineIndex} at ${lineStart}: ${error.message}`);
+            }
+          }
+        }
+        let yieldedEntry = null;
+        if (shouldYield && entryWithTerms) {
+          if (remainingSkip > 0) {
+            remainingSkip--;
+          } else if (remainingAlreadyYielded > 0) {
+            remainingAlreadyYielded--;
+          } else if (!limit || producedTotal < limit) {
+            producedTotal++;
+            yieldedEntry = includeOffsets ? {
+              entry: entryWithTerms,
+              start: lineStart,
+              _: lineIndex
+            } : entryWithTerms;
+          } else {
+            limitReached = true;
+          }
+        }
+        lineIndex++;
+        if (yieldedEntry) {
+          return yieldedEntry;
+        }
+        return null;
+      };
+      let recoveryFailed = false;
+      try {
+        while (true) {
+          const tempBuffer = Buffer.allocUnsafe(chunkSize);
+          const {
+            bytesRead
+          } = yield _awaitAsyncGenerator(fd.read(tempBuffer, 0, chunkSize, readOffset));
+          if (bytesRead === 0) {
+            if (buffer.length > 0) {
+              const lineStart = readOffset - buffer.length;
+              const yieldedEntry = yield _awaitAsyncGenerator(processLine(buffer, lineStart));
+              if (yieldedEntry) {
+                yield yieldedEntry;
+              }
+            }
+            break;
+          }
+          readOffset += bytesRead;
+          let chunk = buffer.length > 0 ? Buffer.concat([buffer, tempBuffer.subarray(0, bytesRead)]) : tempBuffer.subarray(0, bytesRead);
+          let processedUpTo = 0;
+          const chunkBaseOffset = readOffset - chunk.length;
+          while (true) {
+            const newlineIndex = chunk.indexOf(0x0A, processedUpTo);
+            if (newlineIndex === -1) {
+              break;
+            }
+            const lineBuffer = chunk.subarray(processedUpTo, newlineIndex + 1);
+            const lineStart = chunkBaseOffset + processedUpTo;
+            const yieldedEntry = yield _awaitAsyncGenerator(processLine(lineBuffer, lineStart));
+            processedUpTo = newlineIndex + 1;
+            if (yieldedEntry) {
+              yield yieldedEntry;
+            }
+          }
+          buffer = chunk.subarray(processedUpTo);
+        }
+      } catch (error) {
+        recoveryFailed = true;
+        if (_this.opts.debugMode) {
+          console.warn(`⚠️ Offset recovery aborted: ${error.message}`);
+        }
+      } finally {
+        yield _awaitAsyncGenerator(fd.close().catch(() => {}));
+        _this._offsetRecoveryInProgress = false;
+        if (recoveryFailed) {
+          return;
+        }
+        _this.offsets = newOffsets;
+        if (lineIndex < _this.offsets.length) {
+          _this.offsets.length = lineIndex;
+        }
+        if (originalOffsets.length !== newOffsets.length) {
+          offsetAdjusted = true;
+        }
+        _this.indexOffset = lastLineEnd;
+        if (offsetAdjusted) {
+          _this.shouldSave = true;
+          try {
+            yield _awaitAsyncGenerator(_this._saveIndexDataToFile());
+          } catch (error) {
+            if (_this.opts.debugMode) {
+              console.warn(`⚠️ Failed to persist recovered offsets: ${error.message}`);
+            }
+          }
+        }
+      }
+    }).apply(this, arguments);
+  }
+
+  /**
    * Walk through records using streaming (real implementation)
    */
-  walk(_x) {
-    var _this = this;
+  walk(_x3) {
+    var _this2 = this;
     return _wrapAsyncGenerator(function* (criteria, options = {}) {
       // CRITICAL FIX: Validate state before walk operation to prevent crashes
-      _this.validateState();
-      if (!_this.initialized) yield _awaitAsyncGenerator(_this.init());
+      _this2.validateState();
+      if (!_this2.initialized) yield _awaitAsyncGenerator(_this2.init());
 
       // If no data at all, return empty
-      if (_this.indexOffset === 0 && _this.writeBuffer.length === 0) return;
+      if (_this2.indexOffset === 0 && _this2.writeBuffer.length === 0) return;
+      let count = 0;
+      let remainingSkip = options.skip || 0;
       let map;
       if (!Array.isArray(criteria)) {
         if (criteria instanceof Set) {
           map = [...criteria];
         } else if (criteria && typeof criteria === 'object' && Object.keys(criteria).length > 0) {
           // Only use indexManager.query if criteria has actual filters
-          map = [..._this.indexManager.query(criteria, options)];
+          map = [..._this2.indexManager.query(criteria, options)];
         } else {
           // For empty criteria {} or null/undefined, get all records
-          // Use writeBuffer length when indexOffset is 0 (data not saved yet)
-          const totalRecords = _this.indexOffset > 0 ? _this.indexOffset : _this.writeBuffer.length;
+          const totalRecords = _this2.offsets && _this2.offsets.length > 0 ? _this2.offsets.length : _this2.writeBuffer.length;
           map = [...Array(totalRecords).keys()];
         }
       } else {
@@ -3260,17 +4435,21 @@ class Database extends _events.EventEmitter {
       }
 
       // Use writeBuffer when available (unsaved data)
-      if (_this.writeBuffer.length > 0) {
+      if (_this2.writeBuffer.length > 0) {
         let count = 0;
 
         // If map is empty (no index results) but we have criteria, filter writeBuffer directly
         if (map.length === 0 && criteria && typeof criteria === 'object' && Object.keys(criteria).length > 0) {
-          for (let i = 0; i < _this.writeBuffer.length; i++) {
+          for (let i = 0; i < _this2.writeBuffer.length; i++) {
             if (options.limit && count >= options.limit) {
               break;
             }
-            const entry = _this.writeBuffer[i];
-            if (entry && _this.queryManager.matchesCriteria(entry, criteria, options)) {
+            const entry = _this2.writeBuffer[i];
+            if (entry && _this2.queryManager.matchesCriteria(entry, criteria, options)) {
+              if (remainingSkip > 0) {
+                remainingSkip--;
+                continue;
+              }
               count++;
               if (options.includeOffsets) {
                 yield {
@@ -3279,7 +4458,7 @@ class Database extends _events.EventEmitter {
                   _: i
                 };
               } else {
-                if (_this.opts.includeLinePosition) {
+                if (_this2.opts.includeLinePosition) {
                   entry._ = i;
                 }
                 yield entry;
@@ -3292,9 +4471,13 @@ class Database extends _events.EventEmitter {
             if (options.limit && count >= options.limit) {
               break;
             }
-            if (lineNumber < _this.writeBuffer.length) {
-              const entry = _this.writeBuffer[lineNumber];
+            if (lineNumber < _this2.writeBuffer.length) {
+              const entry = _this2.writeBuffer[lineNumber];
               if (entry) {
+                if (remainingSkip > 0) {
+                  remainingSkip--;
+                  continue;
+                }
                 count++;
                 if (options.includeOffsets) {
                   yield {
@@ -3303,7 +4486,7 @@ class Database extends _events.EventEmitter {
                     _: lineNumber
                   };
                 } else {
-                  if (_this.opts.includeLinePosition) {
+                  if (_this2.opts.includeLinePosition) {
                     entry._ = lineNumber;
                   }
                   yield entry;
@@ -3316,50 +4499,151 @@ class Database extends _events.EventEmitter {
       }
 
       // If writeBuffer is empty but we have saved data, we need to load it from file
-      if (_this.writeBuffer.length === 0 && _this.indexOffset > 0) {
+      if (_this2.writeBuffer.length === 0 && _this2.indexOffset > 0) {
         // Load data from file for querying
         try {
           let data;
           let lines;
 
           // Smart threshold: decide between partial reads vs full read
-          const resultPercentage = map ? map.length / _this.indexOffset * 100 : 100;
-          const threshold = _this.opts.partialReadThreshold || 60; // Default 60% threshold
+          const resultPercentage = map ? map.length / _this2.indexOffset * 100 : 100;
+          const threshold = _this2.opts.partialReadThreshold || 60; // Default 60% threshold
 
           // Use partial reads when:
           // 1. We have specific line numbers from index
           // 2. Results are below threshold percentage
           // 3. Database is large enough to benefit from partial reads
-          const shouldUsePartialReads = map && map.length > 0 && resultPercentage < threshold && _this.indexOffset > 100; // Only for databases with >100 records
+          const shouldUsePartialReads = map && map.length > 0 && resultPercentage < threshold && _this2.indexOffset > 100; // Only for databases with >100 records
 
           if (shouldUsePartialReads) {
-            if (_this.opts.debugMode) {
-              console.log(`🔍 Using PARTIAL READS: ${map.length}/${_this.indexOffset} records (${resultPercentage.toFixed(1)}% < ${threshold}% threshold)`);
+            if (_this2.opts.debugMode) {
+              console.log(`🔍 Using PARTIAL READS: ${map.length}/${_this2.indexOffset} records (${resultPercentage.toFixed(1)}% < ${threshold}% threshold)`);
             }
-            // Convert 0-based line numbers to 1-based for readSpecificLines
-            const lineNumbers = map.map(num => num + 1);
-            data = yield _awaitAsyncGenerator(_this.fileHandler.readSpecificLines(lineNumbers));
-            lines = data ? data.split('\n') : [];
+            // OPTIMIZATION: Use ranges instead of reading entire file
+            const ranges = _this2.getRanges(map);
+            const groupedRanges = yield _awaitAsyncGenerator(_this2.fileHandler.groupedRanges(ranges));
+            const fs = yield _awaitAsyncGenerator(Promise.resolve().then(() => _interopRequireWildcard(require('fs'))));
+            const fd = yield _awaitAsyncGenerator(fs.promises.open(_this2.fileHandler.file, 'r'));
+            try {
+              for (const groupedRange of groupedRanges) {
+                var _iteratorAbruptCompletion4 = false;
+                var _didIteratorError4 = false;
+                var _iteratorError4;
+                try {
+                  for (var _iterator4 = _asyncIterator(_this2.fileHandler.readGroupedRange(groupedRange, fd)), _step4; _iteratorAbruptCompletion4 = !(_step4 = yield _awaitAsyncGenerator(_iterator4.next())).done; _iteratorAbruptCompletion4 = false) {
+                    const row = _step4.value;
+                    {
+                      if (options.limit && count >= options.limit) {
+                        break;
+                      }
+                      try {
+                        // CRITICAL FIX: Use serializer.deserialize instead of JSON.parse to handle array format
+                        const record = _this2.serializer.deserialize(row.line);
+                        // SPACE OPTIMIZATION: Restore term IDs to terms for user
+                        const recordWithTerms = _this2.restoreTermIdsAfterDeserialization(record);
+                        if (remainingSkip > 0) {
+                          remainingSkip--;
+                          continue;
+                        }
+                        count++;
+                        if (options.includeOffsets) {
+                          yield {
+                            entry: recordWithTerms,
+                            start: row.start,
+                            _: row._ || 0
+                          };
+                        } else {
+                          if (_this2.opts.includeLinePosition) {
+                            recordWithTerms._ = row._ || 0;
+                          }
+                          yield recordWithTerms;
+                        }
+                      } catch (error) {
+                        // CRITICAL FIX: Log deserialization errors instead of silently ignoring them
+                        // This helps identify data corruption issues
+                        if (1 || _this2.opts.debugMode) {
+                          console.warn(`⚠️ walk(): Failed to deserialize record at offset ${row.start}: ${error.message}`);
+                          console.warn(`⚠️ walk(): Problematic line (first 200 chars): ${row.line.substring(0, 200)}`);
+                        }
+                        if (!_this2._offsetRecoveryInProgress) {
+                          var _iteratorAbruptCompletion5 = false;
+                          var _didIteratorError5 = false;
+                          var _iteratorError5;
+                          try {
+                            for (var _iterator5 = _asyncIterator(_this2._streamingRecoveryGenerator(criteria, options, count, map, remainingSkip)), _step5; _iteratorAbruptCompletion5 = !(_step5 = yield _awaitAsyncGenerator(_iterator5.next())).done; _iteratorAbruptCompletion5 = false) {
+                              const recoveredEntry = _step5.value;
+                              {
+                                yield recoveredEntry;
+                                count++;
+                              }
+                            }
+                          } catch (err) {
+                            _didIteratorError5 = true;
+                            _iteratorError5 = err;
+                          } finally {
+                            try {
+                              if (_iteratorAbruptCompletion5 && _iterator5.return != null) {
+                                yield _awaitAsyncGenerator(_iterator5.return());
+                              }
+                            } finally {
+                              if (_didIteratorError5) {
+                                throw _iteratorError5;
+                              }
+                            }
+                          }
+                          return;
+                        }
+                        // Skip invalid lines but continue processing
+                        // This prevents one corrupted record from stopping the entire walk operation
+                      }
+                    }
+                  }
+                } catch (err) {
+                  _didIteratorError4 = true;
+                  _iteratorError4 = err;
+                } finally {
+                  try {
+                    if (_iteratorAbruptCompletion4 && _iterator4.return != null) {
+                      yield _awaitAsyncGenerator(_iterator4.return());
+                    }
+                  } finally {
+                    if (_didIteratorError4) {
+                      throw _iteratorError4;
+                    }
+                  }
+                }
+                if (options.limit && count >= options.limit) {
+                  break;
+                }
+              }
+            } finally {
+              yield _awaitAsyncGenerator(fd.close());
+            }
+            return; // Exit early since we processed partial reads
           } else {
-            if (_this.opts.debugMode) {
-              console.log(`🔍 Using STREAMING READ: ${map?.length || 0}/${_this.indexOffset} records (${resultPercentage.toFixed(1)}% >= ${threshold}% threshold or small DB)`);
+            if (_this2.opts.debugMode) {
+              console.log(`🔍 Using STREAMING READ: ${map?.length || 0}/${_this2.indexOffset} records (${resultPercentage.toFixed(1)}% >= ${threshold}% threshold or small DB)`);
             }
             // Use streaming instead of loading all data in memory
             // This prevents memory issues with large databases
-            const streamingResults = yield _awaitAsyncGenerator(_this.fileHandler.readWithStreaming(criteria, {
+            const streamingResults = yield _awaitAsyncGenerator(_this2.fileHandler.readWithStreaming(criteria, {
               limit: options.limit,
               skip: options.skip
-            }, matchesCriteria, _this.serializer));
+            }, matchesCriteria, _this2.serializer));
 
             // Process streaming results directly without loading all lines
             for (const record of streamingResults) {
               if (options.limit && count >= options.limit) {
                 break;
               }
+              if (remainingSkip > 0) {
+                remainingSkip--;
+                continue;
+              }
               count++;
 
               // SPACE OPTIMIZATION: Restore term IDs to terms for user
-              const recordWithTerms = _this.restoreTermIdsAfterDeserialization(record);
+              const recordWithTerms = _this2.restoreTermIdsAfterDeserialization(record);
               if (options.includeOffsets) {
                 yield {
                   entry: recordWithTerms,
@@ -3367,7 +4651,7 @@ class Database extends _events.EventEmitter {
                   _: 0
                 };
               } else {
-                if (_this.opts.includeLinePosition) {
+                if (_this2.opts.includeLinePosition) {
                   recordWithTerms._ = 0;
                 }
                 yield recordWithTerms;
@@ -3375,136 +4659,108 @@ class Database extends _events.EventEmitter {
             }
             return; // Exit early since we processed streaming results
           }
-          if (lines.length > 0) {
-            const records = [];
-            for (const line of lines) {
-              if (line.trim()) {
-                try {
-                  // CRITICAL FIX: Use serializer.deserialize instead of JSON.parse to handle array format
-                  const record = _this.serializer.deserialize(line);
-                  // SPACE OPTIMIZATION: Restore term IDs to terms for user
-                  const recordWithTerms = _this.restoreTermIdsAfterDeserialization(record);
-                  records.push(recordWithTerms);
-                } catch (error) {
-                  // Skip invalid lines
-                }
-              }
-            }
-
-            // Use loaded records for querying
-            let count = 0;
-
-            // When using partial reads, records correspond to the requested line numbers
-            if (shouldUsePartialReads) {
-              for (let i = 0; i < Math.min(records.length, map.length); i++) {
-                if (options.limit && count >= options.limit) {
-                  break;
-                }
-                const entry = records[i];
-                const lineNumber = map[i];
-                if (entry) {
-                  count++;
-                  if (options.includeOffsets) {
-                    yield {
-                      entry,
-                      start: 0,
-                      _: lineNumber
-                    };
-                  } else {
-                    if (_this.opts.includeLinePosition) {
-                      entry._ = lineNumber;
-                    }
-                    yield entry;
-                  }
-                }
-              }
-            } else {
-              // Fallback to original logic when reading all data
-              for (const lineNumber of map) {
-                if (options.limit && count >= options.limit) {
-                  break;
-                }
-                if (lineNumber < records.length) {
-                  const entry = records[lineNumber];
-                  if (entry) {
-                    count++;
-                    if (options.includeOffsets) {
-                      yield {
-                        entry,
-                        start: 0,
-                        _: lineNumber
-                      };
-                    } else {
-                      if (_this.opts.includeLinePosition) {
-                        entry._ = lineNumber;
-                      }
-                      yield entry;
-                    }
-                  }
-                }
-              }
-            }
-            return;
-          }
         } catch (error) {
           // If file reading fails, continue to file-based streaming
         }
       }
 
       // Use file-based streaming for saved data
-      const ranges = _this.getRanges(map);
-      const groupedRanges = yield _awaitAsyncGenerator(_this.fileHandler.groupedRanges(ranges));
-      const fd = yield _awaitAsyncGenerator(_fs.default.promises.open(_this.fileHandler.file, 'r'));
+      const ranges = _this2.getRanges(map);
+      const groupedRanges = yield _awaitAsyncGenerator(_this2.fileHandler.groupedRanges(ranges));
+      const fd = yield _awaitAsyncGenerator(_fs.default.promises.open(_this2.fileHandler.file, 'r'));
       try {
         let count = 0;
         for (const groupedRange of groupedRanges) {
           if (options.limit && count >= options.limit) {
             break;
           }
-          var _iteratorAbruptCompletion = false;
-          var _didIteratorError = false;
-          var _iteratorError;
+          var _iteratorAbruptCompletion6 = false;
+          var _didIteratorError6 = false;
+          var _iteratorError6;
           try {
-            for (var _iterator = _asyncIterator(_this.fileHandler.readGroupedRange(groupedRange, fd)), _step; _iteratorAbruptCompletion = !(_step = yield _awaitAsyncGenerator(_iterator.next())).done; _iteratorAbruptCompletion = false) {
-              const row = _step.value;
+            for (var _iterator6 = _asyncIterator(_this2.fileHandler.readGroupedRange(groupedRange, fd)), _step6; _iteratorAbruptCompletion6 = !(_step6 = yield _awaitAsyncGenerator(_iterator6.next())).done; _iteratorAbruptCompletion6 = false) {
+              const row = _step6.value;
               {
                 if (options.limit && count >= options.limit) {
                   break;
                 }
-                const entry = yield _awaitAsyncGenerator(_this.serializer.deserialize(row.line, {
-                  compress: _this.opts.compress,
-                  v8: _this.opts.v8
-                }));
-                if (entry === null) continue;
+                try {
+                  const entry = yield _awaitAsyncGenerator(_this2.serializer.deserialize(row.line, {
+                    compress: _this2.opts.compress,
+                    v8: _this2.opts.v8
+                  }));
+                  if (entry === null) continue;
 
-                // SPACE OPTIMIZATION: Restore term IDs to terms for user
-                const entryWithTerms = _this.restoreTermIdsAfterDeserialization(entry);
-                count++;
-                if (options.includeOffsets) {
-                  yield {
-                    entry: entryWithTerms,
-                    start: row.start,
-                    _: row._ || _this.offsets.findIndex(n => n === row.start)
-                  };
-                } else {
-                  if (_this.opts.includeLinePosition) {
-                    entryWithTerms._ = row._ || _this.offsets.findIndex(n => n === row.start);
+                  // SPACE OPTIMIZATION: Restore term IDs to terms for user
+                  const entryWithTerms = _this2.restoreTermIdsAfterDeserialization(entry);
+                  if (remainingSkip > 0) {
+                    remainingSkip--;
+                    continue;
                   }
-                  yield entryWithTerms;
+                  count++;
+                  if (options.includeOffsets) {
+                    yield {
+                      entry: entryWithTerms,
+                      start: row.start,
+                      _: row._ || _this2.offsets.findIndex(n => n === row.start)
+                    };
+                  } else {
+                    if (_this2.opts.includeLinePosition) {
+                      entryWithTerms._ = row._ || _this2.offsets.findIndex(n => n === row.start);
+                    }
+                    yield entryWithTerms;
+                  }
+                } catch (error) {
+                  // CRITICAL FIX: Log deserialization errors instead of silently ignoring them
+                  // This helps identify data corruption issues
+                  if (1 || _this2.opts.debugMode) {
+                    console.warn(`⚠️ walk(): Failed to deserialize record at offset ${row.start}: ${error.message}`);
+                    console.warn(`⚠️ walk(): Problematic line (first 200 chars): ${row.line.substring(0, 200)}`);
+                  }
+                  if (!_this2._offsetRecoveryInProgress) {
+                    var _iteratorAbruptCompletion7 = false;
+                    var _didIteratorError7 = false;
+                    var _iteratorError7;
+                    try {
+                      for (var _iterator7 = _asyncIterator(_this2._streamingRecoveryGenerator(criteria, options, count, map, remainingSkip)), _step7; _iteratorAbruptCompletion7 = !(_step7 = yield _awaitAsyncGenerator(_iterator7.next())).done; _iteratorAbruptCompletion7 = false) {
+                        const recoveredEntry = _step7.value;
+                        {
+                          yield recoveredEntry;
+                          count++;
+                        }
+                      }
+                    } catch (err) {
+                      _didIteratorError7 = true;
+                      _iteratorError7 = err;
+                    } finally {
+                      try {
+                        if (_iteratorAbruptCompletion7 && _iterator7.return != null) {
+                          yield _awaitAsyncGenerator(_iterator7.return());
+                        }
+                      } finally {
+                        if (_didIteratorError7) {
+                          throw _iteratorError7;
+                        }
+                      }
+                    }
+                    return;
+                  }
+                  // Skip invalid lines but continue processing
+                  // This prevents one corrupted record from stopping the entire walk operation
                 }
               }
             }
           } catch (err) {
-            _didIteratorError = true;
-            _iteratorError = err;
+            _didIteratorError6 = true;
+            _iteratorError6 = err;
           } finally {
             try {
-              if (_iteratorAbruptCompletion && _iterator.return != null) {
-                yield _awaitAsyncGenerator(_iterator.return());
+              if (_iteratorAbruptCompletion6 && _iterator6.return != null) {
+                yield _awaitAsyncGenerator(_iterator6.return());
               }
             } finally {
-              if (_didIteratorError) {
-                throw _iteratorError;
+              if (_didIteratorError6) {
+                throw _iteratorError6;
               }
             }
           }
@@ -3528,12 +4784,12 @@ class Database extends _events.EventEmitter {
    * @param {boolean} options.detectChanges - Auto-detect changes (default: true)
    * @returns {AsyncGenerator} Generator yielding records for modification
    */
-  iterate(_x2) {
-    var _this2 = this;
+  iterate(_x4) {
+    var _this3 = this;
     return _wrapAsyncGenerator(function* (criteria, options = {}) {
       // CRITICAL FIX: Validate state before iterate operation
-      _this2.validateState();
-      if (!_this2.initialized) yield _awaitAsyncGenerator(_this2.init());
+      _this3.validateState();
+      if (!_this3.initialized) yield _awaitAsyncGenerator(_this3.init());
 
       // Set default options
       const opts = {
@@ -3546,7 +4802,7 @@ class Database extends _events.EventEmitter {
       };
 
       // If no data, return empty
-      if (_this2.indexOffset === 0 && _this2.writeBuffer.length === 0) return;
+      if (_this3.indexOffset === 0 && _this3.writeBuffer.length === 0) return;
       const startTime = Date.now();
       let processedCount = 0;
       let modifiedCount = 0;
@@ -3559,24 +4815,24 @@ class Database extends _events.EventEmitter {
 
       try {
         // Always use walk() now that the bug is fixed - it works for both small and large datasets
-        var _iteratorAbruptCompletion2 = false;
-        var _didIteratorError2 = false;
-        var _iteratorError2;
+        var _iteratorAbruptCompletion8 = false;
+        var _didIteratorError8 = false;
+        var _iteratorError8;
         try {
-          for (var _iterator2 = _asyncIterator(_this2.walk(criteria, options)), _step2; _iteratorAbruptCompletion2 = !(_step2 = yield _awaitAsyncGenerator(_iterator2.next())).done; _iteratorAbruptCompletion2 = false) {
-            const entry = _step2.value;
+          for (var _iterator8 = _asyncIterator(_this3.walk(criteria, options)), _step8; _iteratorAbruptCompletion8 = !(_step8 = yield _awaitAsyncGenerator(_iterator8.next())).done; _iteratorAbruptCompletion8 = false) {
+            const entry = _step8.value;
             {
               processedCount++;
 
               // Store original record for change detection BEFORE yielding
               let originalRecord = null;
               if (opts.detectChanges) {
-                originalRecord = _this2._createShallowCopy(entry);
+                originalRecord = _this3._createShallowCopy(entry);
                 originalRecords.set(entry.id, originalRecord);
               }
 
               // Create wrapper based on performance preference
-              const entryWrapper = opts.highPerformance ? _this2._createHighPerformanceWrapper(entry, originalRecord) : _this2._createEntryProxy(entry, originalRecord);
+              const entryWrapper = opts.highPerformance ? _this3._createHighPerformanceWrapper(entry, originalRecord) : _this3._createEntryProxy(entry, originalRecord);
 
               // Yield the wrapper for user modification
               yield entryWrapper;
@@ -3590,7 +4846,7 @@ class Database extends _events.EventEmitter {
                 }
               } else if (opts.detectChanges && originalRecord) {
                 // Check if entry was modified by comparing with original (optimized comparison)
-                if (_this2._hasRecordChanged(entry, originalRecord)) {
+                if (_this3._hasRecordChanged(entry, originalRecord)) {
                   updateBuffer.push(entry);
                   modifiedCount++;
                 }
@@ -3602,7 +4858,7 @@ class Database extends _events.EventEmitter {
 
               // Process batch when chunk size is reached
               if (updateBuffer.length >= opts.chunkSize || deleteBuffer.size >= opts.chunkSize) {
-                yield _awaitAsyncGenerator(_this2._processIterateBatch(updateBuffer, deleteBuffer, opts));
+                yield _awaitAsyncGenerator(_this3._processIterateBatch(updateBuffer, deleteBuffer, opts));
 
                 // Clear buffers
                 updateBuffer.length = 0;
@@ -3624,21 +4880,21 @@ class Database extends _events.EventEmitter {
 
           // Process remaining records in buffers
         } catch (err) {
-          _didIteratorError2 = true;
-          _iteratorError2 = err;
+          _didIteratorError8 = true;
+          _iteratorError8 = err;
         } finally {
           try {
-            if (_iteratorAbruptCompletion2 && _iterator2.return != null) {
-              yield _awaitAsyncGenerator(_iterator2.return());
+            if (_iteratorAbruptCompletion8 && _iterator8.return != null) {
+              yield _awaitAsyncGenerator(_iterator8.return());
             }
           } finally {
-            if (_didIteratorError2) {
-              throw _iteratorError2;
+            if (_didIteratorError8) {
+              throw _iteratorError8;
             }
           }
         }
         if (updateBuffer.length > 0 || deleteBuffer.size > 0) {
-          yield _awaitAsyncGenerator(_this2._processIterateBatch(updateBuffer, deleteBuffer, opts));
+          yield _awaitAsyncGenerator(_this3._processIterateBatch(updateBuffer, deleteBuffer, opts));
         }
 
         // Final progress callback (always called)
@@ -3651,7 +4907,7 @@ class Database extends _events.EventEmitter {
             completed: true
           });
         }
-        if (_this2.opts.debugMode) {
+        if (_this3.opts.debugMode) {
           console.log(`🔄 ITERATE COMPLETED: ${processedCount} processed, ${modifiedCount} modified, ${deletedCount} deleted in ${Date.now() - startTime}ms`);
         }
       } catch (error) {
@@ -3677,16 +4933,20 @@ class Database extends _events.EventEmitter {
 
           // Update record in writeBuffer or add to writeBuffer
           const index = this.writeBuffer.findIndex(r => r.id === record.id);
+          let targetIndex;
           if (index !== -1) {
             // Record is already in writeBuffer, update it
             this.writeBuffer[index] = record;
+            targetIndex = index;
           } else {
             // Record is in file, add updated version to writeBuffer
             this.writeBuffer.push(record);
+            targetIndex = this.writeBuffer.length - 1;
           }
 
           // Update index
-          await this.indexManager.update(record, record, this.writeBuffer.length - 1);
+          const absoluteLineNumber = this._getAbsoluteLineNumber(targetIndex);
+          await this.indexManager.update(record, record, absoluteLineNumber);
         }
         if (this.opts.debugMode) {
           console.log(`🔄 ITERATE: Updated ${updateBuffer.length} records in ${Date.now() - startTime}ms`);
@@ -3755,8 +5015,24 @@ class Database extends _events.EventEmitter {
           this.writeBufferSizes = [];
         }
       } else {
-        // Even if no data to save, ensure index data is persisted
-        await this._saveIndexDataToFile();
+        // Only save index data if it actually has content
+        // Don't overwrite a valid index with an empty one
+        if (this.indexManager && this.indexManager.indexedFields && this.indexManager.indexedFields.length > 0) {
+          let hasIndexData = false;
+          for (const field of this.indexManager.indexedFields) {
+            if (this.indexManager.hasUsableIndexData(field)) {
+              hasIndexData = true;
+              break;
+            }
+          }
+          // Only save if we have actual index data OR if offsets are populated
+          // (offsets being populated means we've processed data)
+          if (hasIndexData || this.offsets && this.offsets.length > 0) {
+            await this._saveIndexDataToFile();
+          } else if (this.opts.debugMode) {
+            console.log('⚠️ close(): Skipping index save - index is empty and no offsets');
+          }
+        }
       }
 
       // 2. Mark as closed (but not destroyed) to allow reopening
@@ -3790,8 +5066,40 @@ class Database extends _events.EventEmitter {
     if (this.indexManager) {
       try {
         const idxPath = this.normalizedFile.replace('.jdb', '.idx.jdb');
+        const indexJSON = this.indexManager.indexedFields && this.indexManager.indexedFields.length > 0 ? this.indexManager.toJSON() : {};
+
+        // Check if index is empty
+        const isEmpty = !indexJSON || Object.keys(indexJSON).length === 0 || this.indexManager.indexedFields && this.indexManager.indexedFields.every(field => {
+          const fieldIndex = indexJSON[field];
+          return !fieldIndex || typeof fieldIndex === 'object' && Object.keys(fieldIndex).length === 0;
+        });
+
+        // PROTECTION: Don't overwrite a valid index file with empty data
+        // If the .idx.jdb file exists and has data, and we're trying to save empty index,
+        // skip the save to prevent corruption
+        if (isEmpty && !this.offsets?.length) {
+          const fs = await Promise.resolve().then(() => _interopRequireWildcard(require('fs')));
+          if (fs.existsSync(idxPath)) {
+            try {
+              const existingData = JSON.parse(await fs.promises.readFile(idxPath, 'utf8'));
+              const existingHasData = existingData.index && Object.keys(existingData.index).length > 0;
+              const existingHasOffsets = existingData.offsets && existingData.offsets.length > 0;
+              if (existingHasData || existingHasOffsets) {
+                if (this.opts.debugMode) {
+                  console.log(`⚠️ _saveIndexDataToFile: Skipping save - would overwrite valid index with empty data`);
+                }
+                return; // Don't overwrite valid index with empty one
+              }
+            } catch (error) {
+              // If we can't read existing file, proceed with save (might be corrupted)
+              if (this.opts.debugMode) {
+                console.log(`⚠️ _saveIndexDataToFile: Could not read existing index file, proceeding with save`);
+              }
+            }
+          }
+        }
         const indexData = {
-          index: this.indexManager.indexedFields && this.indexManager.indexedFields.length > 0 ? this.indexManager.toJSON() : {},
+          index: indexJSON,
           offsets: this.offsets,
           // Save actual offsets for efficient file operations
           indexOffset: this.indexOffset,
