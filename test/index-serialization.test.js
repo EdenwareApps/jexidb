@@ -25,7 +25,8 @@ describe('Index Serialization and Set Handling', () => {
   })
 
   test('should properly serialize Sets in IndexManager toJSON method', async () => {
-    const db = new Database(testDbPath, {
+    const db = new Database(testDbPath, {fields: {"test":"string","channel":"string","tags":"array","id":"number"},
+      
       indexes: { test: 'string', channel: 'string', tags: 'array' },
       debugMode: false
     })
@@ -118,7 +119,8 @@ describe('Index Serialization and Set Handling', () => {
   })
 
   test('should properly serialize Sets in IndexManager toString method', async () => {
-    const db = new Database(testDbPath, {
+    const db = new Database(testDbPath, {fields: {"test":"string","id":"number"},
+      
       indexes: { test: 'string' },
       debugMode: false
     })
@@ -162,7 +164,8 @@ describe('Index Serialization and Set Handling', () => {
 
   test('should maintain Set functionality after loading from persisted indexes', async () => {
     // First database instance - create and save
-    const db1 = new Database(testDbPath, {
+    const db1 = new Database(testDbPath, {fields: {"test":"string","category":"string","id":"number"},
+      
       indexes: { test: 'string', category: 'string' },
       debugMode: false
     })
@@ -201,7 +204,8 @@ describe('Index Serialization and Set Handling', () => {
     await db1.destroy()
 
     // Second database instance - load and verify
-    const db2 = new Database(testDbPath, {
+    const db2 = new Database(testDbPath, {fields: {"test":"string","category":"string","id":"number"},
+      
       indexes: { test: 'string', category: 'string' },
       debugMode: false
     })
@@ -219,7 +223,8 @@ describe('Index Serialization and Set Handling', () => {
   })
 
   test('should prevent regression of empty Set display bug', async () => {
-    const db = new Database(testDbPath, {
+    const db = new Database(testDbPath, {fields: {"test":"string","id":"number"},
+      
       indexes: { test: 'string' },
       debugMode: false
     })
@@ -265,7 +270,8 @@ describe('Index Serialization and Set Handling', () => {
   })
 
   test('should handle complex index structures with proper Set serialization', async () => {
-    const db = new Database(testDbPath, {
+    const db = new Database(testDbPath, {fields: {"tags":"array","status":"string","priority":"number","id":"number"},
+      
       indexes: { tags: 'array', status: 'string', priority: 'number' },
       debugMode: false
     })
@@ -283,7 +289,8 @@ describe('Index Serialization and Set Handling', () => {
     await db.destroy()
 
     // Load in new instance
-    const db2 = new Database(testDbPath, {
+    const db2 = new Database(testDbPath, {fields: {"tags":"array","status":"string","priority":"number","id":"number"},
+      
       indexes: { tags: 'array', status: 'string', priority: 'number' },
       debugMode: false
     })

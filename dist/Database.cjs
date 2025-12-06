@@ -1,31 +1,7511 @@
-"use strict";
+'use strict';
 
-Object.defineProperty(exports, "__esModule", {
-  value: true
-});
-exports.default = exports.Database = void 0;
-var _events = require("events");
-var _IndexManager = _interopRequireDefault(require("./managers/IndexManager.mjs"));
-var _Serializer = _interopRequireDefault(require("./Serializer.mjs"));
-var _asyncMutex = require("async-mutex");
-var _fs = _interopRequireDefault(require("fs"));
-var _readline = _interopRequireDefault(require("readline"));
-var _OperationQueue = require("./OperationQueue.mjs");
-var _FileHandler = _interopRequireDefault(require("./FileHandler.mjs"));
-var _QueryManager = require("./managers/QueryManager.mjs");
-var _ConcurrencyManager = require("./managers/ConcurrencyManager.mjs");
-var _StatisticsManager = require("./managers/StatisticsManager.mjs");
-var _StreamingProcessor = _interopRequireDefault(require("./managers/StreamingProcessor.mjs"));
-var _TermManager = _interopRequireDefault(require("./managers/TermManager.mjs"));
-function _interopRequireDefault(e) { return e && e.__esModule ? e : { default: e }; }
-function _interopRequireWildcard(e, t) { if ("function" == typeof WeakMap) var r = new WeakMap(), n = new WeakMap(); return (_interopRequireWildcard = function (e, t) { if (!t && e && e.__esModule) return e; var o, i, f = { __proto__: null, default: e }; if (null === e || "object" != typeof e && "function" != typeof e) return f; if (o = t ? n : r) { if (o.has(e)) return o.get(e); o.set(e, f); } for (const t in e) "default" !== t && {}.hasOwnProperty.call(e, t) && ((i = (o = Object.defineProperty) && Object.getOwnPropertyDescriptor(e, t)) && (i.get || i.set) ? o(f, t, i) : f[t] = e[t]); return f; })(e, t); }
-function _awaitAsyncGenerator(e) { return new _OverloadYield(e, 0); }
-function _wrapAsyncGenerator(e) { return function () { return new AsyncGenerator(e.apply(this, arguments)); }; }
-function AsyncGenerator(e) { var r, t; function resume(r, t) { try { var n = e[r](t), o = n.value, u = o instanceof _OverloadYield; Promise.resolve(u ? o.v : o).then(function (t) { if (u) { var i = "return" === r ? "return" : "next"; if (!o.k || t.done) return resume(i, t); t = e[i](t).value; } settle(n.done ? "return" : "normal", t); }, function (e) { resume("throw", e); }); } catch (e) { settle("throw", e); } } function settle(e, n) { switch (e) { case "return": r.resolve({ value: n, done: !0 }); break; case "throw": r.reject(n); break; default: r.resolve({ value: n, done: !1 }); } (r = r.next) ? resume(r.key, r.arg) : t = null; } this._invoke = function (e, n) { return new Promise(function (o, u) { var i = { key: e, arg: n, resolve: o, reject: u, next: null }; t ? t = t.next = i : (r = t = i, resume(e, n)); }); }, "function" != typeof e.return && (this.return = void 0); }
-AsyncGenerator.prototype["function" == typeof Symbol && Symbol.asyncIterator || "@@asyncIterator"] = function () { return this; }, AsyncGenerator.prototype.next = function (e) { return this._invoke("next", e); }, AsyncGenerator.prototype.throw = function (e) { return this._invoke("throw", e); }, AsyncGenerator.prototype.return = function (e) { return this._invoke("return", e); };
-function _OverloadYield(e, d) { this.v = e, this.k = d; }
-function _asyncIterator(r) { var n, t, o, e = 2; for ("undefined" != typeof Symbol && (t = Symbol.asyncIterator, o = Symbol.iterator); e--;) { if (t && null != (n = r[t])) return n.call(r); if (o && null != (n = r[o])) return new AsyncFromSyncIterator(n.call(r)); t = "@@asyncIterator", o = "@@iterator"; } throw new TypeError("Object is not async iterable"); }
-function AsyncFromSyncIterator(r) { function AsyncFromSyncIteratorContinuation(r) { if (Object(r) !== r) return Promise.reject(new TypeError(r + " is not an object.")); var n = r.done; return Promise.resolve(r.value).then(function (r) { return { value: r, done: n }; }); } return AsyncFromSyncIterator = function (r) { this.s = r, this.n = r.next; }, AsyncFromSyncIterator.prototype = { s: null, n: null, next: function () { return AsyncFromSyncIteratorContinuation(this.n.apply(this.s, arguments)); }, return: function (r) { var n = this.s.return; return void 0 === n ? Promise.resolve({ value: r, done: !0 }) : AsyncFromSyncIteratorContinuation(n.apply(this.s, arguments)); }, throw: function (r) { var n = this.s.return; return void 0 === n ? Promise.reject(r) : AsyncFromSyncIteratorContinuation(n.apply(this.s, arguments)); } }, new AsyncFromSyncIterator(r); }
+Object.defineProperty(exports, '__esModule', { value: true });
+
+var events = require('events');
+var asyncMutex = require('async-mutex');
+var fs = require('fs');
+var readline = require('readline');
+var path = require('path');
+
+function _OverloadYield(e, d) {
+  this.v = e, this.k = d;
+}
+function _asyncIterator(r) {
+  var n,
+    t,
+    o,
+    e = 2;
+  for ("undefined" != typeof Symbol && (t = Symbol.asyncIterator, o = Symbol.iterator); e--;) {
+    if (t && null != (n = r[t])) return n.call(r);
+    if (o && null != (n = r[o])) return new AsyncFromSyncIterator(n.call(r));
+    t = "@@asyncIterator", o = "@@iterator";
+  }
+  throw new TypeError("Object is not async iterable");
+}
+function AsyncFromSyncIterator(r) {
+  function AsyncFromSyncIteratorContinuation(r) {
+    if (Object(r) !== r) return Promise.reject(new TypeError(r + " is not an object."));
+    var n = r.done;
+    return Promise.resolve(r.value).then(function (r) {
+      return {
+        value: r,
+        done: n
+      };
+    });
+  }
+  return AsyncFromSyncIterator = function (r) {
+    this.s = r, this.n = r.next;
+  }, AsyncFromSyncIterator.prototype = {
+    s: null,
+    n: null,
+    next: function () {
+      return AsyncFromSyncIteratorContinuation(this.n.apply(this.s, arguments));
+    },
+    return: function (r) {
+      var n = this.s.return;
+      return void 0 === n ? Promise.resolve({
+        value: r,
+        done: true
+      }) : AsyncFromSyncIteratorContinuation(n.apply(this.s, arguments));
+    },
+    throw: function (r) {
+      var n = this.s.return;
+      return void 0 === n ? Promise.reject(r) : AsyncFromSyncIteratorContinuation(n.apply(this.s, arguments));
+    }
+  }, new AsyncFromSyncIterator(r);
+}
+function _awaitAsyncGenerator(e) {
+  return new _OverloadYield(e, 0);
+}
+function _wrapAsyncGenerator(e) {
+  return function () {
+    return new AsyncGenerator(e.apply(this, arguments));
+  };
+}
+function AsyncGenerator(e) {
+  var r, t;
+  function resume(r, t) {
+    try {
+      var n = e[r](t),
+        o = n.value,
+        u = o instanceof _OverloadYield;
+      Promise.resolve(u ? o.v : o).then(function (t) {
+        if (u) {
+          var i = "return" === r ? "return" : "next";
+          if (!o.k || t.done) return resume(i, t);
+          t = e[i](t).value;
+        }
+        settle(n.done ? "return" : "normal", t);
+      }, function (e) {
+        resume("throw", e);
+      });
+    } catch (e) {
+      settle("throw", e);
+    }
+  }
+  function settle(e, n) {
+    switch (e) {
+      case "return":
+        r.resolve({
+          value: n,
+          done: true
+        });
+        break;
+      case "throw":
+        r.reject(n);
+        break;
+      default:
+        r.resolve({
+          value: n,
+          done: false
+        });
+    }
+    (r = r.next) ? resume(r.key, r.arg) : t = null;
+  }
+  this._invoke = function (e, n) {
+    return new Promise(function (o, u) {
+      var i = {
+        key: e,
+        arg: n,
+        resolve: o,
+        reject: u,
+        next: null
+      };
+      t ? t = t.next = i : (r = t = i, resume(e, n));
+    });
+  }, "function" != typeof e.return && (this.return = void 0);
+}
+AsyncGenerator.prototype["function" == typeof Symbol && Symbol.asyncIterator || "@@asyncIterator"] = function () {
+  return this;
+}, AsyncGenerator.prototype.next = function (e) {
+  return this._invoke("next", e);
+}, AsyncGenerator.prototype.throw = function (e) {
+  return this._invoke("throw", e);
+}, AsyncGenerator.prototype.return = function (e) {
+  return this._invoke("return", e);
+};
+
+const aliasToCanonical = {
+  '>': '$gt',
+  '>=': '$gte',
+  '<': '$lt',
+  '<=': '$lte',
+  '!=': '$ne',
+  '=': '$eq',
+  '==': '$eq',
+  eq: '$eq',
+  equals: '$eq',
+  in: '$in',
+  nin: '$nin',
+  regex: '$regex',
+  contains: '$contains',
+  all: '$all',
+  exists: '$exists',
+  size: '$size',
+  not: '$not'
+};
+const canonicalToLegacy = {
+  '$gt': '>',
+  '$gte': '>=',
+  '$lt': '<',
+  '$lte': '<=',
+  '$ne': '!=',
+  '$eq': '=',
+  '$contains': 'contains',
+  '$regex': 'regex'
+};
+
+/**
+ * Normalize an operator to its canonical Mongo-style representation (prefixed with $)
+ * @param {string} operator
+ * @returns {string}
+ */
+function normalizeOperator(operator) {
+  if (typeof operator !== 'string') {
+    return operator;
+  }
+  if (operator.startsWith('$')) {
+    return operator;
+  }
+  if (aliasToCanonical[operator] !== undefined) {
+    return aliasToCanonical[operator];
+  }
+  const lowerCase = operator.toLowerCase();
+  if (aliasToCanonical[lowerCase] !== undefined) {
+    return aliasToCanonical[lowerCase];
+  }
+  return operator;
+}
+
+/**
+ * Convert an operator to its legacy (non-prefixed) alias when available
+ * @param {string} operator
+ * @returns {string}
+ */
+function operatorToLegacy(operator) {
+  if (typeof operator !== 'string') {
+    return operator;
+  }
+  const canonical = normalizeOperator(operator);
+  if (canonicalToLegacy[canonical]) {
+    return canonicalToLegacy[canonical];
+  }
+  return operator;
+}
+
+/**
+ * Normalize operator keys in a criteria object
+ * @param {Object} criteriaValue
+ * @param {Object} options
+ * @param {'canonical'|'legacy'} options.target - Preferred operator style
+ * @param {boolean} [options.preserveOriginal=false] - Whether to keep the original keys alongside normalized ones
+ * @returns {Object}
+ */
+function normalizeCriteriaOperators(criteriaValue, {
+  target = 'canonical',
+  preserveOriginal = false
+} = {}) {
+  if (!criteriaValue || typeof criteriaValue !== 'object' || Array.isArray(criteriaValue)) {
+    return criteriaValue;
+  }
+  const normalized = preserveOriginal ? {
+    ...criteriaValue
+  } : {};
+  for (const [operator, value] of Object.entries(criteriaValue)) {
+    const canonical = normalizeOperator(operator);
+    if (target === 'canonical') {
+      normalized[canonical] = value;
+      if (preserveOriginal && canonical !== operator) {
+        normalized[operator] = value;
+      }
+    } else if (target === 'legacy') {
+      const legacy = operatorToLegacy(operator);
+      normalized[legacy] = value;
+      if (preserveOriginal) {
+        if (legacy !== canonical) {
+          normalized[canonical] = value;
+        }
+        if (operator !== legacy && operator !== canonical) {
+          normalized[operator] = value;
+        }
+      }
+    }
+  }
+  return normalized;
+}
+
+class IndexManager {
+  constructor(opts, databaseMutex = null, database = null) {
+    this.opts = Object.assign({}, opts);
+    this.index = Object.assign({
+      data: {}
+    }, this.opts.index);
+    this.totalLines = 0;
+    this.rangeThreshold = 10; // Sensible threshold: 10+ consecutive numbers justify ranges
+    this.binarySearchThreshold = 32; // Much higher for better performance
+    this.database = database; // Reference to database for term manager access
+
+    // CRITICAL: Use database mutex to prevent deadlocks
+    // If no database mutex provided, create a local one (for backward compatibility)
+    this.mutex = databaseMutex || new asyncMutex.Mutex();
+    this.indexedFields = [];
+    this.setIndexesConfig(this.opts.indexes);
+  }
+  setTotalLines(total) {
+    this.totalLines = total;
+  }
+
+  /**
+   * Update indexes configuration and ensure internal structures stay in sync
+   * @param {Object|Array<string>} indexes
+   */
+  setIndexesConfig(indexes) {
+    if (!indexes) {
+      this.opts.indexes = undefined;
+      this.indexedFields = [];
+      return;
+    }
+    if (Array.isArray(indexes)) {
+      const fields = indexes.map(field => String(field));
+      this.indexedFields = fields;
+      const normalizedConfig = {};
+      for (const field of fields) {
+        const existingConfig = !Array.isArray(this.opts.indexes) && typeof this.opts.indexes === 'object' ? this.opts.indexes[field] : undefined;
+        normalizedConfig[field] = existingConfig ?? 'auto';
+        if (!this.index.data[field]) {
+          this.index.data[field] = {};
+        }
+      }
+      this.opts.indexes = normalizedConfig;
+      return;
+    }
+    if (typeof indexes === 'object') {
+      this.opts.indexes = Object.assign({}, indexes);
+      this.indexedFields = Object.keys(this.opts.indexes);
+      for (const field of this.indexedFields) {
+        if (!this.index.data[field]) {
+          this.index.data[field] = {};
+        }
+      }
+    }
+  }
+
+  /**
+   * Check if a field is configured as an index
+   * @param {string} field - Field name
+   * @returns {boolean}
+   */
+  isFieldIndexed(field) {
+    if (!field) return false;
+    if (!Array.isArray(this.indexedFields)) {
+      return false;
+    }
+    return this.indexedFields.includes(field);
+  }
+
+  /**
+   * Determine whether the index has usable data for a given field
+   * @param {string} field - Field name
+   * @returns {boolean}
+   */
+  hasUsableIndexData(field) {
+    if (!field) return false;
+    const fieldData = this.index?.data?.[field];
+    if (!fieldData || typeof fieldData !== 'object') {
+      return false;
+    }
+    for (const key in fieldData) {
+      if (!Object.prototype.hasOwnProperty.call(fieldData, key)) continue;
+      const entry = fieldData[key];
+      if (!entry) continue;
+      if (entry.set && typeof entry.set.size === 'number' && entry.set.size > 0) {
+        return true;
+      }
+      if (Array.isArray(entry.ranges) && entry.ranges.length > 0) {
+        const hasRangeData = entry.ranges.some(range => {
+          if (range === null || typeof range === 'undefined') {
+            return false;
+          }
+          if (typeof range === 'object') {
+            const count = typeof range.count === 'number' ? range.count : 0;
+            return count > 0;
+          }
+          // When ranges are stored as individual numbers
+          return true;
+        });
+        if (hasRangeData) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  // Ultra-fast range conversion - only for very large datasets
+  _toRanges(numbers) {
+    if (numbers.length === 0) return [];
+    if (numbers.length < this.rangeThreshold) return numbers; // Keep as-is for small arrays
+
+    const sorted = numbers.sort((a, b) => a - b); // Sort in-place
+    const ranges = [];
+    let start = sorted[0];
+    let count = 1;
+    for (let i = 1; i < sorted.length; i++) {
+      if (sorted[i] === sorted[i - 1] + 1) {
+        count++;
+      } else {
+        // End of consecutive sequence
+        if (count >= this.rangeThreshold) {
+          ranges.push({
+            start,
+            count
+          });
+        } else {
+          // Add individual numbers for small sequences
+          for (let j = start; j < start + count; j++) {
+            ranges.push(j);
+          }
+        }
+        start = sorted[i];
+        count = 1;
+      }
+    }
+
+    // Handle last sequence
+    if (count >= this.rangeThreshold) {
+      ranges.push({
+        start,
+        count
+      });
+    } else {
+      for (let j = start; j < start + count; j++) {
+        ranges.push(j);
+      }
+    }
+    return ranges;
+  }
+
+  // Ultra-fast range expansion
+  _fromRanges(ranges) {
+    if (!ranges || ranges.length === 0) return [];
+    const numbers = [];
+    for (const item of ranges) {
+      if (typeof item === 'object' && item.start !== undefined) {
+        // It's a range - use direct loop for maximum speed
+        const end = item.start + item.count;
+        for (let i = item.start; i < end; i++) {
+          numbers.push(i);
+        }
+      } else {
+        // It's an individual number
+        numbers.push(item);
+      }
+    }
+    return numbers;
+  }
+
+  // Ultra-fast lookup - optimized for Set operations
+  _hasLineNumber(hybridData, lineNumber) {
+    if (!hybridData) return false;
+
+    // Check in Set first (O(1)) - most common case
+    if (hybridData.set && hybridData.set.has(lineNumber)) {
+      return true;
+    }
+
+    // Check in ranges only if necessary
+    if (hybridData.ranges && hybridData.ranges.length > 0) {
+      return this._searchInRanges(hybridData.ranges, lineNumber);
+    }
+    return false;
+  }
+
+  // Optimized search strategy
+  _searchInRanges(ranges, lineNumber) {
+    if (ranges.length < this.binarySearchThreshold) {
+      // Linear search for small ranges
+      return this._linearSearchRanges(ranges, lineNumber);
+    } else {
+      // Binary search for large ranges
+      return this._binarySearchRanges(ranges, lineNumber);
+    }
+  }
+
+  // Ultra-fast linear search
+  _linearSearchRanges(ranges, lineNumber) {
+    for (const item of ranges) {
+      if (typeof item === 'object' && item.start !== undefined) {
+        // It's a range
+        if (lineNumber >= item.start && lineNumber < item.start + item.count) {
+          return true;
+        }
+      } else if (item === lineNumber) {
+        // It's an individual number
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Optimized binary search
+  _binarySearchRanges(ranges, lineNumber) {
+    let left = 0;
+    let right = ranges.length - 1;
+    while (left <= right) {
+      const mid = Math.floor((left + right) / 2);
+      const range = ranges[mid];
+      if (typeof range === 'object' && range.start !== undefined) {
+        // It's a range
+        if (lineNumber >= range.start && lineNumber < range.start + range.count) {
+          return true;
+        } else if (lineNumber < range.start) {
+          right = mid - 1;
+        } else {
+          left = mid + 1;
+        }
+      } else {
+        // It's an individual number
+        if (range === lineNumber) {
+          return true;
+        } else if (range < lineNumber) {
+          left = mid + 1;
+        } else {
+          right = mid - 1;
+        }
+      }
+    }
+    return false;
+  }
+
+  // Ultra-fast add operation - minimal overhead
+  _addLineNumber(hybridData, lineNumber) {
+    // Initialize structure if needed
+    if (!hybridData) {
+      hybridData = {
+        set: new Set(),
+        ranges: []
+      };
+    }
+
+    // Add to Set directly (fastest path)
+    if (!hybridData.set) {
+      hybridData.set = new Set();
+    }
+    hybridData.set.add(lineNumber);
+
+    // Optimize to ranges when Set gets reasonably large
+    if (hybridData.set.size >= this.rangeThreshold * 2) {
+      // 20 elements
+      if (this.opts.debugMode) {
+        console.log(`🔧 Triggering range optimization: Set size ${hybridData.set.size} >= threshold ${this.rangeThreshold * 2}`);
+      }
+      this._optimizeToRanges(hybridData);
+    }
+    return hybridData;
+  }
+
+  // Ultra-fast remove operation
+  _removeLineNumber(hybridData, lineNumber) {
+    if (!hybridData) {
+      return hybridData;
+    }
+
+    // Remove from Set (fast path)
+    if (hybridData.set) {
+      hybridData.set.delete(lineNumber);
+    }
+
+    // Remove from ranges (less common)
+    if (hybridData.ranges) {
+      hybridData.ranges = this._removeFromRanges(hybridData.ranges, lineNumber);
+    }
+    return hybridData;
+  }
+
+  // Optimized range removal
+  _removeFromRanges(ranges, lineNumber) {
+    if (!ranges || ranges.length === 0) return ranges;
+    const newRanges = [];
+    for (const item of ranges) {
+      if (typeof item === 'object' && item.start !== undefined) {
+        // It's a range
+        if (lineNumber >= item.start && lineNumber < item.start + item.count) {
+          // Split range if needed
+          if (lineNumber === item.start) {
+            // Remove first element
+            if (item.count > 1) {
+              newRanges.push({
+                start: item.start + 1,
+                count: item.count - 1
+              });
+            }
+          } else if (lineNumber === item.start + item.count - 1) {
+            // Remove last element
+            if (item.count > 1) {
+              newRanges.push({
+                start: item.start,
+                count: item.count - 1
+              });
+            }
+          } else {
+            // Remove from middle - split into two ranges
+            const beforeCount = lineNumber - item.start;
+            const afterCount = item.count - beforeCount - 1;
+            if (beforeCount >= this.rangeThreshold) {
+              newRanges.push({
+                start: item.start,
+                count: beforeCount
+              });
+            } else {
+              // Add individual numbers for small sequences
+              for (let i = item.start; i < lineNumber; i++) {
+                newRanges.push(i);
+              }
+            }
+            if (afterCount >= this.rangeThreshold) {
+              newRanges.push({
+                start: lineNumber + 1,
+                count: afterCount
+              });
+            } else {
+              // Add individual numbers for small sequences
+              for (let i = lineNumber + 1; i < item.start + item.count; i++) {
+                newRanges.push(i);
+              }
+            }
+          }
+        } else {
+          newRanges.push(item);
+        }
+      } else if (item !== lineNumber) {
+        // It's an individual number
+        newRanges.push(item);
+      }
+    }
+    return newRanges;
+  }
+
+  // Ultra-lazy range conversion - only when absolutely necessary
+  _optimizeToRanges(hybridData) {
+    if (!hybridData.set || hybridData.set.size === 0) {
+      return;
+    }
+    if (this.opts.debugMode) {
+      console.log(`🔧 Starting range optimization for Set with ${hybridData.set.size} elements`);
+    }
+
+    // Only convert if we have enough data to make it worthwhile
+    if (hybridData.set.size < this.rangeThreshold) {
+      return;
+    }
+
+    // Convert Set to array and find consecutive sequences
+    const numbers = Array.from(hybridData.set).sort((a, b) => a - b);
+    const ranges = [];
+    let start = numbers[0];
+    let count = 1;
+    for (let i = 1; i < numbers.length; i++) {
+      if (numbers[i] === numbers[i - 1] + 1) {
+        count++;
+      } else {
+        // End of consecutive sequence
+        if (count >= this.rangeThreshold) {
+          ranges.push({
+            start,
+            count
+          });
+          // Remove these numbers from Set
+          for (let j = start; j < start + count; j++) {
+            hybridData.set.delete(j);
+          }
+        }
+        start = numbers[i];
+        count = 1;
+      }
+    }
+
+    // Handle last sequence
+    if (count >= this.rangeThreshold) {
+      ranges.push({
+        start,
+        count
+      });
+      for (let j = start; j < start + count; j++) {
+        hybridData.set.delete(j);
+      }
+    }
+
+    // Add new ranges to existing ranges
+    if (ranges.length > 0) {
+      if (!hybridData.ranges) {
+        hybridData.ranges = [];
+      }
+      hybridData.ranges.push(...ranges);
+      // Keep ranges sorted for efficient binary search
+      hybridData.ranges.sort((a, b) => {
+        const aStart = typeof a === 'object' ? a.start : a;
+        const bStart = typeof b === 'object' ? b.start : b;
+        return aStart - bStart;
+      });
+    }
+  }
+
+  // Ultra-fast get all line numbers
+  _getAllLineNumbers(hybridData) {
+    if (!hybridData) return [];
+
+    // Use generator for lazy evaluation and better memory efficiency
+    return Array.from(this._getAllLineNumbersGenerator(hybridData));
+  }
+
+  // OPTIMIZATION: Generator-based approach for better memory efficiency
+  *_getAllLineNumbersGenerator(hybridData) {
+    const normalizeLineNumber = value => {
+      if (typeof value === 'number') {
+        return value;
+      }
+      if (typeof value === 'string') {
+        const parsed = Number(value);
+        return Number.isNaN(parsed) ? value : parsed;
+      }
+      if (typeof value === 'bigint') {
+        const maxSafe = BigInt(Number.MAX_SAFE_INTEGER);
+        return value <= maxSafe ? Number(value) : value;
+      }
+      return value;
+    };
+
+    // Yield from Set (fastest path)
+    if (hybridData.set) {
+      for (const num of hybridData.set) {
+        yield normalizeLineNumber(num);
+      }
+    }
+
+    // Yield from ranges (optimized)
+    if (hybridData.ranges) {
+      for (const item of hybridData.ranges) {
+        if (typeof item === 'object' && item.start !== undefined) {
+          // It's a range - use direct loop for better performance
+          const end = item.start + item.count;
+          for (let i = item.start; i < end; i++) {
+            yield normalizeLineNumber(i);
+          }
+        } else {
+          // It's an individual number
+          yield normalizeLineNumber(item);
+        }
+      }
+    }
+  }
+
+  // OPTIMIZATION 6: Ultra-fast add operation with incremental index updates
+  async add(row, lineNumber) {
+    if (typeof row !== 'object' || !row) {
+      throw new Error('Invalid \'row\' parameter, it must be an object');
+    }
+    if (typeof lineNumber !== 'number') {
+      throw new Error('Invalid line number');
+    }
+
+    // OPTIMIZATION 6: Use direct field access with minimal operations
+    const data = this.index.data;
+
+    // OPTIMIZATION 6: Pre-allocate field structures for better performance
+    const fields = Object.keys(this.opts.indexes || {});
+    for (const field of fields) {
+      // PERFORMANCE: Check if this is a term mapping field once
+      const isTermMappingField = this.database?.termManager && this.database.termManager.termMappingFields && this.database.termManager.termMappingFields.includes(field);
+
+      // CRITICAL FIX: For term mapping fields, prefer ${field}Ids if available
+      // Records processed by processTermMapping have term IDs in ${field}Ids
+      // Records loaded from file have term IDs directly in ${field} (after restoreTermIdsAfterDeserialization)
+      let value;
+      if (isTermMappingField) {
+        const termIdsField = `${field}Ids`;
+        const termIds = row[termIdsField];
+        if (termIds && Array.isArray(termIds) && termIds.length > 0) {
+          // Use term IDs from ${field}Ids (preferred - from processTermMapping)
+          value = termIds;
+        } else {
+          // Fallback: use field directly (for records loaded from file that have term IDs in field)
+          value = row[field];
+        }
+      } else {
+        value = row[field];
+      }
+      if (value !== undefined && value !== null) {
+        // OPTIMIZATION 6: Initialize field structure if it doesn't exist
+        if (!data[field]) {
+          data[field] = {};
+        }
+        const values = Array.isArray(value) ? value : [value];
+        for (const val of values) {
+          let key;
+          if (isTermMappingField && typeof val === 'number') {
+            // For term mapping fields, values are already term IDs
+            key = String(val);
+          } else if (isTermMappingField && typeof val === 'string') {
+            // Fallback: convert string to term ID
+            // CRITICAL: During indexing (add), we should use getTermId() to create IDs if needed
+            // This is different from queries where we use getTermIdWithoutIncrement() to avoid creating new IDs
+            const termId = this.database.termManager.getTermId(val);
+            key = String(termId);
+          } else {
+            // For non-term-mapping fields (including array:number), use values directly
+            key = String(val);
+          }
+
+          // OPTIMIZATION 6: Use direct assignment for better performance
+          if (!data[field][key]) {
+            data[field][key] = {
+              set: new Set(),
+              ranges: []
+            };
+          }
+
+          // OPTIMIZATION 6: Direct Set operation - fastest possible
+          data[field][key].set.add(lineNumber);
+
+          // OPTIMIZATION 6: Lazy range optimization - only when beneficial
+          if (data[field][key].set.size >= this.rangeThreshold * 3) {
+            this._optimizeToRanges(data[field][key]);
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * OPTIMIZATION 6: Add multiple records to the index in batch with optimized operations
+   * @param {Array} records - Records to add
+   * @param {number} startLineNumber - Starting line number
+   */
+  async addBatch(records, startLineNumber) {
+    if (!records || !records.length) return;
+
+    // OPTIMIZATION 6: Pre-allocate index structures for better performance
+    const data = this.index.data;
+    const fields = Object.keys(this.opts.indexes || {});
+    for (const field of fields) {
+      if (!data[field]) {
+        data[field] = {};
+      }
+    }
+
+    // OPTIMIZATION 6: Use Map for batch processing to reduce lookups
+    const fieldUpdates = new Map();
+
+    // OPTIMIZATION 6: Process all records in batch with optimized data structures
+    for (let i = 0; i < records.length; i++) {
+      const row = records[i];
+      const lineNumber = startLineNumber + i;
+      for (const field of fields) {
+        // PERFORMANCE: Check if this is a term mapping field once
+        const isTermMappingField = this.database?.termManager && this.database.termManager.termMappingFields && this.database.termManager.termMappingFields.includes(field);
+
+        // CRITICAL FIX: For term mapping fields, prefer ${field}Ids if available
+        // Records processed by processTermMapping have term IDs in ${field}Ids
+        // Records loaded from file have term IDs directly in ${field} (after restoreTermIdsAfterDeserialization)
+        let value;
+        if (isTermMappingField) {
+          const termIdsField = `${field}Ids`;
+          const termIds = row[termIdsField];
+          if (termIds && Array.isArray(termIds) && termIds.length > 0) {
+            // Use term IDs from ${field}Ids (preferred - from processTermMapping)
+            value = termIds;
+          } else {
+            // Fallback: use field directly (for records loaded from file that have term IDs in field)
+            value = row[field];
+          }
+        } else {
+          value = row[field];
+        }
+        if (value !== undefined && value !== null) {
+          const values = Array.isArray(value) ? value : [value];
+          for (const val of values) {
+            let key;
+            if (isTermMappingField && typeof val === 'number') {
+              // For term mapping fields, values are already term IDs
+              key = String(val);
+            } else if (isTermMappingField && typeof val === 'string') {
+              // Fallback: convert string to term ID
+              // CRITICAL: During indexing (addBatch), we should use getTermId() to create IDs if needed
+              // This is different from queries where we use getTermIdWithoutIncrement() to avoid creating new IDs
+              const termId = this.database.termManager.getTermId(val);
+              key = String(termId);
+            } else {
+              // For non-term-mapping fields (including array:number), use values directly
+              key = String(val);
+            }
+
+            // OPTIMIZATION 6: Use Map for efficient batch updates
+            if (!fieldUpdates.has(field)) {
+              fieldUpdates.set(field, new Map());
+            }
+            const fieldMap = fieldUpdates.get(field);
+            if (!fieldMap.has(key)) {
+              fieldMap.set(key, new Set());
+            }
+            fieldMap.get(key).add(lineNumber);
+          }
+        }
+      }
+    }
+
+    // OPTIMIZATION 6: Apply all updates in batch for better performance
+    for (const [field, fieldMap] of fieldUpdates) {
+      for (const [key, lineNumbers] of fieldMap) {
+        if (!data[field][key]) {
+          data[field][key] = {
+            set: new Set(),
+            ranges: []
+          };
+        }
+
+        // OPTIMIZATION 6: Add all line numbers at once
+        for (const lineNumber of lineNumbers) {
+          data[field][key].set.add(lineNumber);
+        }
+
+        // OPTIMIZATION 6: Lazy range optimization - only when beneficial
+        if (data[field][key].set.size >= this.rangeThreshold * 3) {
+          this._optimizeToRanges(data[field][key]);
+        }
+      }
+    }
+  }
+
+  // Ultra-fast dry remove
+  dryRemove(ln) {
+    const data = this.index.data;
+    for (const field in data) {
+      for (const value in data[field]) {
+        // Direct Set operation - fastest possible
+        if (data[field][value].set) {
+          data[field][value].set.delete(ln);
+        }
+        if (data[field][value].ranges) {
+          data[field][value].ranges = this._removeFromRanges(data[field][value].ranges, ln);
+        }
+        // Remove empty entries
+        if ((!data[field][value].set || data[field][value].set.size === 0) && (!data[field][value].ranges || data[field][value].ranges.length === 0)) {
+          delete data[field][value];
+        }
+      }
+    }
+  }
+
+  // Cleanup method to free memory
+  cleanup() {
+    const data = this.index.data;
+    for (const field in data) {
+      for (const value in data[field]) {
+        if (data[field][value].set) {
+          if (typeof data[field][value].set.clearAll === 'function') {
+            data[field][value].set.clearAll();
+          } else if (typeof data[field][value].set.clear === 'function') {
+            data[field][value].set.clear();
+          }
+        }
+        if (data[field][value].ranges) {
+          data[field][value].ranges.length = 0;
+        }
+      }
+      // Clear the entire field
+      data[field] = {};
+    }
+    // Clear all data
+    this.index.data = {};
+    this.totalLines = 0;
+  }
+
+  // Clear all indexes
+  clear() {
+    this.index.data = {};
+    this.totalLines = 0;
+  }
+
+  // Update a record in the index
+  async update(oldRecord, newRecord, lineNumber = null) {
+    if (!oldRecord || !newRecord) return;
+
+    // Remove old record by ID
+    await this.remove(oldRecord);
+
+    // Add new record with provided line number or use hash of the ID
+    const actualLineNumber = lineNumber !== null ? lineNumber : this._getIdAsNumber(newRecord.id);
+    await this.add(newRecord, actualLineNumber);
+  }
+
+  // Convert string ID to number for line number
+  _getIdAsNumber(id) {
+    if (typeof id === 'number') return id;
+    if (typeof id === 'string') {
+      // Simple hash function to convert string to number
+      let hash = 0;
+      for (let i = 0; i < id.length; i++) {
+        const char = id.charCodeAt(i);
+        hash = (hash << 5) - hash + char;
+        hash = hash & hash; // Convert to 32-bit integer
+      }
+      return Math.abs(hash);
+    }
+    return 0;
+  }
+
+  // Remove a record from the index
+  async remove(record) {
+    if (!record) return;
+
+    // If record is an array of line numbers, use the original method
+    if (Array.isArray(record)) {
+      return this._removeLineNumbers(record);
+    }
+
+    // If record is an object, remove by record data
+    if (typeof record === 'object' && record.id) {
+      return await this._removeRecord(record);
+    }
+  }
+
+  // Remove a specific record from the index
+  async _removeRecord(record) {
+    if (!record) return;
+    const data = this.index.data;
+    const database = this.database;
+    const persistedCount = Array.isArray(database?.offsets) ? database.offsets.length : 0;
+    const lineMatchCache = new Map();
+    const doesLineNumberBelongToRecord = async lineNumber => {
+      if (lineMatchCache.has(lineNumber)) {
+        return lineMatchCache.get(lineNumber);
+      }
+      let belongs = false;
+      try {
+        if (lineNumber >= persistedCount) {
+          const writeBufferIndex = lineNumber - persistedCount;
+          const candidate = database?.writeBuffer?.[writeBufferIndex];
+          belongs = !!candidate && candidate.id === record.id;
+        } else if (lineNumber >= 0) {
+          const range = database?.locate?.(lineNumber);
+          if (range && database.fileHandler && database.serializer) {
+            const [start, end] = range;
+            const buffer = await database.fileHandler.readRange(start, end);
+            if (buffer && buffer.length > 0) {
+              let line = buffer.toString('utf8');
+              if (line) {
+                line = line.trim();
+                if (line.length > 0) {
+                  const storedRecord = database.serializer.deserialize(line);
+                  belongs = storedRecord && storedRecord.id === record.id;
+                }
+              }
+            }
+          }
+        }
+      } catch (error) {
+        belongs = false;
+      }
+      lineMatchCache.set(lineNumber, belongs);
+      return belongs;
+    };
+    for (const field in data) {
+      if (record[field] !== undefined && record[field] !== null) {
+        const values = Array.isArray(record[field]) ? record[field] : [record[field]];
+        for (const val of values) {
+          let key;
+
+          // Check if this is a term mapping field (array:string fields only)
+          const isTermMappingField = this.database?.termManager && this.database.termManager.termMappingFields && this.database.termManager.termMappingFields.includes(field);
+          if (isTermMappingField && typeof val === 'number') {
+            // For term mapping fields (array:string), the values are already term IDs
+            key = String(val);
+            if (this.database.opts.debugMode) {
+              console.log(`🔍 IndexManager._removeRecord: Using term ID ${val} directly for field "${field}"`);
+            }
+          } else if (isTermMappingField && typeof val === 'string') {
+            // For term mapping fields (array:string), convert string to term ID
+            const termId = this.database.termManager.getTermIdWithoutIncrement(val);
+            key = String(termId);
+            if (this.database.opts.debugMode) {
+              console.log(`🔍 IndexManager._removeRecord: Using term ID ${termId} for term "${val}"`);
+            }
+          } else {
+            // For non-term-mapping fields (including array:number), use values directly
+            key = String(val);
+            if (this.database?.opts?.debugMode) {
+              console.log(`🔍 IndexManager._removeRecord: Using value "${val}" directly for field "${field}"`);
+            }
+          }
+
+          // Note: TermManager notification is handled by Database.mjs
+          // to avoid double decrementation during updates
+
+          const indexEntry = data[field][key];
+          if (indexEntry) {
+            const lineNumbers = this._getAllLineNumbers(indexEntry);
+            const filteredLineNumbers = [];
+            for (const lineNumber of lineNumbers) {
+              if (!(await doesLineNumberBelongToRecord(lineNumber))) {
+                filteredLineNumbers.push(lineNumber);
+              }
+            }
+            if (filteredLineNumbers.length === 0) {
+              delete data[field][key];
+            } else {
+              // Rebuild the index value with filtered line numbers
+              data[field][key].set = new Set(filteredLineNumbers);
+              data[field][key].ranges = [];
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Ultra-fast remove with batch processing (renamed from remove)
+  _removeLineNumbers(lineNumbers) {
+    if (!lineNumbers || lineNumbers.length === 0) return;
+    lineNumbers.sort((a, b) => a - b); // Sort ascending for efficient processing
+
+    const data = this.index.data;
+    for (const field in data) {
+      for (const value in data[field]) {
+        const numbers = this._getAllLineNumbers(data[field][value]);
+        const newNumbers = [];
+        for (const ln of numbers) {
+          let offset = 0;
+          for (const lineNumber of lineNumbers) {
+            if (lineNumber < ln) {
+              offset++;
+            } else if (lineNumber === ln) {
+              offset = -1; // Mark for removal
+              break;
+            }
+          }
+          if (offset >= 0) {
+            newNumbers.push(ln - offset); // Update the value
+          }
+        }
+        if (newNumbers.length > 0) {
+          // Rebuild hybrid structure with new numbers
+          data[field][value] = {
+            set: new Set(),
+            ranges: []
+          };
+          for (const num of newNumbers) {
+            data[field][value] = this._addLineNumber(data[field][value], num);
+          }
+        } else {
+          delete data[field][value];
+        }
+      }
+    }
+  }
+
+  // Ultra-fast replace with batch processing
+  replace(map) {
+    if (!map || map.size === 0) return;
+    const data = this.index.data;
+    for (const field in data) {
+      for (const value in data[field]) {
+        const numbers = this._getAllLineNumbers(data[field][value]);
+        const newNumbers = [];
+        for (const lineNumber of numbers) {
+          if (map.has(lineNumber)) {
+            newNumbers.push(map.get(lineNumber));
+          } else {
+            newNumbers.push(lineNumber);
+          }
+        }
+
+        // Rebuild hybrid structure with new numbers
+        data[field][value] = {
+          set: new Set(),
+          ranges: []
+        };
+        for (const num of newNumbers) {
+          data[field][value] = this._addLineNumber(data[field][value], num);
+        }
+      }
+    }
+  }
+
+  // Ultra-fast query with early exit and smart processing
+  query(criteria, options = {}) {
+    if (typeof options === 'boolean') {
+      options = {
+        matchAny: options
+      };
+    }
+    const {
+      matchAny = false,
+      caseInsensitive = false
+    } = options;
+    if (!criteria) {
+      // Return all line numbers when no criteria provided
+      return new Set(Array.from({
+        length: this.totalLines || 0
+      }, (_, i) => i));
+    }
+
+    // Handle $not operator
+    if (criteria.$not && typeof criteria.$not === 'object') {
+      // Get all possible line numbers from database offsets or totalLines
+      const totalRecords = this.database?.offsets?.length || this.totalLines || 0;
+      const allLines = new Set(Array.from({
+        length: totalRecords
+      }, (_, i) => i));
+
+      // Get line numbers matching the $not condition
+      const notLines = this.query(criteria.$not, options);
+
+      // Return complement (all lines except those matching $not condition)
+      const result = new Set([...allLines].filter(x => !notLines.has(x)));
+
+      // If there are other conditions besides $not, we need to intersect with them
+      const otherCriteria = {
+        ...criteria
+      };
+      delete otherCriteria.$not;
+      if (Object.keys(otherCriteria).length > 0) {
+        const otherResults = this.query(otherCriteria, options);
+        return new Set([...result].filter(x => otherResults.has(x)));
+      }
+      return result;
+    }
+
+    // Handle $and queries with parallel processing optimization
+    if (criteria.$and && Array.isArray(criteria.$and)) {
+      // OPTIMIZATION: Process conditions in parallel for better performance
+      if (criteria.$and.length > 1) {
+        // Process all conditions in parallel (synchronous since query is not async)
+        const conditionResults = criteria.$and.map(andCondition => this.query(andCondition, options));
+
+        // Intersect all results for AND logic
+        let result = conditionResults[0];
+        for (let i = 1; i < conditionResults.length; i++) {
+          result = new Set([...result].filter(x => conditionResults[i].has(x)));
+        }
+
+        // IMPORTANT: Check if there are other fields besides $and at the root level
+        // If so, we need to intersect with them too
+        const otherCriteria = {
+          ...criteria
+        };
+        delete otherCriteria.$and;
+        if (Object.keys(otherCriteria).length > 0) {
+          const otherResults = this.query(otherCriteria, options);
+          result = new Set([...result].filter(x => otherResults.has(x)));
+        }
+        return result || new Set();
+      } else {
+        // Single condition - check for other criteria at root level
+        const andResult = this.query(criteria.$and[0], options);
+        const otherCriteria = {
+          ...criteria
+        };
+        delete otherCriteria.$and;
+        if (Object.keys(otherCriteria).length > 0) {
+          const otherResults = this.query(otherCriteria, options);
+          return new Set([...andResult].filter(x => otherResults.has(x)));
+        }
+        return andResult;
+      }
+    }
+    const fields = Object.keys(criteria);
+    if (!fields.length) {
+      // Return all line numbers when criteria is empty object
+      return new Set(Array.from({
+        length: this.totalLines || 0
+      }, (_, i) => i));
+    }
+    let matchingLines = matchAny ? new Set() : null;
+    const data = this.index.data;
+    for (const field of fields) {
+      // Skip logical operators - they are handled separately
+      if (field.startsWith('$')) continue;
+      if (typeof data[field] === 'undefined') continue;
+      const originalCriteriaValue = criteria[field];
+      const criteriaValue = normalizeCriteriaOperators(originalCriteriaValue, {
+        target: 'legacy',
+        preserveOriginal: true
+      });
+      let lineNumbersForField = new Set();
+      const isNumericField = this.opts.indexes[field] === 'number';
+
+      // Handle RegExp values directly (MUST check before object check since RegExp is an object)
+      if (criteriaValue instanceof RegExp) {
+        // RegExp cannot be efficiently queried using indices - fall back to streaming
+        // This will be handled by the QueryManager's streaming strategy
+        continue;
+      }
+      if (typeof criteriaValue === 'object' && !Array.isArray(criteriaValue)) {
+        const fieldIndex = data[field];
+
+        // Handle $in operator for array queries
+        if (criteriaValue.$in !== undefined) {
+          const inValues = Array.isArray(criteriaValue.$in) ? criteriaValue.$in : [criteriaValue.$in];
+
+          // PERFORMANCE: Cache term mapping field check once
+          const isTermMappingField = this.database?.termManager && this.database.termManager.termMappingFields && this.database.termManager.termMappingFields.includes(field);
+          for (const inValue of inValues) {
+            // SPACE OPTIMIZATION: Convert search term to term ID for lookup
+            let searchTermId;
+            if (isTermMappingField && typeof inValue === 'number') {
+              // For term mapping fields (array:string), the search value is already a term ID
+              searchTermId = String(inValue);
+            } else if (isTermMappingField && typeof inValue === 'string') {
+              // For term mapping fields (array:string), convert string to term ID
+              const termId = this.database?.termManager?.getTermIdWithoutIncrement(String(inValue));
+              if (termId === undefined) {
+                // Term not found in termManager - skip this search value
+                // This means the term was never saved to the database
+                if (this.opts?.debugMode) {
+                  console.log(`⚠️  Term "${inValue}" not found in termManager for field "${field}" - skipping`);
+                }
+                continue; // Skip this value, no matches possible
+              }
+              searchTermId = String(termId);
+            } else {
+              // For non-term-mapping fields (including array:number), use values directly
+              searchTermId = String(inValue);
+            }
+            if (caseInsensitive && typeof inValue === 'string') {
+              const searchLower = searchTermId.toLowerCase();
+              for (const value in fieldIndex) {
+                if (value.toLowerCase() === searchLower) {
+                  const numbers = this._getAllLineNumbers(fieldIndex[value]);
+                  for (const lineNumber of numbers) {
+                    lineNumbersForField.add(lineNumber);
+                  }
+                }
+              }
+            } else {
+              const indexData = fieldIndex[searchTermId];
+              if (indexData) {
+                const numbers = this._getAllLineNumbers(indexData);
+                for (const lineNumber of numbers) {
+                  lineNumbersForField.add(lineNumber);
+                }
+              }
+            }
+          }
+
+          // CRITICAL FIX: If no matches found at all (all terms were unknown or not in index),
+          // lineNumbersForField remains empty which is correct (no results for $in)
+          // This is handled correctly by the caller - empty Set means no matches
+        }
+        // Handle $nin operator (not in) - returns complement of $in
+        else if (criteriaValue.$nin !== undefined) {
+          const ninValues = Array.isArray(criteriaValue.$nin) ? criteriaValue.$nin : [criteriaValue.$nin];
+
+          // Get all possible line numbers
+          const totalRecords = this.database?.offsets?.length || this.totalLines || 0;
+          const allLines = new Set(Array.from({
+            length: totalRecords
+          }, (_, i) => i));
+
+          // Get line numbers that match any of the $nin values
+          const matchingLines = new Set();
+
+          // PERFORMANCE: Cache term mapping field check once
+          const isTermMappingField = this.database?.termManager && this.database.termManager.termMappingFields && this.database.termManager.termMappingFields.includes(field);
+          for (const ninValue of ninValues) {
+            // SPACE OPTIMIZATION: Convert search term to term ID for lookup
+            let searchTermId;
+            if (isTermMappingField && typeof ninValue === 'number') {
+              // For term mapping fields (array:string), the search value is already a term ID
+              searchTermId = String(ninValue);
+            } else if (isTermMappingField && typeof ninValue === 'string') {
+              // For term mapping fields (array:string), convert string to term ID
+              const termId = this.database?.termManager?.getTermIdWithoutIncrement(String(ninValue));
+              if (termId === undefined) {
+                // Term not found - skip this value (can't exclude what doesn't exist)
+                if (this.opts?.debugMode) {
+                  console.log(`⚠️  Term "${ninValue}" not found in termManager for field "${field}" - skipping`);
+                }
+                continue;
+              }
+              searchTermId = String(termId);
+            } else {
+              // For non-term-mapping fields (including array:number), use values directly
+              searchTermId = String(ninValue);
+            }
+
+            // PERFORMANCE: Direct lookup instead of iteration
+            if (caseInsensitive && typeof ninValue === 'string') {
+              const searchLower = searchTermId.toLowerCase();
+              for (const value in fieldIndex) {
+                if (value.toLowerCase() === searchLower) {
+                  const numbers = this._getAllLineNumbers(fieldIndex[value]);
+                  for (const lineNumber of numbers) {
+                    matchingLines.add(lineNumber);
+                  }
+                }
+              }
+            } else {
+              const indexData = fieldIndex[searchTermId];
+              if (indexData) {
+                const numbers = this._getAllLineNumbers(indexData);
+                for (const lineNumber of numbers) {
+                  matchingLines.add(lineNumber);
+                }
+              }
+            }
+          }
+
+          // Return complement: all lines EXCEPT those matching $nin values
+          lineNumbersForField = new Set([...allLines].filter(x => !matchingLines.has(x)));
+        }
+        // Handle $contains operator for array queries
+        else if (criteriaValue.$contains !== undefined) {
+          const containsValue = criteriaValue.$contains;
+          // Handle case-insensitive for $contains
+          if (caseInsensitive && typeof containsValue === 'string') {
+            for (const value in fieldIndex) {
+              if (value.toLowerCase() === containsValue.toLowerCase()) {
+                const numbers = this._getAllLineNumbers(fieldIndex[value]);
+                for (const lineNumber of numbers) {
+                  lineNumbersForField.add(lineNumber);
+                }
+              }
+            }
+          } else {
+            if (fieldIndex[containsValue]) {
+              const numbers = this._getAllLineNumbers(fieldIndex[containsValue]);
+              for (const lineNumber of numbers) {
+                lineNumbersForField.add(lineNumber);
+              }
+            }
+          }
+        }
+        // Handle $all operator for array queries - FIXED FOR TERM MAPPING
+        else if (criteriaValue.$all !== undefined) {
+          const allValues = Array.isArray(criteriaValue.$all) ? criteriaValue.$all : [criteriaValue.$all];
+          const isTermMappingField = this.database?.termManager && this.database.termManager.termMappingFields && this.database.termManager.termMappingFields.includes(field);
+          const normalizeValue = value => {
+            if (isTermMappingField) {
+              if (typeof value === 'number') {
+                return String(value);
+              }
+              if (typeof value === 'string') {
+                const termId = this.database?.termManager?.getTermIdWithoutIncrement(value);
+                if (termId !== undefined) {
+                  return String(termId);
+                }
+                return null;
+              }
+              return null;
+            }
+            return String(value);
+          };
+          const normalizedValues = [];
+          for (const value of allValues) {
+            const normalized = normalizeValue(value);
+            if (normalized === null) {
+              // Term not found in term manager, no matches possible
+              return lineNumbersForField;
+            }
+            normalizedValues.push(normalized);
+          }
+
+          // Early exit optimization
+          if (normalizedValues.length === 0) {
+            // Empty $all matches everything
+            for (const value in fieldIndex) {
+              const numbers = this._getAllLineNumbers(fieldIndex[value]);
+              for (const lineNumber of numbers) {
+                lineNumbersForField.add(lineNumber);
+              }
+            }
+          } else {
+            // For term mapping, we need to find records that contain ALL specified terms
+            // This requires a different approach than simple field matching
+
+            // First, get all line numbers that contain each individual term
+            const termLineNumbers = new Map();
+            for (const term of normalizedValues) {
+              if (fieldIndex[term]) {
+                termLineNumbers.set(term, new Set(this._getAllLineNumbers(fieldIndex[term])));
+              } else {
+                // If any term doesn't exist, no records can match $all
+                termLineNumbers.set(term, new Set());
+              }
+            }
+
+            // Find intersection of all term line numbers
+            if (termLineNumbers.size > 0) {
+              const allTermSets = Array.from(termLineNumbers.values());
+              let intersection = allTermSets[0];
+              for (let i = 1; i < allTermSets.length; i++) {
+                intersection = new Set([...intersection].filter(x => allTermSets[i].has(x)));
+              }
+
+              // Add all line numbers from intersection
+              for (const lineNumber of intersection) {
+                lineNumbersForField.add(lineNumber);
+              }
+            }
+          }
+        }
+        // Handle other operators
+        else {
+          for (const value in fieldIndex) {
+            let includeValue = true;
+            if (isNumericField) {
+              const numericValue = parseFloat(value);
+              if (!isNaN(numericValue)) {
+                if (criteriaValue['>'] !== undefined && numericValue <= criteriaValue['>']) {
+                  includeValue = false;
+                }
+                if (criteriaValue['>='] !== undefined && numericValue < criteriaValue['>=']) {
+                  includeValue = false;
+                }
+                if (criteriaValue['<'] !== undefined && numericValue >= criteriaValue['<']) {
+                  includeValue = false;
+                }
+                if (criteriaValue['<='] !== undefined && numericValue > criteriaValue['<=']) {
+                  includeValue = false;
+                }
+                if (criteriaValue['!='] !== undefined) {
+                  const excludeValues = Array.isArray(criteriaValue['!=']) ? criteriaValue['!='] : [criteriaValue['!=']];
+                  if (excludeValues.includes(numericValue)) {
+                    includeValue = false;
+                  }
+                }
+              }
+            } else {
+              if (criteriaValue['contains'] !== undefined && typeof value === 'string') {
+                const term = String(criteriaValue['contains']);
+                if (caseInsensitive) {
+                  if (!value.toLowerCase().includes(term.toLowerCase())) {
+                    includeValue = false;
+                  }
+                } else {
+                  if (!value.includes(term)) {
+                    includeValue = false;
+                  }
+                }
+              }
+              if (criteriaValue['regex'] !== undefined) {
+                let regex;
+                if (typeof criteriaValue['regex'] === 'string') {
+                  regex = new RegExp(criteriaValue['regex'], caseInsensitive ? 'i' : '');
+                } else if (criteriaValue['regex'] instanceof RegExp) {
+                  if (caseInsensitive && !criteriaValue['regex'].ignoreCase) {
+                    const flags = criteriaValue['regex'].flags.includes('i') ? criteriaValue['regex'].flags : criteriaValue['regex'].flags + 'i';
+                    regex = new RegExp(criteriaValue['regex'].source, flags);
+                  } else {
+                    regex = criteriaValue['regex'];
+                  }
+                }
+                if (regex) {
+                  // For array fields, test regex against each element
+                  if (Array.isArray(value)) {
+                    if (!value.some(element => regex.test(String(element)))) {
+                      includeValue = false;
+                    }
+                  } else {
+                    // For non-array fields, test regex against the value directly
+                    if (!regex.test(String(value))) {
+                      includeValue = false;
+                    }
+                  }
+                }
+              }
+              if (criteriaValue['!='] !== undefined) {
+                const excludeValues = Array.isArray(criteriaValue['!=']) ? criteriaValue['!='] : [criteriaValue['!=']];
+                if (excludeValues.includes(value)) {
+                  includeValue = false;
+                }
+              }
+            }
+            if (includeValue) {
+              const numbers = this._getAllLineNumbers(fieldIndex[value]);
+              for (const lineNumber of numbers) {
+                lineNumbersForField.add(lineNumber);
+              }
+            }
+          }
+        }
+      } else {
+        // Simple equality comparison - handle array queries
+        const values = Array.isArray(criteriaValue) ? criteriaValue : [criteriaValue];
+        const fieldData = data[field];
+        for (const searchValue of values) {
+          // SPACE OPTIMIZATION: Convert search term to term ID for lookup
+          let searchTermId;
+
+          // PERFORMANCE: Cache term mapping field check once per field
+          const isTermMappingField = this.database?.termManager && this.database.termManager.termMappingFields && this.database.termManager.termMappingFields.includes(field);
+          if (isTermMappingField && typeof searchValue === 'number') {
+            // For term mapping fields (array:string), the search value is already a term ID
+            searchTermId = String(searchValue);
+          } else if (isTermMappingField && typeof searchValue === 'string') {
+            // For term mapping fields (array:string), convert string to term ID
+            const termId = this.database?.termManager?.getTermIdWithoutIncrement(String(searchValue));
+            if (termId === undefined) {
+              // Term not found - skip this value
+              if (this.opts?.debugMode) {
+                console.log(`⚠️  Term "${searchValue}" not found in termManager for field "${field}" - skipping`);
+              }
+              continue; // Skip this value, no matches possible
+            }
+            searchTermId = String(termId);
+          } else {
+            // For non-term-mapping fields (including array:number), use values directly
+            searchTermId = String(searchValue);
+          }
+          for (const key in fieldData) {
+            let match = false;
+            if (isNumericField) {
+              // Convert both parts to number
+              match = Number(key) === Number(searchValue);
+            } else {
+              // SPACE OPTIMIZATION: Compare term IDs instead of full terms
+              if (caseInsensitive) {
+                // For case-insensitive, we need to check if the search term ID matches any key
+                match = key === String(searchTermId);
+              } else {
+                match = key === String(searchTermId);
+              }
+            }
+            if (match) {
+              const numbers = this._getAllLineNumbers(fieldData[key]);
+              for (const lineNumber of numbers) {
+                lineNumbersForField.add(lineNumber);
+              }
+            }
+          }
+        }
+      }
+
+      // Consolidate results from each field
+      if (matchAny) {
+        matchingLines = new Set([...matchingLines, ...lineNumbersForField]);
+      } else {
+        if (matchingLines === null) {
+          matchingLines = lineNumbersForField;
+        } else {
+          matchingLines = new Set([...matchingLines].filter(n => lineNumbersForField.has(n)));
+        }
+        if (!matchingLines.size) {
+          return new Set();
+        }
+      }
+    }
+    return matchingLines || new Set();
+  }
+
+  /**
+   * Check if any records exist for given field and terms (index-only, ultra-fast)
+   * Stops at first match for maximum performance - no disk I/O required
+   * 
+   * @param {string} fieldName - Indexed field name (e.g., 'nameTerms', 'groupTerms')
+   * @param {string|Array<string>} terms - Single term or array of terms to check
+   * @param {Object} options - Options: { $all: true/false, caseInsensitive: true/false, excludes: Array<string> }
+   * @returns {boolean} - True if at least one match exists
+   * 
+   * @example
+   * // Check if any record has 'channel' in nameTerms
+   * indexManager.exists('nameTerms', 'channel')
+   * 
+   * @example
+   * // Check if any record has ALL terms ['a', 'e'] in nameTerms ($all)
+   * indexManager.exists('nameTerms', ['a', 'e'], { $all: true })
+   * 
+   * @example
+   * // Check if any record has ANY of the terms ['channel', 'tv'] in nameTerms
+   * indexManager.exists('nameTerms', ['channel', 'tv'], { $all: false })
+   * 
+   * @example
+   * // Check if any record has 'tv' but NOT 'globo' in nameTerms
+   * indexManager.exists('nameTerms', 'tv', { excludes: ['globo'] })
+   * 
+   * @example
+   * // Check if any record has ['tv', 'news'] but NOT 'sports' in nameTerms
+   * indexManager.exists('nameTerms', ['tv', 'news'], { $all: true, excludes: ['sports'] })
+   */
+  exists(fieldName, terms, options = {}) {
+    // Early exit: validate fieldName
+    if (!fieldName || typeof fieldName !== 'string') {
+      return false;
+    }
+
+    // Early exit: check if field is indexed
+    if (!this.isFieldIndexed(fieldName)) {
+      return false;
+    }
+    const fieldIndex = this.index.data[fieldName];
+    if (!fieldIndex || typeof fieldIndex !== 'object') {
+      return false;
+    }
+
+    // Normalize terms to array
+    const termsArray = Array.isArray(terms) ? terms : [terms];
+    if (termsArray.length === 0) {
+      return false;
+    }
+    const {
+      $all = false,
+      caseInsensitive = false,
+      excludes = []
+    } = options;
+    const hasExcludes = Array.isArray(excludes) && excludes.length > 0;
+    const isTermMappingField = this.database?.termManager && this.database.termManager.termMappingFields && this.database.termManager.termMappingFields.includes(fieldName);
+
+    // Helper: check if termData has any line numbers (ULTRA LIGHT - no expansion)
+    const hasData = termData => {
+      if (!termData) return false;
+      // Check Set size (O(1))
+      if (termData.set && termData.set.size > 0) {
+        return true;
+      }
+      // Check ranges length (O(1))
+      if (termData.ranges && termData.ranges.length > 0) {
+        return true;
+      }
+      return false;
+    };
+
+    // Helper: get term key with term mapping and case-insensitive support
+    const getTermKey = (term, useCaseInsensitive = false) => {
+      if (isTermMappingField && typeof term === 'string') {
+        let termId;
+        if (useCaseInsensitive) {
+          // For case-insensitive, search termManager for case-insensitive match
+          const searchLower = String(term).toLowerCase();
+          termId = null;
+          if (this.database?.termManager?.termToId) {
+            for (const [termStr, id] of this.database.termManager.termToId.entries()) {
+              if (termStr.toLowerCase() === searchLower) {
+                termId = id;
+                break;
+              }
+            }
+          }
+        } else {
+          termId = this.database?.termManager?.getTermIdWithoutIncrement(String(term));
+        }
+        if (termId === undefined || termId === null) {
+          return null;
+        }
+        return String(termId);
+      }
+
+      // For non-term-mapping fields
+      if (useCaseInsensitive && typeof term === 'string') {
+        const searchLower = String(term).toLowerCase();
+        for (const key in fieldIndex) {
+          if (key.toLowerCase() === searchLower) {
+            return key;
+          }
+        }
+        return null;
+      }
+      return String(term);
+    };
+
+    // Handle $all (all terms must exist and have intersection)
+    if ($all) {
+      // Collect term data for all terms first (with early exit)
+      const termDataArray = [];
+      for (const term of termsArray) {
+        // Get term key (with term mapping if applicable)
+        let termKey;
+        if (isTermMappingField && typeof term === 'string') {
+          let termId;
+          if (caseInsensitive) {
+            // For case-insensitive, search termManager for case-insensitive match
+            const searchLower = String(term).toLowerCase();
+            termId = null;
+            for (const [termStr, id] of this.database.termManager.termToId.entries()) {
+              if (termStr.toLowerCase() === searchLower) {
+                termId = id;
+                break;
+              }
+            }
+          } else {
+            termId = this.database?.termManager?.getTermIdWithoutIncrement(String(term));
+          }
+          if (termId === undefined || termId === null) {
+            return false; // Early exit: term doesn't exist in mapping
+          }
+          termKey = String(termId);
+        } else {
+          termKey = String(term);
+          // For non-term-mapping fields with case-insensitive, search index keys
+          if (caseInsensitive && typeof term === 'string') {
+            const searchLower = termKey.toLowerCase();
+            let foundKey = null;
+            for (const key in fieldIndex) {
+              if (key.toLowerCase() === searchLower) {
+                foundKey = key;
+                break;
+              }
+            }
+            if (foundKey === null) {
+              return false; // Early exit: term doesn't exist
+            }
+            termKey = foundKey;
+          }
+        }
+
+        // Check if term exists in index
+        const termData = fieldIndex[termKey];
+        if (!termData || !hasData(termData)) {
+          return false; // Early exit: term doesn't exist or has no data
+        }
+        termDataArray.push(termData);
+      }
+
+      // If we got here, all terms exist and have data
+      // Now check if there's intersection (only if more than one term)
+      if (termDataArray.length === 1) {
+        // Single term - check excludes if any
+        if (!hasExcludes) {
+          return true; // Single term, already verified it has data, no excludes
+        }
+        // Need to check excludes - expand line numbers
+        const lineNumbers = this._getAllLineNumbers(termDataArray[0]);
+        const candidateLines = new Set(lineNumbers);
+
+        // Remove lines that have exclude terms
+        for (const excludeTerm of excludes) {
+          const excludeKey = getTermKey(excludeTerm, caseInsensitive);
+          if (excludeKey === null) continue;
+          const excludeData = fieldIndex[excludeKey];
+          if (!excludeData) continue;
+          const excludeLines = this._getAllLineNumbers(excludeData);
+          for (const line of excludeLines) {
+            candidateLines.delete(line);
+          }
+
+          // Early exit if all candidates excluded
+          if (candidateLines.size === 0) {
+            return false;
+          }
+        }
+        return candidateLines.size > 0;
+      }
+
+      // For multiple terms, we need to check intersection
+      // But we want to do this as lightly as possible
+      // Get line numbers only for intersection check (unavoidable for $all)
+      const termLineNumberSets = [];
+      for (const termData of termDataArray) {
+        const lineNumbers = this._getAllLineNumbers(termData);
+        if (lineNumbers.length === 0) {
+          return false; // Early exit: no line numbers (shouldn't happen, but safety check)
+        }
+        termLineNumberSets.push(new Set(lineNumbers));
+      }
+
+      // Calculate intersection incrementally with early exit
+      let intersection = termLineNumberSets[0];
+      for (let i = 1; i < termLineNumberSets.length; i++) {
+        // Filter intersection to only include items in current set
+        intersection = new Set([...intersection].filter(x => termLineNumberSets[i].has(x)));
+        if (intersection.size === 0) {
+          return false; // Early exit: intersection is empty
+        }
+      }
+
+      // Apply excludes if any
+      if (hasExcludes) {
+        for (const excludeTerm of excludes) {
+          const excludeKey = getTermKey(excludeTerm, caseInsensitive);
+          if (excludeKey === null) continue;
+          const excludeData = fieldIndex[excludeKey];
+          if (!excludeData) continue;
+          const excludeLines = this._getAllLineNumbers(excludeData);
+          for (const line of excludeLines) {
+            intersection.delete(line);
+          }
+
+          // Early exit if all candidates excluded
+          if (intersection.size === 0) {
+            return false;
+          }
+        }
+      }
+      return intersection.size > 0;
+    }
+
+    // Handle $in behavior (any term exists) - default - ULTRA LIGHT
+    // If no excludes, use ultra-fast path (no expansion needed)
+    if (!hasExcludes) {
+      for (const term of termsArray) {
+        // Handle case-insensitive FIRST (before normal conversion)
+        if (caseInsensitive && typeof term === 'string') {
+          if (isTermMappingField && this.database?.termManager?.termToId) {
+            // For term mapping fields, we need to find the term in termManager first
+            // (case-insensitive), then convert to ID
+            const searchLower = String(term).toLowerCase();
+            let foundTermId = null;
+
+            // Search termManager for case-insensitive match
+            for (const [termStr, termId] of this.database.termManager.termToId.entries()) {
+              if (termStr.toLowerCase() === searchLower) {
+                foundTermId = termId;
+                break;
+              }
+            }
+            if (foundTermId !== null) {
+              const termData = fieldIndex[String(foundTermId)];
+              if (hasData(termData)) {
+                return true; // Early exit: found a match
+              }
+            }
+            // If not found, continue to next term
+            continue;
+          } else {
+            // For non-term-mapping fields, search index keys directly
+            const searchLower = String(term).toLowerCase();
+            for (const key in fieldIndex) {
+              if (key.toLowerCase() === searchLower) {
+                const termData = fieldIndex[key];
+                if (hasData(termData)) {
+                  return true; // Early exit: found a match
+                }
+              }
+            }
+            // If not found, continue to next term
+            continue;
+          }
+        }
+
+        // Normal (case-sensitive) lookup
+        const termKey = getTermKey(term, false);
+        if (termKey === null) {
+          continue; // Term not in mapping, try next
+        }
+
+        // Direct lookup (fastest path) - O(1) hash lookup
+        const termData = fieldIndex[termKey];
+        if (hasData(termData)) {
+          return true; // Early exit: found a match
+        }
+      }
+      return false;
+    }
+
+    // With excludes, we need to collect candidates and filter
+    const candidateLines = new Set();
+    for (const term of termsArray) {
+      // Handle case-insensitive FIRST (before normal conversion)
+      if (caseInsensitive && typeof term === 'string') {
+        if (isTermMappingField && this.database?.termManager?.termToId) {
+          // For term mapping fields, we need to find the term in termManager first
+          // (case-insensitive), then convert to ID
+          const searchLower = String(term).toLowerCase();
+          let foundTermId = null;
+
+          // Search termManager for case-insensitive match
+          for (const [termStr, termId] of this.database.termManager.termToId.entries()) {
+            if (termStr.toLowerCase() === searchLower) {
+              foundTermId = termId;
+              break;
+            }
+          }
+          if (foundTermId !== null) {
+            const termData = fieldIndex[String(foundTermId)];
+            if (hasData(termData)) {
+              // Add line numbers to candidates (need to expand for excludes check)
+              const lineNumbers = this._getAllLineNumbers(termData);
+              for (const line of lineNumbers) {
+                candidateLines.add(line);
+              }
+            }
+          }
+          continue;
+        } else {
+          // For non-term-mapping fields, search index keys directly
+          const searchLower = String(term).toLowerCase();
+          for (const key in fieldIndex) {
+            if (key.toLowerCase() === searchLower) {
+              const termData = fieldIndex[key];
+              if (hasData(termData)) {
+                // Add line numbers to candidates
+                const lineNumbers = this._getAllLineNumbers(termData);
+                for (const line of lineNumbers) {
+                  candidateLines.add(line);
+                }
+              }
+            }
+          }
+          continue;
+        }
+      }
+
+      // Normal (case-sensitive) lookup
+      const termKey = getTermKey(term, false);
+      if (termKey === null) {
+        continue; // Term not in mapping, try next
+      }
+
+      // Direct lookup
+      const termData = fieldIndex[termKey];
+      if (hasData(termData)) {
+        // Add line numbers to candidates (need to expand for excludes check)
+        const lineNumbers = this._getAllLineNumbers(termData);
+        for (const line of lineNumbers) {
+          candidateLines.add(line);
+        }
+      }
+    }
+
+    // If no candidates found, return false
+    if (candidateLines.size === 0) {
+      return false;
+    }
+
+    // Apply excludes
+    for (const excludeTerm of excludes) {
+      const excludeKey = getTermKey(excludeTerm, caseInsensitive);
+      if (excludeKey === null) continue;
+      const excludeData = fieldIndex[excludeKey];
+      if (!excludeData) continue;
+      const excludeLines = this._getAllLineNumbers(excludeData);
+      for (const line of excludeLines) {
+        candidateLines.delete(line);
+      }
+
+      // Early exit if all candidates excluded
+      if (candidateLines.size === 0) {
+        return false;
+      }
+    }
+    return candidateLines.size > 0;
+  }
+
+  // Ultra-fast load with minimal conversions
+  load(index) {
+    // CRITICAL FIX: Check if index is already loaded by looking for actual data, not just empty field structures
+    if (this.index && this.index.data) {
+      let hasActualData = false;
+      for (const field in this.index.data) {
+        const fieldData = this.index.data[field];
+        if (fieldData && Object.keys(fieldData).length > 0) {
+          // Check if any field has actual index entries with data
+          for (const key in fieldData) {
+            const entry = fieldData[key];
+            if (entry && (entry.set && entry.set.size > 0 || entry.ranges && entry.ranges.length > 0)) {
+              hasActualData = true;
+              break;
+            }
+          }
+          if (hasActualData) break;
+        }
+      }
+      if (hasActualData) {
+        if (this.opts.debugMode) {
+          console.log('🔍 IndexManager.load: Index already loaded with actual data, skipping');
+        }
+        return;
+      }
+    }
+
+    // CRITICAL FIX: Add comprehensive null/undefined validation
+    if (!index || typeof index !== 'object') {
+      if (this.opts.debugMode) {
+        console.log(`🔍 IndexManager.load: Invalid index data provided (${typeof index}), using defaults`);
+      }
+      return this._initializeDefaults();
+    }
+    if (!index.data || typeof index.data !== 'object') {
+      if (this.opts.debugMode) {
+        console.log(`🔍 IndexManager.load: Invalid index.data provided (${typeof index.data}), using defaults`);
+      }
+      return this._initializeDefaults();
+    }
+
+    // CRITICAL FIX: Only log if there are actual fields to load
+    if (this.opts.debugMode && Object.keys(index.data).length > 0) {
+      console.log(`🔍 IndexManager.load: Loading index with fields: ${Object.keys(index.data).join(', ')}`);
+    }
+
+    // Create a deep copy to avoid reference issues
+    const processedIndex = {
+      data: {}
+    };
+
+    // CRITICAL FIX: Add null/undefined checks for field iteration
+    const fields = Object.keys(index.data);
+    for (const field of fields) {
+      if (!field || typeof field !== 'string') {
+        continue; // Skip invalid field names
+      }
+      const fieldData = index.data[field];
+      if (!fieldData || typeof fieldData !== 'object') {
+        continue; // Skip invalid field data
+      }
+      processedIndex.data[field] = {};
+
+      // CRITICAL FIX: Check if this is a term mapping field for conversion
+      const isTermMappingField = this.database?.termManager && this.database.termManager.termMappingFields && this.database.termManager.termMappingFields.includes(field);
+      const terms = Object.keys(fieldData);
+      for (const term of terms) {
+        if (!term || typeof term !== 'string') {
+          continue; // Skip invalid term names
+        }
+        const termData = fieldData[term];
+
+        // CRITICAL FIX: Convert term strings to term IDs for term mapping fields
+        // If the key is a string term (not a numeric ID), convert it to term ID
+        let termKey = term;
+        if (isTermMappingField && typeof term === 'string' && !/^\d+$/.test(term)) {
+          // Key is a term string, convert to term ID
+          const termId = this.database?.termManager?.getTermIdWithoutIncrement(term);
+          if (termId !== undefined) {
+            termKey = String(termId);
+          } else {
+            // Term not found in termManager - skip this key (orphaned term from old index)
+            // This can happen if termMapping wasn't loaded yet or term was removed
+            if (this.opts?.debugMode) {
+              console.log(`⚠️  IndexManager.load: Term "${term}" not found in termManager for field "${field}" - skipping (orphaned from old index)`);
+            }
+            continue;
+          }
+        }
+
+        // Convert various formats to new hybrid format
+        if (Array.isArray(termData)) {
+          // Check if it's the new compact format [setArray, rangesArray]
+          if (termData.length === 2 && Array.isArray(termData[0]) && Array.isArray(termData[1])) {
+            // New compact format: [setArray, rangesArray]
+            // Convert ultra-compact ranges [start, count] back to {start, count}
+            const ranges = termData[1].map(range => {
+              if (Array.isArray(range) && range.length === 2) {
+                // Ultra-compact format: [start, count]
+                return {
+                  start: range[0],
+                  count: range[1]
+                };
+              } else {
+                // Legacy format: {start, count}
+                return range;
+              }
+            });
+            processedIndex.data[field][termKey] = {
+              set: new Set(termData[0]),
+              ranges: ranges
+            };
+          } else {
+            // Legacy array format (just set data)
+            processedIndex.data[field][termKey] = {
+              set: new Set(termData),
+              ranges: []
+            };
+          }
+        } else if (termData && typeof termData === 'object') {
+          if (termData.set || termData.ranges) {
+            // Legacy hybrid format - convert set array back to Set
+            const hybridData = termData;
+            let setObject;
+            if (Array.isArray(hybridData.set)) {
+              // Convert array back to Set
+              setObject = new Set(hybridData.set);
+            } else {
+              // Fallback to empty Set
+              setObject = new Set();
+            }
+            processedIndex.data[field][termKey] = {
+              set: setObject,
+              ranges: hybridData.ranges || []
+            };
+          } else {
+            // Convert from Set format to hybrid
+            const numbers = Array.from(termData || []);
+            processedIndex.data[field][termKey] = {
+              set: new Set(numbers),
+              ranges: []
+            };
+          }
+        }
+      }
+    }
+
+    // Preserve initialized fields if no data was loaded
+    if (!processedIndex.data || Object.keys(processedIndex.data).length === 0) {
+      // CRITICAL FIX: Only log if debug mode is enabled and there are actual fields
+      if (this.opts.debugMode && this.index.data && Object.keys(this.index.data).length > 0) {
+        console.log(`🔍 IndexManager.load: No data loaded, preserving initialized fields: ${Object.keys(this.index.data).join(', ')}`);
+      }
+      // Keep the current index with initialized fields
+      return;
+    }
+    this.index = processedIndex;
+  }
+
+  /**
+   * CRITICAL FIX: Initialize default index structure when invalid data is provided
+   * This prevents TypeError when Object.keys() is called on null/undefined
+   */
+  _initializeDefaults() {
+    if (this.opts.debugMode) {
+      console.log(`🔍 IndexManager._initializeDefaults: Initializing default index structure`);
+    }
+
+    // Initialize empty index structure
+    this.index = {
+      data: {}
+    };
+
+    // Initialize fields from options if available
+    if (this.opts.indexes && typeof this.opts.indexes === 'object') {
+      const fields = Object.keys(this.opts.indexes);
+      for (const field of fields) {
+        if (field && typeof field === 'string') {
+          this.index.data[field] = {};
+        }
+      }
+    }
+    if (this.opts.debugMode) {
+      console.log(`🔍 IndexManager._initializeDefaults: Initialized with fields: ${Object.keys(this.index.data).join(', ')}`);
+    }
+  }
+  readColumnIndex(column) {
+    return new Set(this.index.data && this.index.data[column] ? Object.keys(this.index.data[column]) : []);
+  }
+
+  /**
+   * Convert index to JSON-serializable format for debugging and export
+   * This resolves the issue where Sets appear as empty objects in JSON.stringify
+   */
+  toJSON() {
+    const serializable = {
+      data: {}
+    };
+
+    // Check if this is a term mapping field for conversion
+    const isTermMappingField = field => {
+      return this.database?.termManager && this.database.termManager.termMappingFields && this.database.termManager.termMappingFields.includes(field);
+    };
+    for (const field in this.index.data) {
+      serializable.data[field] = {};
+      const isTermField = isTermMappingField(field);
+      for (const term in this.index.data[field]) {
+        const hybridData = this.index.data[field][term];
+
+        // CRITICAL FIX: Convert term strings to term IDs for term mapping fields
+        // If the key is a string term (not a numeric ID), convert it to term ID
+        let termKey = term;
+        if (isTermField && typeof term === 'string' && !/^\d+$/.test(term)) {
+          // Key is a term string, convert to term ID
+          const termId = this.database?.termManager?.getTermIdWithoutIncrement(term);
+          if (termId !== undefined) {
+            termKey = String(termId);
+          } else {
+            // Term not found in termManager, keep original key
+            // This prevents data loss when term mapping is incomplete
+            termKey = term;
+            if (this.opts?.debugMode) {
+              console.log(`⚠️  IndexManager.toJSON: Term "${term}" not found in termManager for field "${field}" - using original key`);
+            }
+          }
+        }
+
+        // OPTIMIZATION: Create ranges before serialization if beneficial
+        if (hybridData.set && hybridData.set.size >= this.rangeThreshold) {
+          this._optimizeToRanges(hybridData);
+        }
+
+        // Convert hybrid structure to serializable format
+        let setArray = [];
+        if (hybridData.set) {
+          if (typeof hybridData.set.size !== 'undefined') {
+            // Regular Set
+            setArray = Array.from(hybridData.set);
+          }
+        }
+
+        // Use ultra-compact format: [setArray, rangesArray] to save space
+        const ranges = hybridData.ranges || [];
+        if (ranges.length > 0) {
+          // Convert ranges to ultra-compact format: [start, count] instead of {start, count}
+          const compactRanges = ranges.map(range => [range.start, range.count]);
+          serializable.data[field][termKey] = [setArray, compactRanges];
+        } else {
+          // CRITICAL FIX: Always use the [setArray, []] format for consistency
+          // This ensures the load() method can properly deserialize the data
+          serializable.data[field][termKey] = [setArray, []];
+        }
+      }
+    }
+    return serializable;
+  }
+
+  /**
+   * Get a JSON string representation of the index
+   * This properly handles Sets unlike the default JSON.stringify
+   */
+  toString() {
+    return JSON.stringify(this.toJSON(), null, 2);
+  }
+
+  // Simplified term mapping methods - just basic functionality
+
+  /**
+   * Rebuild index (stub for compatibility)
+   */
+  async rebuild() {
+    // Stub implementation for compatibility
+    return Promise.resolve();
+  }
+}
+
+/**
+ * SchemaManager - Manages field schemas for optimized array-based serialization
+ * This replaces the need for repeating field names in JSON objects
+ */
+class SchemaManager {
+  constructor(opts = {}) {
+    this.opts = Object.assign({
+      enableArraySerialization: true,
+      strictSchema: true,
+      debugMode: false
+    }, opts);
+
+    // Schema definition: array of field names in order
+    this.schema = [];
+    this.fieldToIndex = new Map(); // field name -> index
+    this.indexToField = new Map(); // index -> field name
+    this.schemaVersion = 1;
+    this.isInitialized = false;
+  }
+
+  /**
+   * Initialize schema from options or auto-detect from data
+   */
+  initializeSchema(schemaOrData, autoDetect = false) {
+    if (this.isInitialized && this.opts.strictSchema) {
+      if (this.opts.debugMode) {
+        console.log('SchemaManager: Schema already initialized, skipping');
+      }
+      return;
+    }
+    if (Array.isArray(schemaOrData)) {
+      // Explicit schema provided
+      this.setSchema(schemaOrData);
+    } else if (autoDetect && typeof schemaOrData === 'object') {
+      // Auto-detect schema from data
+      this.autoDetectSchema(schemaOrData);
+    } else if (schemaOrData && typeof schemaOrData === 'object') {
+      // Initialize from database options
+      this.initializeFromOptions(schemaOrData);
+    }
+    this.isInitialized = true;
+    if (this.opts.debugMode) {
+      console.log('SchemaManager: Schema initialized:', this.schema);
+    }
+  }
+
+  /**
+   * Set explicit schema
+   */
+  setSchema(fieldNames) {
+    this.schema = [...fieldNames]; // Create copy
+    this.fieldToIndex.clear();
+    this.indexToField.clear();
+    this.schema.forEach((field, index) => {
+      this.fieldToIndex.set(field, index);
+      this.indexToField.set(index, field);
+    });
+    if (this.opts.debugMode) {
+      console.log('SchemaManager: Schema set:', this.schema);
+    }
+  }
+
+  /**
+   * Auto-detect schema from sample data
+   */
+  autoDetectSchema(sampleData) {
+    if (Array.isArray(sampleData)) {
+      // Use first record as template
+      if (sampleData.length > 0) {
+        this.autoDetectSchema(sampleData[0]);
+      }
+      return;
+    }
+    if (typeof sampleData === 'object' && sampleData !== null) {
+      const fields = Object.keys(sampleData).sort(); // Sort for consistency
+
+      // CRITICAL FIX: Always include 'id' field in schema for proper array format
+      if (!fields.includes('id')) {
+        fields.push('id');
+      }
+      this.setSchema(fields);
+    }
+  }
+
+  /**
+   * Initialize schema from database options
+   * Note: schema option is no longer supported, use fields instead
+   */
+  initializeFromOptions(opts) {
+    // Schema option is no longer supported - fields should be used instead
+    // This method is kept for compatibility but does nothing
+    // Schema initialization is handled by Database.initializeSchema() using fields
+  }
+
+  /**
+   * Add new field to schema (for schema evolution)
+   */
+  addField(fieldName) {
+    if (this.fieldToIndex.has(fieldName)) {
+      return this.fieldToIndex.get(fieldName);
+    }
+    const newIndex = this.schema.length;
+    this.schema.push(fieldName);
+    this.fieldToIndex.set(fieldName, newIndex);
+    this.indexToField.set(newIndex, fieldName);
+    if (this.opts.debugMode) {
+      console.log('SchemaManager: Added field:', fieldName, 'at index:', newIndex);
+    }
+    return newIndex;
+  }
+
+  /**
+   * Convert object to array using schema with strict field enforcement
+   */
+  objectToArray(obj) {
+    if (!this.isInitialized || !this.opts.enableArraySerialization) {
+      return obj; // Fallback to object format
+    }
+    if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) {
+      return obj; // Don't convert non-objects or arrays
+    }
+    const result = new Array(this.schema.length);
+
+    // Fill array with values in schema order
+    // Missing fields become undefined, extra fields are ignored
+    for (let i = 0; i < this.schema.length; i++) {
+      const fieldName = this.schema[i];
+      result[i] = obj[fieldName] !== undefined ? obj[fieldName] : undefined;
+    }
+
+    // CRITICAL FIX: Always append 'id' field if it exists and is not in schema
+    // The 'id' field must be preserved even if not in the schema
+    if (obj.id !== undefined && obj.id !== null && this.schema.indexOf('id') === -1) {
+      result.push(obj.id);
+    }
+    return result;
+  }
+
+  /**
+   * Convert array back to object using schema
+   */
+  arrayToObject(arr) {
+    if (!this.isInitialized || !this.opts.enableArraySerialization) {
+      return arr; // Fallback to array format
+    }
+    if (!Array.isArray(arr)) {
+      return arr; // Don't convert non-arrays
+    }
+    const obj = {};
+    const idIndex = this.schema.indexOf('id');
+
+    // CRITICAL FIX: Handle schema migration where 'id' was first field in old schema
+    // but is not in current schema. Check if first element looks like an ID.
+    // Only do this if:
+    // 1. 'id' is not in current schema
+    // 2. Array has significantly more elements than current schema (2+ extra elements)
+    //    This suggests the old schema had more fields, and 'id' was likely the first
+    // 3. First element is a very short string (max 20 chars) that looks like a generated ID
+    //    (typically alphanumeric, often starting with letters like 'mit...' or similar patterns)
+    // 4. First field in current schema is not 'id' (to avoid false positives)
+    // 5. First element is not an array (to avoid false positives with array fields)
+    let arrayOffset = 0;
+    if (idIndex === -1 && arr.length >= this.schema.length + 2 && this.schema.length > 0) {
+      // Only apply if array has at least 2 extra elements (suggests old schema had more fields)
+      const firstElement = arr[0];
+      const firstFieldName = this.schema[0];
+
+      // Only apply shift if:
+      // - First field is not 'id'
+      // - First element is a very short string (max 20 chars) that looks like a generated ID
+      // - First element is not an array (to avoid false positives)
+      // - Array has at least 2 extra elements (strong indicator of schema migration)
+      if (firstFieldName !== 'id' && typeof firstElement === 'string' && !Array.isArray(firstElement) && firstElement.length > 0 && firstElement.length <= 20 &&
+      // Very conservative: max 20 chars (typical ID length)
+      /^[a-zA-Z0-9_-]+$/.test(firstElement)) {
+        // First element is likely the ID from old schema
+        obj.id = firstElement;
+        arrayOffset = 1;
+      }
+    }
+
+    // Map array values to object properties
+    // Only include fields that are in the schema
+    for (let i = 0; i < Math.min(arr.length - arrayOffset, this.schema.length); i++) {
+      const fieldName = this.schema[i];
+      const arrayIndex = i + arrayOffset;
+      // Only include non-undefined values to avoid cluttering the object
+      if (arr[arrayIndex] !== undefined) {
+        obj[fieldName] = arr[arrayIndex];
+      }
+    }
+
+    // CRITICAL FIX: Always preserve 'id' field if it exists in the original object
+    // The 'id' field may not be in the schema but must be preserved
+    if (idIndex !== -1 && arr[idIndex] !== undefined) {
+      // 'id' is in schema and has a value
+      obj.id = arr[idIndex];
+    } else if (!obj.id && arr.length > this.schema.length + arrayOffset) {
+      // 'id' is not in schema but array has extra element(s) - check if last element could be ID
+      // This handles cases where ID was added after schema initialization
+      for (let i = this.schema.length + arrayOffset; i < arr.length; i++) {
+        // Try to infer if this is an ID (string that looks like an ID)
+        const potentialId = arr[i];
+        if (potentialId !== undefined && potentialId !== null && typeof potentialId === 'string' && potentialId.length > 0 && potentialId.length < 100) {
+          obj.id = potentialId;
+          break; // Use first potential ID found
+        }
+      }
+    }
+    return obj;
+  }
+
+  /**
+   * Get field index by name
+   */
+  getFieldIndex(fieldName) {
+    return this.fieldToIndex.get(fieldName);
+  }
+
+  /**
+   * Get field name by index
+   */
+  getFieldName(index) {
+    return this.indexToField.get(index);
+  }
+
+  /**
+   * Check if field exists in schema
+   */
+  hasField(fieldName) {
+    return this.fieldToIndex.has(fieldName);
+  }
+
+  /**
+   * Get schema as array of field names
+   */
+  getSchema() {
+    return [...this.schema]; // Return copy
+  }
+
+  /**
+   * Get schema size
+   */
+  getSchemaSize() {
+    return this.schema.length;
+  }
+
+  /**
+   * Validate that object conforms to schema
+   */
+  validateObject(obj) {
+    if (!this.isInitialized || !this.opts.strictSchema) {
+      return true;
+    }
+    if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) {
+      return false;
+    }
+
+    // Check if object has all required fields
+    for (const field of this.schema) {
+      if (!(field in obj)) {
+        if (this.opts.debugMode) {
+          console.warn('SchemaManager: Missing required field:', field);
+        }
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Get schema metadata for serialization
+   */
+  getSchemaMetadata() {
+    return {
+      version: this.schemaVersion,
+      fields: [...this.schema],
+      fieldCount: this.schema.length,
+      isInitialized: this.isInitialized
+    };
+  }
+
+  /**
+   * Reset schema
+   */
+  reset() {
+    this.schema = [];
+    this.fieldToIndex.clear();
+    this.indexToField.clear();
+    this.isInitialized = false;
+    this.schemaVersion++;
+  }
+
+  /**
+   * Get performance statistics
+   */
+  getStats() {
+    return {
+      schemaSize: this.schema.length,
+      isInitialized: this.isInitialized,
+      version: this.schemaVersion,
+      enableArraySerialization: this.opts.enableArraySerialization
+    };
+  }
+}
+
+// NOTE: Buffer pool was removed due to complexity with low performance gain
+// It was causing serialization issues and data corruption in batch operations
+// If reintroducing buffer pooling in the future, ensure proper buffer management
+// and avoid reusing buffers that may contain stale data
+
+class Serializer {
+  constructor(opts = {}) {
+    this.opts = Object.assign({
+      enableAdvancedSerialization: true,
+      enableArraySerialization: true
+      // NOTE: bufferPoolSize, adaptivePooling, memoryPressureThreshold removed
+      // Buffer pool was causing more problems than benefits
+    }, opts);
+
+    // Initialize schema manager for array-based serialization
+    this.schemaManager = new SchemaManager({
+      enableArraySerialization: this.opts.enableArraySerialization,
+      strictSchema: true,
+      debugMode: this.opts.debugMode || false
+    });
+
+    // Advanced serialization settings
+    this.serializationStats = {
+      totalSerializations: 0,
+      totalDeserializations: 0,
+      jsonSerializations: 0,
+      arraySerializations: 0,
+      objectSerializations: 0
+    };
+  }
+
+  /**
+   * Initialize schema for array-based serialization
+   */
+  initializeSchema(schemaOrData, autoDetect = false) {
+    this.schemaManager.initializeSchema(schemaOrData, autoDetect);
+  }
+
+  /**
+   * Get current schema
+   */
+  getSchema() {
+    return this.schemaManager.getSchema();
+  }
+
+  /**
+   * Convert object to array format for optimized serialization
+   */
+  convertToArrayFormat(obj) {
+    if (!this.opts.enableArraySerialization) {
+      return obj;
+    }
+    return this.schemaManager.objectToArray(obj);
+  }
+
+  /**
+   * Convert array format back to object
+   */
+  convertFromArrayFormat(arr) {
+    if (!this.opts.enableArraySerialization) {
+      return arr;
+    }
+    const obj = this.schemaManager.arrayToObject(arr);
+
+    // CRITICAL FIX: Always preserve 'id' field if it exists in the original array
+    // The 'id' field may not be in the schema but must be preserved
+    // Check if array has more elements than schema fields - the extra element(s) might be the ID
+    if (!obj.id && Array.isArray(arr) && this.schemaManager.isInitialized) {
+      const schemaLength = this.schemaManager.schema ? this.schemaManager.schema.length : 0;
+      if (arr.length > schemaLength) {
+        // Check if any extra element looks like an ID (string)
+        for (let i = schemaLength; i < arr.length; i++) {
+          const potentialId = arr[i];
+          if (potentialId !== undefined && potentialId !== null && typeof potentialId === 'string' && potentialId.length > 0) {
+            obj.id = potentialId;
+            break;
+          }
+        }
+      }
+    }
+    return obj;
+  }
+
+  /**
+   * Advanced serialization with optimized JSON and buffer pooling
+   */
+  serialize(data, opts = {}) {
+    this.serializationStats.totalSerializations++;
+    const addLinebreak = opts.linebreak !== false;
+
+    // Convert to array format if enabled
+    const serializationData = this.convertToArrayFormat(data);
+
+    // Track conversion statistics
+    if (Array.isArray(serializationData) && typeof data === 'object' && data !== null) {
+      this.serializationStats.arraySerializations++;
+    } else {
+      this.serializationStats.objectSerializations++;
+    }
+
+    // Use advanced JSON serialization
+    if (this.opts.enableAdvancedSerialization) {
+      this.serializationStats.jsonSerializations++;
+      return this.serializeAdvanced(serializationData, addLinebreak);
+    }
+
+    // Fallback to standard serialization
+    this.serializationStats.jsonSerializations++;
+    return this.serializeStandard(serializationData, addLinebreak);
+  }
+
+  /**
+   * Advanced serialization with optimized JSON.stringify and buffer pooling
+   */
+  serializeAdvanced(data, addLinebreak) {
+    // Validate encoding before serialization
+    this.validateEncodingBeforeSerialization(data);
+
+    // Use optimized JSON.stringify without buffer pooling
+    // NOTE: Buffer pool removed - using direct Buffer creation for simplicity and reliability
+    const json = this.optimizedStringify(data);
+
+    // CRITICAL FIX: Normalize encoding before creating buffer
+    const normalizedJson = this.normalizeEncoding(json);
+    const jsonBuffer = Buffer.from(normalizedJson, 'utf8');
+    const totalLength = jsonBuffer.length + (addLinebreak ? 1 : 0);
+    const result = Buffer.allocUnsafe(totalLength);
+    jsonBuffer.copy(result, 0, 0, jsonBuffer.length);
+    if (addLinebreak) {
+      result[jsonBuffer.length] = 0x0A;
+    }
+    return result;
+  }
+
+  /**
+   * Proper encoding normalization with UTF-8 validation
+   * Fixed to prevent double-encoding and data corruption
+   */
+  normalizeEncoding(str) {
+    if (typeof str !== 'string') return str;
+
+    // Skip if already valid UTF-8 (99% of cases)
+    if (this.isValidUTF8(str)) return str;
+
+    // Try to detect and convert encoding safely
+    return this.safeConvertToUTF8(str);
+  }
+
+  /**
+   * Check if string is valid UTF-8
+   */
+  isValidUTF8(str) {
+    try {
+      // Test if string can be encoded and decoded as UTF-8 without loss
+      const encoded = Buffer.from(str, 'utf8');
+      const decoded = encoded.toString('utf8');
+      return decoded === str;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  /**
+   * Safe conversion to UTF-8 with proper encoding detection
+   */
+  safeConvertToUTF8(str) {
+    // Try common encodings in order of likelihood
+    const encodings = ['utf8', 'latin1', 'utf16le', 'ascii'];
+    for (const encoding of encodings) {
+      try {
+        const converted = Buffer.from(str, encoding).toString('utf8');
+
+        // Validate the conversion didn't lose information
+        if (this.isValidUTF8(converted)) {
+          return converted;
+        }
+      } catch (error) {
+        // Try next encoding
+        continue;
+      }
+    }
+
+    // Fallback: return original string (preserve data)
+    console.warn('JexiDB: Could not normalize encoding, preserving original string');
+    return str;
+  }
+
+  /**
+   * Enhanced deep encoding normalization with UTF-8 validation
+   * Fixed to prevent double-encoding and data corruption
+   */
+  deepNormalizeEncoding(obj) {
+    if (obj === null || obj === undefined) return obj;
+    if (typeof obj === 'string') {
+      return this.normalizeEncoding(obj);
+    }
+    if (Array.isArray(obj)) {
+      // Check if normalization is needed (performance optimization)
+      const needsNormalization = obj.some(item => typeof item === 'string' && !this.isValidUTF8(item));
+      if (!needsNormalization) return obj;
+      return obj.map(item => this.deepNormalizeEncoding(item));
+    }
+    if (typeof obj === 'object') {
+      // Check if normalization is needed (performance optimization)
+      const needsNormalization = Object.values(obj).some(value => typeof value === 'string' && !this.isValidUTF8(value));
+      if (!needsNormalization) return obj;
+      const normalized = {};
+      for (const [key, value] of Object.entries(obj)) {
+        normalized[key] = this.deepNormalizeEncoding(value);
+      }
+      return normalized;
+    }
+    return obj;
+  }
+
+  /**
+   * Validate encoding before serialization
+   */
+  validateEncodingBeforeSerialization(data) {
+    const issues = [];
+    const checkString = (str, path = '') => {
+      if (typeof str === 'string' && !this.isValidUTF8(str)) {
+        issues.push(`Invalid encoding at ${path}: "${str.substring(0, 50)}..."`);
+      }
+    };
+    const traverse = (obj, path = '') => {
+      if (typeof obj === 'string') {
+        checkString(obj, path);
+      } else if (Array.isArray(obj)) {
+        obj.forEach((item, index) => {
+          traverse(item, `${path}[${index}]`);
+        });
+      } else if (obj && typeof obj === 'object') {
+        Object.entries(obj).forEach(([key, value]) => {
+          traverse(value, path ? `${path}.${key}` : key);
+        });
+      }
+    };
+    traverse(data);
+    if (issues.length > 0) {
+      console.warn('JexiDB: Encoding issues detected:', issues);
+    }
+    return issues.length === 0;
+  }
+
+  /**
+   * Optimized JSON.stringify with fast paths for common data structures
+   * Now includes deep encoding normalization for all string fields
+   */
+  optimizedStringify(obj) {
+    // CRITICAL: Normalize encoding for all string fields before stringify
+    const normalizedObj = this.deepNormalizeEncoding(obj);
+    return this._stringifyNormalizedValue(normalizedObj);
+  }
+  _stringifyNormalizedValue(value) {
+    // Fast path for null and undefined
+    if (value === null || value === undefined) {
+      return 'null';
+    }
+    const type = typeof value;
+
+    // Fast path for primitives
+    if (type === 'boolean') {
+      return value ? 'true' : 'false';
+    }
+    if (type === 'number') {
+      return Number.isFinite(value) ? value.toString() : 'null';
+    }
+    if (type === 'string') {
+      // Fast path for simple strings (no escaping needed)
+      if (!/[\\"\u0000-\u001f]/.test(value)) {
+        return '"' + value + '"';
+      }
+      // Fall back to JSON.stringify for complex strings
+      return JSON.stringify(value);
+    }
+    if (Array.isArray(value)) {
+      return this._stringifyNormalizedArray(value);
+    }
+    if (type === 'object') {
+      const keys = Object.keys(value);
+      if (keys.length === 0) return '{}';
+      // Use native stringify for object to leverage stable handling of undefined, Dates, etc.
+      return JSON.stringify(value);
+    }
+
+    // Fallback to JSON.stringify for unknown types (BigInt, symbols, etc.)
+    return JSON.stringify(value);
+  }
+  _stringifyNormalizedArray(arr) {
+    const length = arr.length;
+    if (length === 0) return '[]';
+    let result = '[';
+    for (let i = 0; i < length; i++) {
+      if (i > 0) result += ',';
+      const element = arr[i];
+
+      // JSON spec: undefined, functions, and symbols are serialized as null within arrays
+      if (element === undefined || typeof element === 'function' || typeof element === 'symbol') {
+        result += 'null';
+        continue;
+      }
+      result += this._stringifyNormalizedValue(element);
+    }
+    result += ']';
+    return result;
+  }
+
+  /**
+   * Standard serialization (fallback)
+   */
+  serializeStandard(data, addLinebreak) {
+    // Validate encoding before serialization
+    this.validateEncodingBeforeSerialization(data);
+
+    // NOTE: Buffer pool removed - using direct Buffer creation for simplicity and reliability
+    // CRITICAL: Normalize encoding for all string fields before stringify
+    const normalizedData = this.deepNormalizeEncoding(data);
+    const json = JSON.stringify(normalizedData);
+
+    // CRITICAL FIX: Normalize encoding before creating buffer
+    const normalizedJson = this.normalizeEncoding(json);
+    const jsonBuffer = Buffer.from(normalizedJson, 'utf8');
+    const totalLength = jsonBuffer.length + (addLinebreak ? 1 : 0);
+    const result = Buffer.allocUnsafe(totalLength);
+    jsonBuffer.copy(result, 0, 0, jsonBuffer.length);
+    if (addLinebreak) {
+      result[jsonBuffer.length] = 0x0A;
+    }
+    return result;
+  }
+
+  /**
+   * Advanced deserialization with fast paths
+   */
+  deserialize(data) {
+    this.serializationStats.totalDeserializations++;
+    if (data.length === 0) return null;
+    try {
+      // Handle both Buffer and string inputs
+      let str;
+      if (Buffer.isBuffer(data)) {
+        // Fast path: avoid toString() for empty data
+        if (data.length === 1 && data[0] === 0x0A) return null; // Just newline
+        str = data.toString('utf8').trim();
+      } else if (typeof data === 'string') {
+        str = data.trim();
+      } else {
+        throw new Error('Invalid data type for deserialization');
+      }
+      const strLength = str.length;
+
+      // Fast path for empty strings
+      if (strLength === 0) return null;
+
+      // CRITICAL FIX: Detect and handle multiple JSON objects in the same line
+      // This can happen if data was corrupted during concurrent writes or offset calculation errors
+      const firstBrace = str.indexOf('{');
+      const firstBracket = str.indexOf('[');
+
+      // Helper function to extract first complete JSON object/array from a string
+      // CRITICAL FIX: Must handle strings and escaped characters correctly
+      // to avoid counting braces/brackets that are inside string values
+      const extractFirstJson = (jsonStr, startChar) => {
+        if (startChar === '{') {
+          let braceCount = 0;
+          let endPos = -1;
+          let inString = false;
+          let escapeNext = false;
+          for (let i = 0; i < jsonStr.length; i++) {
+            const char = jsonStr[i];
+            if (escapeNext) {
+              escapeNext = false;
+              continue;
+            }
+            if (char === '\\') {
+              escapeNext = true;
+              continue;
+            }
+            if (char === '"' && !escapeNext) {
+              inString = !inString;
+              continue;
+            }
+            if (!inString) {
+              if (char === '{') braceCount++;
+              if (char === '}') {
+                braceCount--;
+                if (braceCount === 0) {
+                  endPos = i + 1;
+                  break;
+                }
+              }
+            }
+          }
+          return endPos > 0 ? jsonStr.substring(0, endPos) : null;
+        } else if (startChar === '[') {
+          let bracketCount = 0;
+          let endPos = -1;
+          let inString = false;
+          let escapeNext = false;
+          for (let i = 0; i < jsonStr.length; i++) {
+            const char = jsonStr[i];
+            if (escapeNext) {
+              escapeNext = false;
+              continue;
+            }
+            if (char === '\\') {
+              escapeNext = true;
+              continue;
+            }
+            if (char === '"' && !escapeNext) {
+              inString = !inString;
+              continue;
+            }
+            if (!inString) {
+              if (char === '[') bracketCount++;
+              if (char === ']') {
+                bracketCount--;
+                if (bracketCount === 0) {
+                  endPos = i + 1;
+                  break;
+                }
+              }
+            }
+          }
+          return endPos > 0 ? jsonStr.substring(0, endPos) : null;
+        }
+        return null;
+      };
+
+      // Check if JSON starts at the beginning of the string
+      const jsonStartsAtZero = firstBrace === 0 || firstBracket === 0;
+      let hasValidJson = false;
+      if (jsonStartsAtZero) {
+        // JSON starts at beginning - check for multiple JSON objects/arrays
+        if (firstBrace === 0) {
+          const secondBrace = str.indexOf('{', 1);
+          if (secondBrace !== -1) {
+            // Multiple objects detected - extract first
+            const extracted = extractFirstJson(str, '{');
+            if (extracted) {
+              str = extracted;
+              hasValidJson = true;
+              if (this.opts && this.opts.debugMode) {
+                console.warn(`⚠️ Deserialize: Multiple JSON objects detected, using first object only`);
+              }
+            }
+          } else {
+            hasValidJson = true; // Single valid object starting at 0
+          }
+        } else if (firstBracket === 0) {
+          const secondBracket = str.indexOf('[', 1);
+          if (secondBracket !== -1) {
+            // Multiple arrays detected - extract first
+            const extracted = extractFirstJson(str, '[');
+            if (extracted) {
+              str = extracted;
+              hasValidJson = true;
+              if (this.opts && this.opts.debugMode) {
+                console.warn(`⚠️ Deserialize: Multiple JSON arrays detected, using first array only`);
+              }
+            }
+          } else {
+            hasValidJson = true; // Single valid array starting at 0
+          }
+        }
+      } else {
+        // JSON doesn't start at beginning - try to find and extract first valid JSON
+        const jsonStart = firstBrace !== -1 ? firstBracket !== -1 ? Math.min(firstBrace, firstBracket) : firstBrace : firstBracket;
+        if (jsonStart !== -1 && jsonStart > 0) {
+          // Found JSON but not at start - extract from that position
+          const jsonStr = str.substring(jsonStart);
+          const startChar = jsonStr[0];
+          const extracted = extractFirstJson(jsonStr, startChar);
+          if (extracted) {
+            str = extracted;
+            hasValidJson = true;
+            if (this.opts && this.opts.debugMode) {
+              console.warn(`⚠️ Deserialize: Found JSON after ${jsonStart} chars of invalid text, extracted first ${startChar === '{' ? 'object' : 'array'}`);
+            }
+          }
+        }
+      }
+
+      // CRITICAL FIX: If no valid JSON structure found, throw error before attempting parse
+      // This allows walk() and other callers to catch and skip invalid lines
+      if (!hasValidJson && firstBrace === -1 && firstBracket === -1) {
+        const errorStr = Buffer.isBuffer(data) ? data.toString('utf8').trim() : data.trim();
+        const error = new Error(`Failed to deserialize JSON data: No valid JSON structure found in "${errorStr.substring(0, 100)}..."`);
+        // Mark this as a "no valid JSON" error so it can be handled appropriately
+        error.noValidJson = true;
+        throw error;
+      }
+
+      // If we tried to extract but got nothing valid, also throw error
+      if (hasValidJson && (!str || str.trim().length === 0)) {
+        const error = new Error(`Failed to deserialize JSON data: Extracted JSON is empty`);
+        error.noValidJson = true;
+        throw error;
+      }
+
+      // Parse JSON data
+      const parsedData = JSON.parse(str);
+
+      // Convert from array format back to object if needed
+      return this.convertFromArrayFormat(parsedData);
+    } catch (e) {
+      // If error was already formatted with noValidJson flag, re-throw as-is
+      if (e.noValidJson) {
+        throw e;
+      }
+      // Otherwise, format the error message
+      const str = Buffer.isBuffer(data) ? data.toString('utf8').trim() : data.trim();
+      throw new Error(`Failed to deserialize JSON data: "${str.substring(0, 100)}..." - ${e.message}`);
+    }
+  }
+
+  /**
+   * Batch serialization for multiple records
+   */
+  serializeBatch(dataArray, opts = {}) {
+    // Validate encoding before serialization
+    this.validateEncodingBeforeSerialization(dataArray);
+
+    // Convert all objects to array format for optimization
+    const convertedData = dataArray.map(data => this.convertToArrayFormat(data));
+
+    // Track conversion statistics
+    this.serializationStats.arraySerializations += convertedData.filter((item, index) => Array.isArray(item) && typeof dataArray[index] === 'object' && dataArray[index] !== null).length;
+    this.serializationStats.objectSerializations += dataArray.length - this.serializationStats.arraySerializations;
+
+    // JSONL format: serialize each array as a separate line
+    try {
+      const lines = [];
+      for (const arrayData of convertedData) {
+        const json = this.optimizedStringify(arrayData);
+        const normalizedJson = this.normalizeEncoding(json);
+        lines.push(normalizedJson);
+      }
+
+      // Join all lines with newlines
+      const jsonlContent = lines.join('\n');
+      const jsonlBuffer = Buffer.from(jsonlContent, 'utf8');
+
+      // Add final linebreak if requested
+      const addLinebreak = opts.linebreak !== false;
+      const totalLength = jsonlBuffer.length + (addLinebreak ? 1 : 0);
+      const result = Buffer.allocUnsafe(totalLength);
+      jsonlBuffer.copy(result, 0, 0, jsonlBuffer.length);
+      if (addLinebreak) {
+        result[jsonlBuffer.length] = 0x0A;
+      }
+      return result;
+    } catch (e) {
+      // Fallback to individual serialization if batch serialization fails
+      const results = [];
+      const batchSize = opts.batchSize || 100;
+      for (let i = 0; i < convertedData.length; i += batchSize) {
+        const batch = convertedData.slice(i, i + batchSize);
+        const batchResults = batch.map(data => this.serialize(data, opts));
+        results.push(...batchResults);
+      }
+      return results;
+    }
+  }
+
+  /**
+   * Batch deserialization for multiple records
+   */
+  deserializeBatch(dataArray) {
+    // Optimization: try to parse all entries as a single JSON array first
+    // This is much faster than parsing each entry individually
+    try {
+      // Convert all entries to strings and join them as a single JSON array
+      const entriesJson = '[' + dataArray.map(data => {
+        if (Buffer.isBuffer(data)) {
+          return data.toString('utf8').trim();
+        } else if (typeof data === 'string') {
+          return data.trim();
+        } else {
+          throw new Error('Invalid data type for batch deserialization');
+        }
+      }).join(',') + ']';
+      const parsedResults = JSON.parse(entriesJson);
+
+      // Convert arrays back to objects if needed
+      const results = parsedResults.map(data => this.convertFromArrayFormat(data));
+
+      // Validate that all results are objects (JexiDB requirement)
+      if (Array.isArray(results) && results.every(item => item && typeof item === 'object')) {
+        return results;
+      }
+
+      // If validation fails, fall back to individual parsing
+      throw new Error('Validation failed - not all entries are objects');
+    } catch (e) {
+      // Fallback to individual deserialization if batch parsing fails
+      const results = [];
+      const batchSize = 100; // Process in batches to avoid blocking
+
+      for (let i = 0; i < dataArray.length; i += batchSize) {
+        const batch = dataArray.slice(i, i + batchSize);
+        const batchResults = batch.map(data => this.deserialize(data));
+        results.push(...batchResults);
+      }
+      return results;
+    }
+  }
+
+  /**
+   * Check if data appears to be binary (always false since we only use JSON now)
+   */
+  isBinaryData(data) {
+    // All data is now JSON format
+    return false;
+  }
+
+  /**
+   * Get comprehensive performance statistics
+   */
+  getStats() {
+    // NOTE: Buffer pool stats removed - buffer pool was causing more problems than benefits
+    return {
+      // Serialization stats
+      totalSerializations: this.serializationStats.totalSerializations,
+      totalDeserializations: this.serializationStats.totalDeserializations,
+      jsonSerializations: this.serializationStats.jsonSerializations,
+      arraySerializations: this.serializationStats.arraySerializations,
+      objectSerializations: this.serializationStats.objectSerializations,
+      // Configuration
+      enableAdvancedSerialization: this.opts.enableAdvancedSerialization,
+      enableArraySerialization: this.opts.enableArraySerialization,
+      // Schema stats
+      schemaStats: this.schemaManager.getStats()
+    };
+  }
+
+  /**
+   * Cleanup resources
+   */
+  cleanup() {
+    // NOTE: Buffer pool cleanup removed - buffer pool was causing more problems than benefits
+    this.serializationStats = {
+      totalSerializations: 0,
+      totalDeserializations: 0,
+      jsonSerializations: 0,
+      arraySerializations: 0,
+      objectSerializations: 0
+    };
+
+    // Reset schema manager
+    if (this.schemaManager) {
+      this.schemaManager.reset();
+    }
+  }
+}
+
+/**
+ * OperationQueue - Queue system for database operations
+ * Resolves race conditions between concurrent operations
+ */
+
+class OperationQueue {
+  constructor(debugMode = false) {
+    this.queue = [];
+    this.processing = false;
+    this.operationId = 0;
+    this.debugMode = debugMode;
+    this.stats = {
+      totalOperations: 0,
+      completedOperations: 0,
+      failedOperations: 0,
+      averageProcessingTime: 0,
+      maxProcessingTime: 0,
+      totalProcessingTime: 0
+    };
+  }
+
+  /**
+   * Adds an operation to the queue
+   * @param {Function} operation - Asynchronous function to be executed
+   * @returns {Promise} - Promise that resolves when the operation is completed
+   */
+  async enqueue(operation) {
+    const id = ++this.operationId;
+    const startTime = Date.now();
+    if (this.debugMode) {
+      console.log(`🔄 Queue: Enqueuing operation ${id}, queue length: ${this.queue.length}`);
+    }
+    this.stats.totalOperations++;
+    return new Promise((resolve, reject) => {
+      // Capture stack trace for debugging stuck operations
+      const stackTrace = new Error().stack;
+      this.queue.push({
+        id,
+        operation,
+        resolve,
+        reject,
+        timestamp: startTime,
+        stackTrace: stackTrace,
+        startTime: Date.now()
+      });
+
+      // Process immediately if not already processing
+      this.process().catch(reject);
+    });
+  }
+
+  /**
+   * Processes all operations in the queue sequentially
+   */
+  async process() {
+    if (this.processing || this.queue.length === 0) {
+      return;
+    }
+    this.processing = true;
+    if (this.debugMode) {
+      console.log(`🔄 Queue: Starting to process ${this.queue.length} operations`);
+    }
+    try {
+      while (this.queue.length > 0) {
+        const {
+          id,
+          operation,
+          resolve,
+          reject,
+          timestamp
+        } = this.queue.shift();
+        if (this.debugMode) {
+          console.log(`🔄 Queue: Processing operation ${id}`);
+        }
+        try {
+          const result = await operation();
+          const processingTime = Date.now() - timestamp;
+
+          // Atualizar estatísticas
+          this.stats.completedOperations++;
+          this.stats.totalProcessingTime += processingTime;
+          this.stats.averageProcessingTime = this.stats.totalProcessingTime / this.stats.completedOperations;
+          this.stats.maxProcessingTime = Math.max(this.stats.maxProcessingTime, processingTime);
+          resolve(result);
+          if (this.debugMode) {
+            console.log(`✅ Queue: Operation ${id} completed in ${processingTime}ms`);
+          }
+        } catch (error) {
+          const processingTime = Date.now() - timestamp;
+
+          // Atualizar estatísticas
+          this.stats.failedOperations++;
+          this.stats.totalProcessingTime += processingTime;
+          this.stats.averageProcessingTime = this.stats.totalProcessingTime / (this.stats.completedOperations + this.stats.failedOperations);
+          this.stats.maxProcessingTime = Math.max(this.stats.maxProcessingTime, processingTime);
+          reject(error);
+          if (this.debugMode) {
+            console.error(`❌ Queue: Operation ${id} failed in ${processingTime}ms:`, error);
+          }
+        }
+      }
+    } finally {
+      this.processing = false;
+      if (this.debugMode) {
+        console.log(`🔄 Queue: Finished processing, remaining: ${this.queue.length}`);
+      }
+    }
+  }
+
+  /**
+   * Waits for all pending operations to be processed
+   * @param {number|null} maxWaitTime - Maximum wait time in ms (null = wait indefinitely)
+   * @returns {Promise<boolean>} - true if all operations were processed, false if a timeout occurred
+   */
+  async waitForCompletion(maxWaitTime = 5000) {
+    const startTime = Date.now();
+
+    // CRITICAL FIX: Support infinite wait when maxWaitTime is null
+    const hasTimeout = maxWaitTime !== null && maxWaitTime !== undefined;
+    while (this.queue.length > 0) {
+      // Check timeout only if we have one
+      if (hasTimeout && Date.now() - startTime >= maxWaitTime) {
+        break;
+      }
+      await new Promise(resolve => setTimeout(resolve, 1));
+    }
+    const completed = this.queue.length === 0;
+    if (!completed && hasTimeout) {
+      // CRITICAL: Don't leave operations hanging - fail fast with detailed error
+      const pendingOperations = this.queue.map(op => ({
+        id: op.id,
+        stackTrace: op.stackTrace,
+        startTime: op.startTime,
+        waitTime: Date.now() - op.startTime
+      }));
+
+      // Clear the queue to prevent memory leaks
+      this.queue = [];
+      const error = new Error(`OperationQueue: Operations timed out after ${maxWaitTime}ms. ${pendingOperations.length} operations were stuck and have been cleared.`);
+      error.pendingOperations = pendingOperations;
+      error.queueStats = this.getStats();
+      if (this.debugMode) {
+        console.error(`❌ Queue: Operations timed out, clearing ${pendingOperations.length} stuck operations:`);
+        pendingOperations.forEach(op => {
+          console.error(`  - Operation ${op.id} (waiting ${op.waitTime}ms):`);
+          console.error(`    Stack: ${op.stackTrace}`);
+        });
+      }
+      throw error;
+    }
+    return completed;
+  }
+
+  /**
+   * Returns the current queue length
+   */
+  getQueueLength() {
+    return this.queue.length;
+  }
+
+  /**
+   * Checks whether operations are currently being processed
+   */
+  isProcessing() {
+    return this.processing;
+  }
+
+  /**
+   * Returns queue statistics
+   */
+  getStats() {
+    return {
+      ...this.stats,
+      queueLength: this.queue.length,
+      isProcessing: this.processing,
+      successRate: this.stats.totalOperations > 0 ? this.stats.completedOperations / this.stats.totalOperations * 100 : 0
+    };
+  }
+
+  /**
+   * Clears the queue (for emergency situations)
+   */
+  clear() {
+    const clearedCount = this.queue.length;
+    this.queue = [];
+    if (this.debugMode) {
+      console.log(`🧹 Queue: Cleared ${clearedCount} pending operations`);
+    }
+    return clearedCount;
+  }
+
+  /**
+   * Detects stuck operations and returns detailed information
+   * @param {number} stuckThreshold - Time in ms to consider an operation stuck
+   * @returns {Array} - List of stuck operations with stack traces
+   */
+  detectStuckOperations(stuckThreshold = 10000) {
+    const now = Date.now();
+    const stuckOperations = this.queue.filter(op => now - op.startTime > stuckThreshold);
+    return stuckOperations.map(op => ({
+      id: op.id,
+      waitTime: now - op.startTime,
+      stackTrace: op.stackTrace,
+      timestamp: op.timestamp
+    }));
+  }
+
+  /**
+   * Force-cleans stuck operations (last resort)
+   * @param {number} stuckThreshold - Time in ms to consider an operation stuck
+   * @returns {number} - Number of operations removed
+   */
+  forceCleanupStuckOperations(stuckThreshold = 10000) {
+    const stuckOps = this.detectStuckOperations(stuckThreshold);
+    if (stuckOps.length > 0) {
+      // Reject all stuck operations
+      stuckOps.forEach(stuckOp => {
+        const opIndex = this.queue.findIndex(op => op.id === stuckOp.id);
+        if (opIndex !== -1) {
+          const op = this.queue[opIndex];
+          op.reject(new Error(`Operation ${op.id} was stuck for ${stuckOp.waitTime}ms and has been force-cleaned. Stack: ${stuckOp.stackTrace}`));
+          this.queue.splice(opIndex, 1);
+        }
+      });
+      if (this.debugMode) {
+        console.error(`🧹 Queue: Force-cleaned ${stuckOps.length} stuck operations`);
+        stuckOps.forEach(op => {
+          console.error(`  - Operation ${op.id} (stuck for ${op.waitTime}ms)`);
+        });
+      }
+    }
+    return stuckOps.length;
+  }
+
+  /**
+   * Checks whether the queue is empty
+   */
+  isEmpty() {
+    return this.queue.length === 0;
+  }
+
+  /**
+   * Returns information about the next operation in the queue
+   */
+  peekNext() {
+    if (this.queue.length === 0) {
+      return null;
+    }
+    const next = this.queue[0];
+    return {
+      id: next.id,
+      timestamp: next.timestamp,
+      waitTime: Date.now() - next.timestamp
+    };
+  }
+}
+
+/*
+How it works:
+`this.#head` is an instance of `Node` which keeps track of its current value and nests another instance of `Node` that keeps the value that comes after it. When a value is provided to `.enqueue()`, the code needs to iterate through `this.#head`, going deeper and deeper to find the last value. However, iterating through every single item is slow. This problem is solved by saving a reference to the last value as `this.#tail` so that it can reference it to add a new value.
+*/
+
+class Node {
+	value;
+	next;
+
+	constructor(value) {
+		this.value = value;
+	}
+}
+
+class Queue {
+	#head;
+	#tail;
+	#size;
+
+	constructor() {
+		this.clear();
+	}
+
+	enqueue(value) {
+		const node = new Node(value);
+
+		if (this.#head) {
+			this.#tail.next = node;
+			this.#tail = node;
+		} else {
+			this.#head = node;
+			this.#tail = node;
+		}
+
+		this.#size++;
+	}
+
+	dequeue() {
+		const current = this.#head;
+		if (!current) {
+			return;
+		}
+
+		this.#head = this.#head.next;
+		this.#size--;
+		return current.value;
+	}
+
+	peek() {
+		if (!this.#head) {
+			return;
+		}
+
+		return this.#head.value;
+
+		// TODO: Node.js 18.
+		// return this.#head?.value;
+	}
+
+	clear() {
+		this.#head = undefined;
+		this.#tail = undefined;
+		this.#size = 0;
+	}
+
+	get size() {
+		return this.#size;
+	}
+
+	* [Symbol.iterator]() {
+		let current = this.#head;
+
+		while (current) {
+			yield current.value;
+			current = current.next;
+		}
+	}
+}
+
+function pLimit(concurrency) {
+	validateConcurrency(concurrency);
+
+	const queue = new Queue();
+	let activeCount = 0;
+
+	const resumeNext = () => {
+		if (activeCount < concurrency && queue.size > 0) {
+			queue.dequeue()();
+			// Since `pendingCount` has been decreased by one, increase `activeCount` by one.
+			activeCount++;
+		}
+	};
+
+	const next = () => {
+		activeCount--;
+
+		resumeNext();
+	};
+
+	const run = async (function_, resolve, arguments_) => {
+		const result = (async () => function_(...arguments_))();
+
+		resolve(result);
+
+		try {
+			await result;
+		} catch {}
+
+		next();
+	};
+
+	const enqueue = (function_, resolve, arguments_) => {
+		// Queue `internalResolve` instead of the `run` function
+		// to preserve asynchronous context.
+		new Promise(internalResolve => {
+			queue.enqueue(internalResolve);
+		}).then(
+			run.bind(undefined, function_, resolve, arguments_),
+		);
+
+		(async () => {
+			// This function needs to wait until the next microtask before comparing
+			// `activeCount` to `concurrency`, because `activeCount` is updated asynchronously
+			// after the `internalResolve` function is dequeued and called. The comparison in the if-statement
+			// needs to happen asynchronously as well to get an up-to-date value for `activeCount`.
+			await Promise.resolve();
+
+			if (activeCount < concurrency) {
+				resumeNext();
+			}
+		})();
+	};
+
+	const generator = (function_, ...arguments_) => new Promise(resolve => {
+		enqueue(function_, resolve, arguments_);
+	});
+
+	Object.defineProperties(generator, {
+		activeCount: {
+			get: () => activeCount,
+		},
+		pendingCount: {
+			get: () => queue.size,
+		},
+		clearQueue: {
+			value() {
+				queue.clear();
+			},
+		},
+		concurrency: {
+			get: () => concurrency,
+
+			set(newConcurrency) {
+				validateConcurrency(newConcurrency);
+				concurrency = newConcurrency;
+
+				queueMicrotask(() => {
+					// eslint-disable-next-line no-unmodified-loop-condition
+					while (activeCount < concurrency && queue.size > 0) {
+						resumeNext();
+					}
+				});
+			},
+		},
+	});
+
+	return generator;
+}
+
+function validateConcurrency(concurrency) {
+	if (!((Number.isInteger(concurrency) || concurrency === Number.POSITIVE_INFINITY) && concurrency > 0)) {
+		throw new TypeError('Expected `concurrency` to be a number from 1 and up');
+	}
+}
+
+class FileHandler {
+  constructor(file, fileMutex = null, opts = {}) {
+    this.file = file;
+    this.indexFile = file ? file.replace(/\.jdb$/, '.idx.jdb') : null;
+    this.fileMutex = fileMutex;
+    this.opts = opts;
+    this.maxBufferSize = opts.maxBufferSize || 4 * 1024 * 1024; // 4MB default
+    // Global I/O limiter to prevent file descriptor exhaustion in concurrent operations
+    this.readLimiter = pLimit(opts.maxConcurrentReads || 4);
+  }
+  async truncate(offset) {
+    try {
+      await fs.promises.access(this.file, fs.constants.F_OK);
+      await fs.promises.truncate(this.file, offset);
+    } catch (err) {
+      await fs.promises.writeFile(this.file, '');
+    }
+  }
+  async writeOffsets(data) {
+    // Write offsets to the index file (will be combined with index data)
+    await fs.promises.writeFile(this.indexFile, data);
+  }
+  async readOffsets() {
+    try {
+      return await fs.promises.readFile(this.indexFile);
+    } catch (err) {
+      return null;
+    }
+  }
+  async writeIndex(data) {
+    // Write index data to the index file (will be combined with offsets)
+    // Use Windows-specific retry logic for file operations
+    await this._writeFileWithRetry(this.indexFile, data);
+  }
+  async readIndex() {
+    try {
+      return await fs.promises.readFile(this.indexFile);
+    } catch (err) {
+      return null;
+    }
+  }
+  async exists() {
+    try {
+      await fs.promises.access(this.file, fs.constants.F_OK);
+      return true;
+    } catch (err) {
+      return false;
+    }
+  }
+  async indexExists() {
+    try {
+      await fs.promises.access(this.indexFile, fs.constants.F_OK);
+      return true;
+    } catch (err) {
+      return false;
+    }
+  }
+  async isLegacyFormat() {
+    if (!(await this.exists())) return false;
+    if (await this.indexExists()) return false;
+
+    // Check if main file contains offsets at the end (legacy format)
+    try {
+      const lastLine = await this.readLastLine();
+      if (!lastLine || !lastLine.length) return false;
+
+      // Try to parse as offsets array
+      const content = lastLine.toString('utf-8').trim();
+      const parsed = JSON.parse(content);
+      return Array.isArray(parsed);
+    } catch (err) {
+      return false;
+    }
+  }
+  async migrateLegacyFormat(serializer) {
+    if (!(await this.isLegacyFormat())) return false;
+    console.log('Migrating from legacy format to new 3-file format...');
+
+    // Read the legacy file
+    const lastLine = await this.readLastLine();
+    const offsets = JSON.parse(lastLine.toString('utf-8').trim());
+
+    // Get index offset and truncate offsets array
+    const indexOffset = offsets[offsets.length - 2];
+    const dataOffsets = offsets.slice(0, -2);
+
+    // Read index data
+    const indexStart = indexOffset;
+    const indexEnd = offsets[offsets.length - 1];
+    const indexBuffer = await this.readRange(indexStart, indexEnd);
+    const indexData = await serializer.deserialize(indexBuffer);
+
+    // Write offsets to separate file
+    const offsetsString = await serializer.serialize(dataOffsets, {
+      linebreak: false
+    });
+    await this.writeOffsets(offsetsString);
+
+    // Write index to separate file
+    const indexString = await serializer.serialize(indexData, {
+      linebreak: false
+    });
+    await this.writeIndex(indexString);
+
+    // Truncate main file to remove index and offsets
+    await this.truncate(indexOffset);
+    console.log('Migration completed successfully!');
+    return true;
+  }
+  async readRange(start, end) {
+    // Check if file exists before trying to read it
+    if (!(await this.exists())) {
+      return Buffer.alloc(0); // Return empty buffer if file doesn't exist
+    }
+    let fd = await fs.promises.open(this.file, 'r');
+    try {
+      // CRITICAL FIX: Check file size before attempting to read
+      const stats = await fd.stat();
+      const fileSize = stats.size;
+
+      // If start position is beyond file size, return empty buffer
+      if (start >= fileSize) {
+        await fd.close();
+        return Buffer.alloc(0);
+      }
+
+      // Adjust end position if it's beyond file size
+      const actualEnd = Math.min(end, fileSize);
+      const length = actualEnd - start;
+
+      // If length is 0 or negative, return empty buffer
+      if (length <= 0) {
+        await fd.close();
+        return Buffer.alloc(0);
+      }
+      let buffer = Buffer.alloc(length);
+      const {
+        bytesRead
+      } = await fd.read(buffer, 0, length, start);
+      await fd.close();
+
+      // CRITICAL FIX: Ensure we read the expected amount of data
+      if (bytesRead !== length) {
+        const errorMsg = `CRITICAL: Expected to read ${length} bytes, but read ${bytesRead} bytes at position ${start}`;
+        console.error(`⚠️ ${errorMsg}`);
+
+        // This indicates a race condition or file corruption
+        // Don't retry - the caller should handle synchronization properly
+        if (bytesRead === 0) {
+          throw new Error(`File corruption detected: ${errorMsg}`);
+        }
+
+        // Return partial data with warning - caller should handle this
+        return buffer.subarray(0, bytesRead);
+      }
+      return buffer;
+    } catch (error) {
+      await fd.close().catch(() => {});
+      throw error;
+    }
+  }
+  async readRanges(ranges, mapper) {
+    const lines = {};
+
+    // Check if file exists before trying to read it
+    if (!(await this.exists())) {
+      return lines; // Return empty object if file doesn't exist
+    }
+    const fd = await fs.promises.open(this.file, 'r');
+    const groupedRanges = await this.groupedRanges(ranges);
+    try {
+      await Promise.allSettled(groupedRanges.map(async groupedRange => {
+        await this.readLimiter(async () => {
+          var _iteratorAbruptCompletion = false;
+          var _didIteratorError = false;
+          var _iteratorError;
+          try {
+            for (var _iterator = _asyncIterator(this.readGroupedRange(groupedRange, fd)), _step; _iteratorAbruptCompletion = !(_step = await _iterator.next()).done; _iteratorAbruptCompletion = false) {
+              const row = _step.value;
+              {
+                lines[row.start] = mapper ? await mapper(row.line, {
+                  start: row.start,
+                  end: row.start + row.line.length
+                }) : row.line;
+              }
+            }
+          } catch (err) {
+            _didIteratorError = true;
+            _iteratorError = err;
+          } finally {
+            try {
+              if (_iteratorAbruptCompletion && _iterator.return != null) {
+                await _iterator.return();
+              }
+            } finally {
+              if (_didIteratorError) {
+                throw _iteratorError;
+              }
+            }
+          }
+        });
+      }));
+    } catch (e) {
+      console.error('Error reading ranges:', e);
+    } finally {
+      await fd.close();
+    }
+    return lines;
+  }
+  async groupedRanges(ranges) {
+    // expects ordered ranges from Database.getRanges()
+    const readSize = 512 * 1024; // 512KB  
+    const groupedRanges = [];
+    let currentGroup = [];
+    let currentSize = 0;
+
+    // each range is a {start: number, end: number} object
+    for (let i = 0; i < ranges.length; i++) {
+      const range = ranges[i];
+      const rangeSize = range.end - range.start;
+      if (currentGroup.length > 0) {
+        const lastRange = currentGroup[currentGroup.length - 1];
+        if (lastRange.end !== range.start || currentSize + rangeSize > readSize) {
+          groupedRanges.push(currentGroup);
+          currentGroup = [];
+          currentSize = 0;
+        }
+      }
+      currentGroup.push(range);
+      currentSize += rangeSize;
+    }
+    if (currentGroup.length > 0) {
+      groupedRanges.push(currentGroup);
+    }
+    return groupedRanges;
+  }
+  readGroupedRange(groupedRange, fd) {
+    var _this = this;
+    return _wrapAsyncGenerator(function* () {
+      if (groupedRange.length === 0) return;
+
+      // OPTIMIZATION: For single range, use direct approach
+      if (groupedRange.length === 1) {
+        const range = groupedRange[0];
+        const bufferSize = range.end - range.start;
+        if (bufferSize <= 0 || bufferSize > _this.maxBufferSize) {
+          throw new Error(`Invalid buffer size: ${bufferSize}. Start: ${range.start}, End: ${range.end}. Max allowed: ${_this.maxBufferSize}`);
+        }
+        const buffer = Buffer.allocUnsafe(bufferSize);
+        const {
+          bytesRead
+        } = yield _awaitAsyncGenerator(fd.read(buffer, 0, bufferSize, range.start));
+        const actualBuffer = bytesRead < bufferSize ? buffer.subarray(0, bytesRead) : buffer;
+        if (actualBuffer.length === 0) return;
+        let lineString;
+        try {
+          lineString = actualBuffer.toString('utf8');
+        } catch (error) {
+          lineString = actualBuffer.toString('utf8', {
+            replacement: '?'
+          });
+        }
+
+        // CRITICAL FIX: Remove trailing newlines and whitespace for single range too
+        // Optimized: Use trimEnd() which efficiently removes all trailing whitespace (faster than manual checks)
+        lineString = lineString.trimEnd();
+        yield {
+          line: lineString,
+          start: range.start,
+          _: range.index !== undefined ? range.index : range._ || null
+        };
+        return;
+      }
+
+      // OPTIMIZATION: For multiple ranges, read as single buffer and split by offsets
+      const firstRange = groupedRange[0];
+      const lastRange = groupedRange[groupedRange.length - 1];
+      const totalSize = lastRange.end - firstRange.start;
+      if (totalSize <= 0 || totalSize > _this.maxBufferSize) {
+        throw new Error(`Invalid total buffer size: ${totalSize}. Start: ${firstRange.start}, End: ${lastRange.end}. Max allowed: ${_this.maxBufferSize}`);
+      }
+
+      // Read entire grouped range as single buffer
+      const buffer = Buffer.allocUnsafe(totalSize);
+      const {
+        bytesRead
+      } = yield _awaitAsyncGenerator(fd.read(buffer, 0, totalSize, firstRange.start));
+      const actualBuffer = bytesRead < totalSize ? buffer.subarray(0, bytesRead) : buffer;
+      if (actualBuffer.length === 0) return;
+
+      // Convert to string once
+      let content;
+      try {
+        content = actualBuffer.toString('utf8');
+      } catch (error) {
+        content = actualBuffer.toString('utf8', {
+          replacement: '?'
+        });
+      }
+
+      // CRITICAL FIX: Handle ranges more carefully to prevent corruption
+      if (groupedRange.length === 2 && groupedRange[0].end === groupedRange[1].start) {
+        // Special case: Adjacent ranges - split by newlines to prevent corruption
+        const lines = content.split('\n').filter(line => line.trim().length > 0);
+        for (let i = 0; i < Math.min(lines.length, groupedRange.length); i++) {
+          const range = groupedRange[i];
+          yield {
+            line: lines[i],
+            start: range.start,
+            _: range.index !== undefined ? range.index : range._ || null
+          };
+        }
+      } else {
+        // CRITICAL FIX: For non-adjacent ranges, use the range.end directly
+        // because range.end already excludes the newline (calculated as offsets[n+1] - 1)
+        // We just need to find the line start (beginning of the line in the buffer)
+        for (let i = 0; i < groupedRange.length; i++) {
+          const range = groupedRange[i];
+          const relativeStart = range.start - firstRange.start;
+          const relativeEnd = range.end - firstRange.start;
+
+          // OPTIMIZATION 2: Find line start only if necessary
+          // Check if we're already at a line boundary to avoid unnecessary backwards search
+          let lineStart = relativeStart;
+          if (relativeStart > 0 && content[relativeStart - 1] !== '\n') {
+            // Only search backwards if we're not already at a line boundary
+            while (lineStart > 0 && content[lineStart - 1] !== '\n') {
+              lineStart--;
+            }
+          }
+
+          // OPTIMIZATION 3: Use slice() instead of substring() for better performance
+          // CRITICAL FIX: range.end = offsets[n+1] - 1 points to the newline character
+          // slice(start, end) includes characters from start to end-1 (end is exclusive)
+          // So if relativeEnd points to the newline, slice will include it
+          let rangeContent = content.slice(lineStart, relativeEnd);
+
+          // OPTIMIZATION 4: Direct character check instead of regex/trimEnd
+          // Remove trailing newlines and whitespace efficiently
+          // trimEnd() is actually optimized in V8, but we can check if there's anything to trim first
+          const len = rangeContent.length;
+          if (len > 0) {
+            // Quick check: if last char is not whitespace, skip trimEnd
+            const lastChar = rangeContent[len - 1];
+            if (lastChar === '\n' || lastChar === '\r' || lastChar === ' ' || lastChar === '\t') {
+              // Only call trimEnd if we detected trailing whitespace
+              rangeContent = rangeContent.trimEnd();
+            }
+          }
+          if (rangeContent.length === 0) continue;
+          yield {
+            line: rangeContent,
+            start: range.start,
+            _: range.index !== undefined ? range.index : range._ || null
+          };
+        }
+      }
+    })();
+  }
+  walk(ranges) {
+    var _this2 = this;
+    return _wrapAsyncGenerator(function* () {
+      // Check if file exists before trying to read it
+      if (!(yield _awaitAsyncGenerator(_this2.exists()))) {
+        return; // Return empty generator if file doesn't exist
+      }
+      const fd = yield _awaitAsyncGenerator(fs.promises.open(_this2.file, 'r'));
+      try {
+        const groupedRanges = yield _awaitAsyncGenerator(_this2.groupedRanges(ranges));
+        for (const groupedRange of groupedRanges) {
+          var _iteratorAbruptCompletion2 = false;
+          var _didIteratorError2 = false;
+          var _iteratorError2;
+          try {
+            for (var _iterator2 = _asyncIterator(_this2.readGroupedRange(groupedRange, fd)), _step2; _iteratorAbruptCompletion2 = !(_step2 = yield _awaitAsyncGenerator(_iterator2.next())).done; _iteratorAbruptCompletion2 = false) {
+              const row = _step2.value;
+              {
+                yield row;
+              }
+            }
+          } catch (err) {
+            _didIteratorError2 = true;
+            _iteratorError2 = err;
+          } finally {
+            try {
+              if (_iteratorAbruptCompletion2 && _iterator2.return != null) {
+                yield _awaitAsyncGenerator(_iterator2.return());
+              }
+            } finally {
+              if (_didIteratorError2) {
+                throw _iteratorError2;
+              }
+            }
+          }
+        }
+      } finally {
+        yield _awaitAsyncGenerator(fd.close());
+      }
+    })();
+  }
+  async replaceLines(ranges, lines) {
+    // CRITICAL: Always use file mutex to prevent concurrent file operations
+    if (this.fileMutex) {
+      return this.fileMutex.runExclusive(async () => {
+        // Add a small delay to ensure any pending operations complete
+        await new Promise(resolve => setTimeout(resolve, 10));
+        return this._replaceLinesInternal(ranges, lines);
+      });
+    } else {
+      return this._replaceLinesInternal(ranges, lines);
+    }
+  }
+  async _replaceLinesInternal(ranges, lines) {
+    const tmpFile = this.file + '.tmp';
+    let writer, reader;
+    try {
+      writer = await fs.promises.open(tmpFile, 'w+');
+
+      // Check if the main file exists before trying to read it
+      if (await this.exists()) {
+        reader = await fs.promises.open(this.file, 'r');
+      } else {
+        // If file doesn't exist, we'll just write the new lines
+        reader = null;
+      }
+
+      // Sort ranges by start position to ensure correct order
+      const sortedRanges = [...ranges].sort((a, b) => a.start - b.start);
+      let position = 0;
+      let lineIndex = 0;
+      for (const range of sortedRanges) {
+        // Write existing content before the range (only if file exists)
+        if (reader && position < range.start) {
+          const buffer = await this.readRange(position, range.start);
+          await writer.write(buffer);
+        }
+
+        // Write new line if provided, otherwise skip the range (for delete operations)
+        if (lineIndex < lines.length && lines[lineIndex]) {
+          const line = lines[lineIndex];
+          // Ensure line ends with newline
+          let formattedBuffer;
+          if (Buffer.isBuffer(line)) {
+            const needsNewline = line.length === 0 || line[line.length - 1] !== 0x0A;
+            formattedBuffer = needsNewline ? Buffer.concat([line, Buffer.from('\n')]) : line;
+          } else {
+            const withNewline = line.endsWith('\n') ? line : line + '\n';
+            formattedBuffer = Buffer.from(withNewline, 'utf8');
+          }
+          await writer.write(formattedBuffer);
+        }
+
+        // Update position to range.end to avoid overlapping writes
+        position = range.end;
+        lineIndex++;
+      }
+
+      // Write remaining content after the last range (only if file exists)
+      if (reader) {
+        const {
+          size
+        } = await reader.stat();
+        if (position < size) {
+          const buffer = await this.readRange(position, size);
+          await writer.write(buffer);
+        }
+      }
+
+      // Ensure all data is written to disk
+      await writer.sync();
+      if (reader) await reader.close();
+      await writer.close();
+
+      // Validate the temp file before renaming
+      await this._validateTempFile(tmpFile);
+
+      // CRITICAL: Retry logic for Windows EPERM errors
+      await this._safeRename(tmpFile, this.file);
+    } catch (e) {
+      console.error('Erro ao substituir linhas:', e);
+      throw e;
+    } finally {
+      if (reader) await reader.close().catch(() => {});
+      if (writer) await writer.close().catch(() => {});
+      await fs.promises.unlink(tmpFile).catch(() => {});
+    }
+  }
+  async _safeRename(tmpFile, targetFile, maxRetries = 3) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        await fs.promises.rename(tmpFile, targetFile);
+        return; // Success
+      } catch (error) {
+        if (error.code === 'EPERM' && attempt < maxRetries) {
+          // Quick delay: 50ms, 100ms, 200ms
+          const delay = 50 * attempt;
+          console.log(`🔄 EPERM retry ${attempt}/${maxRetries}, waiting ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue;
+        }
+
+        // If all retries failed, try Windows fallback approach
+        if (error.code === 'EPERM' && attempt === maxRetries) {
+          console.log(`⚠️ All EPERM retries failed, trying Windows fallback...`);
+          return this._windowsFallbackRename(tmpFile, targetFile);
+        }
+        throw error; // Re-throw if not EPERM or max retries reached
+      }
+    }
+  }
+  async _validateTempFile(tmpFile) {
+    try {
+      // Read the temp file and validate JSON structure
+      const content = await fs.promises.readFile(tmpFile, 'utf8');
+      const lines = content.split('\n').filter(line => line.trim());
+      let hasInvalidJson = false;
+      const validLines = [];
+      for (let i = 0; i < lines.length; i++) {
+        try {
+          JSON.parse(lines[i]);
+          validLines.push(lines[i]);
+        } catch (error) {
+          console.warn(`⚠️ Invalid JSON in temp file at line ${i + 1}, skipping:`, lines[i].substring(0, 100));
+          hasInvalidJson = true;
+        }
+      }
+
+      // If we found invalid JSON, rewrite the file with only valid lines
+      if (hasInvalidJson && validLines.length > 0) {
+        console.log(`🔧 Rewriting temp file with ${validLines.length} valid lines`);
+        const correctedContent = validLines.join('\n') + '\n';
+        await fs.promises.writeFile(tmpFile, correctedContent, 'utf8');
+      }
+      console.log(`✅ Temp file validation passed: ${validLines.length} valid JSON lines`);
+    } catch (error) {
+      console.error(`❌ Temp file validation failed:`, error.message);
+      throw error;
+    }
+  }
+  async _windowsFallbackRename(tmpFile, targetFile) {
+    try {
+      // Windows fallback: copy content instead of rename
+      console.log(`🔄 Using Windows fallback: copy + delete approach`);
+
+      // Validate temp file before copying
+      await this._validateTempFile(tmpFile);
+
+      // Read the temp file content
+      const content = await fs.promises.readFile(tmpFile, 'utf8');
+
+      // Write to target file directly
+      await fs.promises.writeFile(targetFile, content, 'utf8');
+
+      // Delete temp file
+      await fs.promises.unlink(tmpFile);
+      console.log(`✅ Windows fallback successful`);
+      return;
+    } catch (fallbackError) {
+      console.error(`❌ Windows fallback also failed:`, fallbackError);
+      throw fallbackError;
+    }
+  }
+  async writeData(data, immediate, fd) {
+    await fd.write(data);
+  }
+  async writeDataAsync(data) {
+    // CRITICAL FIX: Ensure directory exists before writing
+    const dir = path.dirname(this.file);
+    await fs.promises.mkdir(dir, {
+      recursive: true
+    });
+    await fs.promises.appendFile(this.file, data);
+  }
+
+  /**
+   * Check if data appears to be binary (always false since we only use JSON now)
+   */
+  isBinaryData(data) {
+    // All data is now JSON format
+    return false;
+  }
+
+  /**
+   * Check if file is binary (always false since we only use JSON now)
+   */
+  async isBinaryFile() {
+    // All files are now JSON format
+    return false;
+  }
+  async readLastLine() {
+    // Use global read limiter to prevent file descriptor exhaustion
+    return this.readLimiter(async () => {
+      // Check if file exists before trying to read it
+      if (!(await this.exists())) {
+        return null; // Return null if file doesn't exist
+      }
+      const reader = await fs.promises.open(this.file, 'r');
+      try {
+        const {
+          size
+        } = await reader.stat();
+        if (size < 1) throw 'empty file';
+        this.size = size;
+        const bufferSize = 16384;
+        let buffer,
+          isFirstRead = true,
+          lastReadSize,
+          readPosition = Math.max(size - bufferSize, 0);
+        while (readPosition >= 0) {
+          const readSize = Math.min(bufferSize, size - readPosition);
+          if (readSize !== lastReadSize) {
+            lastReadSize = readSize;
+            buffer = Buffer.alloc(readSize);
+          }
+          const {
+            bytesRead
+          } = await reader.read(buffer, 0, isFirstRead ? readSize - 1 : readSize, readPosition);
+          if (isFirstRead) isFirstRead = false;
+          if (bytesRead === 0) break;
+          const newlineIndex = buffer.lastIndexOf(10);
+          const start = readPosition + newlineIndex + 1;
+          if (newlineIndex !== -1) {
+            const lastLine = Buffer.alloc(size - start);
+            await reader.read(lastLine, 0, size - start, start);
+            if (!lastLine || !lastLine.length) {
+              throw 'no metadata or empty file';
+            }
+            return lastLine;
+          } else {
+            readPosition -= bufferSize;
+          }
+        }
+      } catch (e) {
+        String(e).includes('empty file') || console.error('Error reading last line:', e);
+      } finally {
+        reader.close();
+      }
+    });
+  }
+
+  /**
+   * Read records with streaming using readline
+   * @param {Object} criteria - Filter criteria
+   * @param {Object} options - Options (limit, skip)
+   * @param {Function} matchesCriteria - Function to check if record matches criteria
+   * @returns {Promise<Array>} - Array of records
+   */
+  async readWithStreaming(criteria, options = {}, matchesCriteria, serializer = null) {
+    // CRITICAL: Always use file mutex to prevent concurrent file operations
+    if (this.fileMutex) {
+      return this.fileMutex.runExclusive(async () => {
+        // Add a small delay to ensure any pending operations complete
+        await new Promise(resolve => setTimeout(resolve, 5));
+        // Use global read limiter to prevent file descriptor exhaustion
+        return this.readLimiter(() => this._readWithStreamingInternal(criteria, options, matchesCriteria, serializer));
+      });
+    } else {
+      // Use global read limiter to prevent file descriptor exhaustion
+      return this.readLimiter(() => this._readWithStreamingInternal(criteria, options, matchesCriteria, serializer));
+    }
+  }
+  async _readWithStreamingInternal(criteria, options = {}, matchesCriteria, serializer = null) {
+    const {
+      limit,
+      skip = 0
+    } = options; // No default limit
+    const results = [];
+    let lineNumber = 0;
+    let processed = 0;
+    let skipped = 0;
+    let matched = 0;
+    try {
+      // Check if file exists before trying to read it
+      if (!(await this.exists())) {
+        return results; // Return empty results if file doesn't exist
+      }
+
+      // All files are now JSONL format - use line-by-line reading
+      // Create optimized read stream
+      const stream = fs.createReadStream(this.file, {
+        highWaterMark: 64 * 1024,
+        // 64KB chunks
+        encoding: 'utf8'
+      });
+
+      // Create readline interface
+      const rl = readline.createInterface({
+        input: stream,
+        crlfDelay: Infinity // Better performance
+      });
+
+      // Process line by line
+      var _iteratorAbruptCompletion3 = false;
+      var _didIteratorError3 = false;
+      var _iteratorError3;
+      try {
+        for (var _iterator3 = _asyncIterator(rl), _step3; _iteratorAbruptCompletion3 = !(_step3 = await _iterator3.next()).done; _iteratorAbruptCompletion3 = false) {
+          const line = _step3.value;
+          {
+            if (lineNumber >= skip) {
+              try {
+                let record;
+                if (serializer && typeof serializer.deserialize === 'function') {
+                  // Use serializer for deserialization
+                  record = serializer.deserialize(line);
+                } else {
+                  // Fallback to JSON.parse for backward compatibility
+                  record = JSON.parse(line);
+                }
+                if (record && matchesCriteria(record, criteria)) {
+                  // Return raw data - term mapping will be handled by Database layer
+                  results.push({
+                    ...record,
+                    _: lineNumber
+                  });
+                  matched++;
+
+                  // Check if we've reached the limit
+                  if (results.length >= limit) {
+                    break;
+                  }
+                }
+              } catch (error) {
+                // CRITICAL FIX: Only log errors if they're not expected during concurrent operations
+                // Don't log JSON parsing errors that occur during file writes
+                if (this.opts && this.opts.debugMode && !error.message.includes('Unexpected')) {
+                  console.log(`Error reading line ${lineNumber}:`, error.message);
+                }
+                // Ignore invalid lines - they may be partial writes
+              }
+            } else {
+              skipped++;
+            }
+            lineNumber++;
+            processed++;
+          }
+        }
+      } catch (err) {
+        _didIteratorError3 = true;
+        _iteratorError3 = err;
+      } finally {
+        try {
+          if (_iteratorAbruptCompletion3 && _iterator3.return != null) {
+            await _iterator3.return();
+          }
+        } finally {
+          if (_didIteratorError3) {
+            throw _iteratorError3;
+          }
+        }
+      }
+      if (this.opts && this.opts.debugMode) {
+        console.log(`📊 Streaming read completed: ${results.length} results, ${processed} processed, ${skipped} skipped, ${matched} matched`);
+      }
+      return results;
+    } catch (error) {
+      console.error('Error in readWithStreaming:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Count records with streaming
+   * @param {Object} criteria - Filter criteria
+   * @param {Object} options - Options (limit)
+   * @param {Function} matchesCriteria - Function to check if record matches criteria
+   * @returns {Promise<number>} - Number of records
+   */
+  async countWithStreaming(criteria, options = {}, matchesCriteria, serializer = null) {
+    const {
+      limit
+    } = options;
+    let count = 0;
+    let processed = 0;
+    try {
+      const stream = fs.createReadStream(this.file, {
+        highWaterMark: 64 * 1024,
+        encoding: 'utf8'
+      });
+      const rl = readline.createInterface({
+        input: stream,
+        crlfDelay: Infinity
+      });
+      var _iteratorAbruptCompletion4 = false;
+      var _didIteratorError4 = false;
+      var _iteratorError4;
+      try {
+        for (var _iterator4 = _asyncIterator(rl), _step4; _iteratorAbruptCompletion4 = !(_step4 = await _iterator4.next()).done; _iteratorAbruptCompletion4 = false) {
+          const line = _step4.value;
+          {
+            if (limit && count >= limit) {
+              break;
+            }
+            try {
+              let record;
+              if (serializer) {
+                // Use serializer for deserialization
+                record = await serializer.deserialize(line);
+              } else {
+                // Fallback to JSON.parse for backward compatibility
+                record = JSON.parse(line);
+              }
+              if (record && matchesCriteria(record, criteria)) {
+                count++;
+              }
+            } catch (error) {
+              // Ignore invalid lines
+            }
+            processed++;
+          }
+        }
+      } catch (err) {
+        _didIteratorError4 = true;
+        _iteratorError4 = err;
+      } finally {
+        try {
+          if (_iteratorAbruptCompletion4 && _iterator4.return != null) {
+            await _iterator4.return();
+          }
+        } finally {
+          if (_didIteratorError4) {
+            throw _iteratorError4;
+          }
+        }
+      }
+      return count;
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  /**
+   * Get file statistics
+   * @returns {Promise<Object>} - File statistics
+   */
+  async getFileStats() {
+    try {
+      const stats = await fs.promises.stat(this.file);
+      const lineCount = await this.countLines();
+      return {
+        filePath: this.file,
+        size: stats.size,
+        lineCount,
+        lastModified: stats.mtime
+      };
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  /**
+   * Count lines in file
+   * @returns {Promise<number>} - Number of lines
+   */
+  async countLines() {
+    let lineCount = 0;
+    try {
+      const stream = fs.createReadStream(this.file, {
+        highWaterMark: 64 * 1024,
+        encoding: 'utf8'
+      });
+      const rl = readline.createInterface({
+        input: stream,
+        crlfDelay: Infinity
+      });
+      var _iteratorAbruptCompletion5 = false;
+      var _didIteratorError5 = false;
+      var _iteratorError5;
+      try {
+        for (var _iterator5 = _asyncIterator(rl), _step5; _iteratorAbruptCompletion5 = !(_step5 = await _iterator5.next()).done; _iteratorAbruptCompletion5 = false) {
+          const line = _step5.value;
+          {
+            lineCount++;
+          }
+        }
+      } catch (err) {
+        _didIteratorError5 = true;
+        _iteratorError5 = err;
+      } finally {
+        try {
+          if (_iteratorAbruptCompletion5 && _iterator5.return != null) {
+            await _iterator5.return();
+          }
+        } finally {
+          if (_didIteratorError5) {
+            throw _iteratorError5;
+          }
+        }
+      }
+      return lineCount;
+    } catch (error) {
+      throw error;
+    }
+  }
+  async destroy() {
+    // CRITICAL FIX: Close all file handles to prevent resource leaks
+    try {
+      // Close any open file descriptors
+      if (this.fd) {
+        await this.fd.close().catch(() => {});
+        this.fd = null;
+      }
+
+      // Close any open readers/writers
+      if (this.reader) {
+        await this.reader.close().catch(() => {});
+        this.reader = null;
+      }
+      if (this.writer) {
+        await this.writer.close().catch(() => {});
+        this.writer = null;
+      }
+
+      // Clear any cached file handles
+      this.cachedFd = null;
+    } catch (error) {
+      // Ignore errors during cleanup
+    }
+  }
+  async delete() {
+    try {
+      // Delete main file
+      await fs.promises.unlink(this.file).catch(() => {});
+
+      // Delete index file (which now contains both index and offsets data)
+      await fs.promises.unlink(this.indexFile).catch(() => {});
+    } catch (error) {
+      // Ignore errors if files don't exist
+    }
+  }
+  async writeAll(data) {
+    const release = this.fileMutex ? await this.fileMutex.acquire() : () => {};
+    try {
+      // Use Windows-specific retry logic for file operations
+      await this._writeWithRetry(data);
+    } finally {
+      release();
+    }
+  }
+
+  /**
+   * Optimized batch write operation (OPTIMIZATION)
+   * @param {Array} dataChunks - Array of data chunks to write
+   * @param {boolean} append - Whether to append or overwrite
+   */
+  async writeBatch(dataChunks, append = false) {
+    if (!dataChunks || !dataChunks.length) return;
+    const release = this.fileMutex ? await this.fileMutex.acquire() : () => {};
+    try {
+      // OPTIMIZATION: Use streaming write for better performance
+      if (dataChunks.length === 1 && Buffer.isBuffer(dataChunks[0])) {
+        // Single buffer - use direct write
+        if (append) {
+          await fs.promises.appendFile(this.file, dataChunks[0]);
+        } else {
+          await this._writeFileWithRetry(this.file, dataChunks[0]);
+        }
+      } else {
+        // Multiple chunks - use streaming approach
+        await this._writeBatchStreaming(dataChunks, append);
+      }
+    } finally {
+      release();
+    }
+  }
+
+  /**
+   * OPTIMIZATION: Streaming write for multiple chunks
+   * @param {Array} dataChunks - Array of data chunks to write
+   * @param {boolean} append - Whether to append or overwrite
+   */
+  async _writeBatchStreaming(dataChunks, append = false) {
+    // OPTIMIZATION: Use createWriteStream for better performance
+    const writeStream = fs.createWriteStream(this.file, {
+      flags: append ? 'a' : 'w',
+      highWaterMark: 64 * 1024 // 64KB buffer
+    });
+    return new Promise((resolve, reject) => {
+      writeStream.on('error', reject);
+      writeStream.on('finish', resolve);
+
+      // Write chunks sequentially
+      let index = 0;
+      const writeNext = () => {
+        if (index >= dataChunks.length) {
+          writeStream.end();
+          return;
+        }
+        const chunk = dataChunks[index++];
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, 'utf8');
+        if (!writeStream.write(buffer)) {
+          writeStream.once('drain', writeNext);
+        } else {
+          writeNext();
+        }
+      };
+      writeNext();
+    });
+  }
+
+  /**
+   * Optimized append operation for single data chunk (OPTIMIZATION)
+   * @param {string|Buffer} data - Data to append
+   */
+  async appendOptimized(data) {
+    const release = this.fileMutex ? await this.fileMutex.acquire() : () => {};
+    try {
+      // OPTIMIZATION: Direct append without retry logic for better performance
+      await fs.promises.appendFile(this.file, data);
+    } finally {
+      release();
+    }
+  }
+
+  /**
+   * Windows-specific retry logic for fs.promises.writeFile operations
+   * Based on node-graceful-fs workarounds for EPERM issues
+   */
+  async _writeFileWithRetry(filePath, data, maxRetries = 3) {
+    const isWindows = process.platform === 'win32';
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        // Ensure data is properly formatted as string or buffer
+        if (Buffer.isBuffer(data)) {
+          await fs.promises.writeFile(filePath, data);
+        } else {
+          await fs.promises.writeFile(filePath, data.toString());
+        }
+
+        // Windows: add small delay after write operation
+        // This helps prevent EPERM issues caused by file handle not being released immediately
+        if (isWindows) {
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+
+        // Success - return immediately
+        return;
+      } catch (err) {
+        // Only retry on EPERM errors on Windows
+        if (err.code === 'EPERM' && isWindows && attempt < maxRetries - 1) {
+          // Exponential backoff: 10ms, 50ms, 250ms
+          const delay = Math.pow(10, attempt + 1);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue;
+        }
+
+        // Re-throw if not a retryable error or max retries reached
+        throw err;
+      }
+    }
+  }
+
+  /**
+   * Windows-specific retry logic for file operations
+   * Based on node-graceful-fs workarounds for EPERM issues
+   */
+  async _writeWithRetry(data, maxRetries = 3) {
+    const isWindows = process.platform === 'win32';
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        // CRITICAL FIX: Ensure directory exists before writing file
+        const dir = path.dirname(this.file);
+        await fs.promises.mkdir(dir, {
+          recursive: true
+        });
+        const fd = await fs.promises.open(this.file, 'w');
+        try {
+          // Ensure data is properly formatted as string or buffer
+          if (Buffer.isBuffer(data)) {
+            await fd.write(data);
+          } else {
+            await fd.write(data.toString());
+          }
+        } finally {
+          await fd.close();
+
+          // Windows: add small delay after closing file handle
+          // This helps prevent EPERM issues caused by file handle not being released immediately
+          if (isWindows) {
+            await new Promise(resolve => setTimeout(resolve, 10));
+          }
+        }
+
+        // Success - return immediately
+        return;
+      } catch (err) {
+        // Only retry on EPERM errors on Windows
+        if (err.code === 'EPERM' && isWindows && attempt < maxRetries - 1) {
+          // Exponential backoff: 10ms, 50ms, 250ms
+          const delay = Math.pow(10, attempt + 1);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue;
+        }
+
+        // Re-throw if not a retryable error or max retries reached
+        throw err;
+      }
+    }
+  }
+  async readAll() {
+    const release = this.fileMutex ? await this.fileMutex.acquire() : () => {};
+    try {
+      // Check if file exists before trying to read it
+      if (!(await this.exists())) {
+        return ''; // Return empty string if file doesn't exist
+      }
+      const fd = await fs.promises.open(this.file, 'r');
+      try {
+        const stats = await fd.stat();
+        const buffer = Buffer.allocUnsafe(stats.size);
+        await fd.read(buffer, 0, stats.size, 0);
+        return buffer.toString('utf8');
+      } finally {
+        await fd.close();
+      }
+    } finally {
+      release();
+    }
+  }
+
+  /**
+   * Read specific lines from the file using line numbers
+   * This is optimized for partial reads when using indexed queries
+   * @param {number[]} lineNumbers - Array of line numbers to read (1-based)
+   * @returns {Promise<string>} - Content of the specified lines
+   */
+  async readSpecificLines(lineNumbers) {
+    if (!lineNumbers || lineNumbers.length === 0) {
+      return '';
+    }
+    const release = this.fileMutex ? await this.fileMutex.acquire() : () => {};
+    try {
+      // Check if file exists before trying to read it
+      if (!(await this.exists())) {
+        return ''; // Return empty string if file doesn't exist
+      }
+      const fd = await fs.promises.open(this.file, 'r');
+      try {
+        const stats = await fd.stat();
+        const buffer = Buffer.allocUnsafe(stats.size);
+        await fd.read(buffer, 0, stats.size, 0);
+
+        // CRITICAL FIX: Ensure proper UTF-8 decoding for multi-byte characters
+        let content;
+        try {
+          content = buffer.toString('utf8');
+        } catch (error) {
+          // If UTF-8 decoding fails, try to recover by finding valid UTF-8 boundaries
+          console.warn(`UTF-8 decoding failed for file ${this.file}, attempting recovery`);
+
+          // Find the last complete UTF-8 character
+          let validLength = buffer.length;
+          for (let i = buffer.length - 1; i >= 0; i--) {
+            const byte = buffer[i];
+            // CRITICAL FIX: Correct UTF-8 start character detection
+            // Check if this is the start of a UTF-8 character (not a continuation byte)
+            if ((byte & 0x80) === 0 ||
+            // ASCII (1 byte) - 0xxxxxxx
+            (byte & 0xE0) === 0xC0 ||
+            // 2-byte UTF-8 start - 110xxxxx
+            (byte & 0xF0) === 0xE0 ||
+            // 3-byte UTF-8 start - 1110xxxx
+            (byte & 0xF8) === 0xF0) {
+              // 4-byte UTF-8 start - 11110xxx
+              validLength = i + 1;
+              break;
+            }
+          }
+          const validBuffer = buffer.subarray(0, validLength);
+          content = validBuffer.toString('utf8');
+        }
+
+        // Split content into lines and extract only the requested lines
+        const lines = content.split('\n');
+        const result = [];
+        for (const lineNum of lineNumbers) {
+          // Convert to 0-based index and check bounds
+          const index = lineNum - 1;
+          if (index >= 0 && index < lines.length) {
+            result.push(lines[index]);
+          }
+        }
+        return result.join('\n');
+      } finally {
+        await fd.close();
+      }
+    } finally {
+      release();
+    }
+  }
+}
+
+/**
+ * QueryManager - Handles all query operations and strategies
+ * 
+ * Responsibilities:
+ * - find(), findOne(), count(), query()
+ * - findWithStreaming(), findWithIndexed()
+ * - matchesCriteria(), extractQueryFields()
+ * - Query strategies (INDEXED vs STREAMING)
+ * - Result estimation
+ */
+
+class QueryManager {
+  constructor(database) {
+    this.database = database;
+    this.opts = database.opts;
+    this.indexManager = database.indexManager;
+    this.fileHandler = database.fileHandler;
+    this.serializer = database.serializer;
+    this.usageStats = database.usageStats || {
+      totalQueries: 0,
+      indexedQueries: 0,
+      streamingQueries: 0,
+      indexedAverageTime: 0,
+      streamingAverageTime: 0
+    };
+  }
+
+  /**
+   * Main find method with strategy selection
+   * @param {Object} criteria - Query criteria
+   * @param {Object} options - Query options
+   * @returns {Promise<Array>} - Query results
+   */
+  async find(criteria, options = {}) {
+    if (this.database.destroyed) throw new Error('Database is destroyed');
+    if (!this.database.initialized) await this.database.init();
+
+    // Rebuild indexes if needed (when index was corrupted/missing)
+    await this.database._rebuildIndexesIfNeeded();
+
+    // Manual save is now the responsibility of the application
+
+    // Preprocess query to handle array field syntax automatically
+    const processedCriteria = this.preprocessQuery(criteria);
+    const finalCriteria = processedCriteria;
+
+    // Validate strict indexed mode before processing
+    if (this.opts.indexedQueryMode === 'strict') {
+      this.validateStrictQuery(finalCriteria, options);
+    }
+    const startTime = Date.now();
+    this.usageStats.totalQueries++;
+    try {
+      // Decide which strategy to use
+      const strategy = this.shouldUseStreaming(finalCriteria, options);
+      let results = [];
+      if (strategy === 'streaming') {
+        results = await this.findWithStreaming(finalCriteria, options);
+        this.usageStats.streamingQueries++;
+        this.updateAverageTime('streaming', Date.now() - startTime);
+      } else {
+        results = await this.findWithIndexed(finalCriteria, options);
+        this.usageStats.indexedQueries++;
+        this.updateAverageTime('indexed', Date.now() - startTime);
+      }
+      if (this.opts.debugMode) {
+        const time = Date.now() - startTime;
+        console.log(`⏱️ Query completed in ${time}ms using ${strategy} strategy`);
+        console.log(`📊 Results: ${results.length} records`);
+        console.log(`📊 Results type: ${typeof results}, isArray: ${Array.isArray(results)}`);
+      }
+      return results;
+    } catch (error) {
+      if (this.opts.debugMode) {
+        console.error('❌ Query failed:', error);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Find one record
+   * @param {Object} criteria - Query criteria
+   * @param {Object} options - Query options
+   * @returns {Promise<Object|null>} - First matching record or null
+   */
+  async findOne(criteria, options = {}) {
+    if (this.database.destroyed) throw new Error('Database is destroyed');
+    if (!this.database.initialized) await this.database.init();
+    // Manual save is now the responsibility of the application
+
+    // Preprocess query to handle array field syntax automatically
+    const processedCriteria = this.preprocessQuery(criteria);
+
+    // Validate strict indexed mode before processing
+    if (this.opts.indexedQueryMode === 'strict') {
+      this.validateStrictQuery(processedCriteria, options);
+    }
+    const startTime = Date.now();
+    this.usageStats.totalQueries++;
+    try {
+      // Decide which strategy to use
+      const strategy = this.shouldUseStreaming(processedCriteria, options);
+      let results = [];
+      if (strategy === 'streaming') {
+        results = await this.findWithStreaming(processedCriteria, {
+          ...options,
+          limit: 1
+        });
+        this.usageStats.streamingQueries++;
+        this.updateAverageTime('streaming', Date.now() - startTime);
+      } else {
+        results = await this.findWithIndexed(processedCriteria, {
+          ...options,
+          limit: 1
+        });
+        this.usageStats.indexedQueries++;
+        this.updateAverageTime('indexed', Date.now() - startTime);
+      }
+      if (this.opts.debugMode) {
+        const time = Date.now() - startTime;
+        console.log(`⏱️ findOne completed in ${time}ms using ${strategy} strategy`);
+        console.log(`📊 Results: ${results.length} record(s)`);
+      }
+
+      // Return the first result or null if no results found
+      return results.length > 0 ? results[0] : null;
+    } catch (error) {
+      if (this.opts.debugMode) {
+        console.error('❌ findOne failed:', error);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Count records matching criteria
+   * @param {Object} criteria - Query criteria
+   * @param {Object} options - Query options
+   * @returns {Promise<number>} - Count of matching records
+   */
+  async count(criteria, options = {}) {
+    if (this.database.destroyed) throw new Error('Database is destroyed');
+    if (!this.database.initialized) await this.database.init();
+
+    // Rebuild indexes if needed (when index was corrupted/missing)
+    await this.database._rebuildIndexesIfNeeded();
+
+    // Manual save is now the responsibility of the application
+
+    // Validate strict indexed mode before processing
+    if (this.opts.indexedQueryMode === 'strict') {
+      this.validateStrictQuery(criteria, options);
+    }
+
+    // Use the same strategy as find method
+    const strategy = this.shouldUseStreaming(criteria, options);
+    let count = 0;
+    if (strategy === 'streaming') {
+      // Use streaming approach for non-indexed fields or large result sets
+      const results = await this.findWithStreaming(criteria, options);
+      count = results.length;
+    } else {
+      // OPTIMIZATION: For indexed strategy, use indexManager.query().size directly
+      // This avoids reading actual records from the file - much faster!
+      const lineNumbers = this.indexManager.query(criteria, options);
+      if (lineNumbers.size === 0) {
+        const missingIndexedFields = this._getIndexedFieldsWithMissingData(criteria);
+        if (missingIndexedFields.length > 0 && this._hasAnyRecords()) {
+          // Try to rebuild index before falling back to streaming (only if allowIndexRebuild is true)
+          if (this.database.opts.allowIndexRebuild) {
+            if (this.opts.debugMode) {
+              console.log(`⚠️ Indexed count returned 0 because index data is missing for: ${missingIndexedFields.join(', ')}. Attempting index rebuild...`);
+            }
+            this.database._indexRebuildNeeded = true;
+            await this.database._rebuildIndexesIfNeeded();
+
+            // Retry indexed query after rebuild
+            const retryLineNumbers = this.indexManager.query(criteria, options);
+            if (retryLineNumbers.size > 0) {
+              if (this.opts.debugMode) {
+                console.log(`✅ Index rebuild successful, using indexed strategy.`);
+              }
+              count = retryLineNumbers.size;
+            } else {
+              // Still no results after rebuild, fall back to streaming
+              if (this.opts.debugMode) {
+                console.log(`⚠️ Index rebuild did not help, falling back to streaming count.`);
+              }
+              const streamingResults = await this.findWithStreaming(criteria, {
+                ...options,
+                forceFullScan: true
+              });
+              count = streamingResults.length;
+            }
+          } else {
+            // allowIndexRebuild is false, fall back to streaming
+            if (this.opts.debugMode) {
+              console.log(`⚠️ Indexed count returned 0 because index data is missing for: ${missingIndexedFields.join(', ')}. Falling back to streaming count.`);
+            }
+            const streamingResults = await this.findWithStreaming(criteria, {
+              ...options,
+              forceFullScan: true
+            });
+            count = streamingResults.length;
+          }
+        } else {
+          count = 0;
+        }
+      } else {
+        count = lineNumbers.size;
+      }
+    }
+    return count;
+  }
+
+  /**
+   * Compatibility method that redirects to find
+   * @param {Object} criteria - Query criteria
+   * @param {Object} options - Query options
+   * @returns {Promise<Array>} - Query results
+   */
+  async query(criteria, options = {}) {
+    return this.find(criteria, options);
+  }
+
+  /**
+   * Find using streaming strategy with pre-filtering optimization
+   * @param {Object} criteria - Query criteria
+   * @param {Object} options - Query options
+   * @returns {Promise<Array>} - Query results
+   */
+  async findWithStreaming(criteria, options = {}) {
+    const streamingOptions = {
+      ...options
+    };
+    const forceFullScan = streamingOptions.forceFullScan === true;
+    delete streamingOptions.forceFullScan;
+    if (this.opts.debugMode) {
+      if (forceFullScan) {
+        console.log('🌊 Using streaming strategy (forced full scan to bypass missing index data)');
+      } else {
+        console.log('🌊 Using streaming strategy');
+      }
+    }
+    if (!forceFullScan) {
+      // OPTIMIZATION: Try to use indices for pre-filtering when possible
+      const indexableFields = this._getIndexableFields(criteria);
+      if (indexableFields.length > 0) {
+        if (this.opts.debugMode) {
+          console.log(`🌊 Using pre-filtered streaming with ${indexableFields.length} indexable fields`);
+        }
+
+        // Use indices to pre-filter and reduce streaming scope
+        const preFilteredLines = this.indexManager.query(this._extractIndexableCriteria(criteria), streamingOptions);
+
+        // Stream only the pre-filtered records
+        return this._streamPreFilteredRecords(preFilteredLines, criteria, streamingOptions);
+      }
+    }
+
+    // Fallback to full streaming
+    if (this.opts.debugMode) {
+      console.log('🌊 Using full streaming (no indexable fields found or forced)');
+    }
+    return this._streamAllRecords(criteria, streamingOptions);
+  }
+
+  /**
+   * Get indexable fields from criteria
+   * @param {Object} criteria - Query criteria
+   * @returns {Array} - Array of indexable field names
+   */
+  _getIndexableFields(criteria) {
+    const indexableFields = [];
+    if (!criteria || typeof criteria !== 'object') {
+      return indexableFields;
+    }
+
+    // Handle $and conditions
+    if (criteria.$and && Array.isArray(criteria.$and)) {
+      for (const andCondition of criteria.$and) {
+        indexableFields.push(...this._getIndexableFields(andCondition));
+      }
+    }
+
+    // Handle regular field conditions
+    for (const [field, condition] of Object.entries(criteria)) {
+      if (field.startsWith('$')) continue; // Skip logical operators
+
+      // RegExp conditions cannot be pre-filtered using indices
+      if (condition instanceof RegExp) {
+        continue;
+      }
+      if (this.indexManager.opts.indexes && this.indexManager.opts.indexes[field]) {
+        indexableFields.push(field);
+      }
+    }
+    return [...new Set(indexableFields)]; // Remove duplicates
+  }
+
+  /**
+   * Extract indexable criteria for pre-filtering
+   * @param {Object} criteria - Full query criteria
+   * @returns {Object} - Criteria with only indexable fields
+   */
+  _extractIndexableCriteria(criteria) {
+    if (!criteria || typeof criteria !== 'object') {
+      return {};
+    }
+    const indexableCriteria = {};
+
+    // Handle $and conditions
+    if (criteria.$and && Array.isArray(criteria.$and)) {
+      const indexableAndConditions = criteria.$and.map(andCondition => this._extractIndexableCriteria(andCondition)).filter(condition => Object.keys(condition).length > 0);
+      if (indexableAndConditions.length > 0) {
+        indexableCriteria.$and = indexableAndConditions;
+      }
+    }
+
+    // Handle $not operator - include it if it can be processed by IndexManager
+    if (criteria.$not && typeof criteria.$not === 'object') {
+      // Check if $not condition contains only indexable fields
+      const notFields = Object.keys(criteria.$not);
+      const allNotFieldsIndexed = notFields.every(field => this.indexManager.opts.indexes && this.indexManager.opts.indexes[field]);
+      if (allNotFieldsIndexed && notFields.length > 0) {
+        // Extract indexable criteria from $not condition
+        const indexableNotCriteria = this._extractIndexableCriteria(criteria.$not);
+        if (Object.keys(indexableNotCriteria).length > 0) {
+          indexableCriteria.$not = indexableNotCriteria;
+        }
+      }
+    }
+
+    // Handle regular field conditions
+    for (const [field, condition] of Object.entries(criteria)) {
+      if (field.startsWith('$')) continue; // Skip logical operators (already handled above)
+
+      // RegExp conditions cannot be pre-filtered using indices
+      if (condition instanceof RegExp) {
+        continue;
+      }
+      if (this.indexManager.opts.indexes && this.indexManager.opts.indexes[field]) {
+        indexableCriteria[field] = condition;
+      }
+    }
+    return indexableCriteria;
+  }
+
+  /**
+   * Determine whether the database currently has any records (persisted or pending)
+   * @returns {boolean}
+   */
+  _hasAnyRecords() {
+    if (!this.database) {
+      return false;
+    }
+    if (Array.isArray(this.database.offsets) && this.database.offsets.length > 0) {
+      return true;
+    }
+    if (Array.isArray(this.database.writeBuffer) && this.database.writeBuffer.length > 0) {
+      return true;
+    }
+    if (typeof this.database.length === 'number' && this.database.length > 0) {
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Extract all indexed fields referenced in the criteria
+   * @param {Object} criteria
+   * @param {Set<string>} accumulator
+   * @returns {Array<string>}
+   */
+  _extractIndexedFields(criteria, accumulator = new Set()) {
+    if (!criteria) {
+      return Array.from(accumulator);
+    }
+    if (Array.isArray(criteria)) {
+      for (const item of criteria) {
+        this._extractIndexedFields(item, accumulator);
+      }
+      return Array.from(accumulator);
+    }
+    if (typeof criteria !== 'object') {
+      return Array.from(accumulator);
+    }
+    for (const [key, value] of Object.entries(criteria)) {
+      if (key.startsWith('$')) {
+        this._extractIndexedFields(value, accumulator);
+        continue;
+      }
+      accumulator.add(key);
+      if (Array.isArray(value)) {
+        for (const nested of value) {
+          this._extractIndexedFields(nested, accumulator);
+        }
+      }
+    }
+    return Array.from(accumulator);
+  }
+
+  /**
+   * Identify indexed fields present in criteria whose index data is missing
+   * @param {Object} criteria
+   * @returns {Array<string>}
+   */
+  _getIndexedFieldsWithMissingData(criteria) {
+    if (!this.indexManager || !criteria) {
+      return [];
+    }
+    const indexedFields = this._extractIndexedFields(criteria);
+    const missing = [];
+    for (const field of indexedFields) {
+      if (!this.indexManager.isFieldIndexed(field)) {
+        continue;
+      }
+      if (!this.indexManager.hasUsableIndexData(field)) {
+        missing.push(field);
+      }
+    }
+    return missing;
+  }
+
+  /**
+   * OPTIMIZATION 4: Stream pre-filtered records using line numbers from indices with partial index optimization
+   * @param {Set} preFilteredLines - Line numbers from index query
+   * @param {Object} criteria - Full query criteria
+   * @param {Object} options - Query options
+   * @returns {Promise<Array>} - Query results
+   */
+  async _streamPreFilteredRecords(preFilteredLines, criteria, options = {}) {
+    if (preFilteredLines.size === 0) {
+      return [];
+    }
+    const results = [];
+    const lineNumbers = Array.from(preFilteredLines);
+
+    // OPTIMIZATION 4: Sort line numbers for efficient file reading
+    lineNumbers.sort((a, b) => a - b);
+
+    // OPTIMIZATION 4: Use batch reading for better performance
+    const batchSize = Math.min(1000, lineNumbers.length); // Read in batches of 1000
+    const batches = [];
+    for (let i = 0; i < lineNumbers.length; i += batchSize) {
+      batches.push(lineNumbers.slice(i, i + batchSize));
+    }
+    for (const batch of batches) {
+      // OPTIMIZATION: Use ranges instead of reading entire file
+      const ranges = this.database.getRanges(batch);
+      const groupedRanges = await this.fileHandler.groupedRanges(ranges);
+      const fs = await import('fs');
+      const fd = await fs.promises.open(this.fileHandler.file, 'r');
+      try {
+        for (const groupedRange of groupedRanges) {
+          var _iteratorAbruptCompletion = false;
+          var _didIteratorError = false;
+          var _iteratorError;
+          try {
+            for (var _iterator = _asyncIterator(this.fileHandler.readGroupedRange(groupedRange, fd)), _step; _iteratorAbruptCompletion = !(_step = await _iterator.next()).done; _iteratorAbruptCompletion = false) {
+              const row = _step.value;
+              {
+                if (row.line && row.line.trim()) {
+                  try {
+                    // CRITICAL FIX: Use serializer.deserialize instead of JSON.parse to handle array format
+                    const record = this.database.serializer.deserialize(row.line);
+
+                    // OPTIMIZATION 4: Use optimized criteria matching for pre-filtered records
+                    if (this._matchesCriteriaOptimized(record, criteria, options)) {
+                      // SPACE OPTIMIZATION: Restore term IDs to terms for user (unless disabled)
+                      const recordWithTerms = options.restoreTerms !== false ? this.database.restoreTermIdsAfterDeserialization(record) : record;
+                      results.push(recordWithTerms);
+
+                      // Check limit
+                      if (options.limit && results.length >= options.limit) {
+                        return this._applyOrdering(results, options);
+                      }
+                    }
+                  } catch (error) {
+                    // Skip invalid lines
+                    continue;
+                  }
+                }
+              }
+            }
+          } catch (err) {
+            _didIteratorError = true;
+            _iteratorError = err;
+          } finally {
+            try {
+              if (_iteratorAbruptCompletion && _iterator.return != null) {
+                await _iterator.return();
+              }
+            } finally {
+              if (_didIteratorError) {
+                throw _iteratorError;
+              }
+            }
+          }
+        }
+      } finally {
+        await fd.close();
+      }
+    }
+    return this._applyOrdering(results, options);
+  }
+
+  /**
+   * OPTIMIZATION 4: Optimized criteria matching for pre-filtered records
+   * @param {Object} record - Record to check
+   * @param {Object} criteria - Filter criteria
+   * @param {Object} options - Query options
+   * @returns {boolean} - True if matches
+   */
+  _matchesCriteriaOptimized(record, criteria, options = {}) {
+    if (!criteria || Object.keys(criteria).length === 0) {
+      return true;
+    }
+
+    // Handle $not operator at the top level
+    if (criteria.$not && typeof criteria.$not === 'object') {
+      // For $not conditions, we need to negate the result
+      // IMPORTANT: For $not conditions, we should NOT skip pre-filtered fields
+      // because we need to evaluate the actual field values to determine exclusion
+
+      // Use the regular matchesCriteria method for $not conditions to ensure proper field evaluation
+      const notResult = this.matchesCriteria(record, criteria.$not, options);
+      return !notResult;
+    }
+
+    // OPTIMIZATION 4: Skip indexable fields since they were already pre-filtered
+    const indexableFields = this._getIndexableFields(criteria);
+
+    // Handle explicit logical operators at the top level
+    if (criteria.$or && Array.isArray(criteria.$or)) {
+      let orMatches = false;
+      for (const orCondition of criteria.$or) {
+        if (this._matchesCriteriaOptimized(record, orCondition, options)) {
+          orMatches = true;
+          break;
+        }
+      }
+      if (!orMatches) {
+        return false;
+      }
+    } else if (criteria.$and && Array.isArray(criteria.$and)) {
+      for (const andCondition of criteria.$and) {
+        if (!this._matchesCriteriaOptimized(record, andCondition, options)) {
+          return false;
+        }
+      }
+    }
+
+    // Handle individual field conditions (exclude logical operators and pre-filtered fields)
+    for (const [field, condition] of Object.entries(criteria)) {
+      if (field.startsWith('$')) continue;
+
+      // OPTIMIZATION 4: Skip indexable fields that were already pre-filtered
+      if (indexableFields.includes(field)) {
+        continue;
+      }
+      if (!this.matchesFieldCondition(record, field, condition, options)) {
+        return false;
+      }
+    }
+    if (criteria.$or && Array.isArray(criteria.$or)) {
+      return true;
+    }
+    return true;
+  }
+
+  /**
+   * OPTIMIZATION 4: Apply ordering to results
+   * @param {Array} results - Results to order
+   * @param {Object} options - Query options
+   * @returns {Array} - Ordered results
+   */
+  _applyOrdering(results, options) {
+    if (options.orderBy) {
+      const [field, direction = 'asc'] = options.orderBy.split(' ');
+      results.sort((a, b) => {
+        if (a[field] > b[field]) return direction === 'asc' ? 1 : -1;
+        if (a[field] < b[field]) return direction === 'asc' ? -1 : 1;
+        return 0;
+      });
+    }
+    return results;
+  }
+
+  /**
+   * Stream all records (fallback method)
+   * @param {Object} criteria - Query criteria
+   * @param {Object} options - Query options
+   * @returns {Promise<Array>} - Query results
+   */
+  async _streamAllRecords(criteria, options = {}) {
+    const memoryLimit = options.limit || undefined;
+    const streamingOptions = {
+      ...options,
+      limit: memoryLimit
+    };
+    const results = await this.fileHandler.readWithStreaming(criteria, streamingOptions, (record, criteria) => {
+      return this.matchesCriteria(record, criteria, options);
+    }, this.serializer || null);
+
+    // Apply ordering if specified
+    if (options.orderBy) {
+      const [field, direction = 'asc'] = options.orderBy.split(' ');
+      results.sort((a, b) => {
+        if (a[field] > b[field]) return direction === 'asc' ? 1 : -1;
+        if (a[field] < b[field]) return direction === 'asc' ? -1 : 1;
+        return 0;
+      });
+    }
+    return results;
+  }
+
+  /**
+   * Find using indexed search strategy with real streaming
+   * @param {Object} criteria - Query criteria
+   * @param {Object} options - Query options
+   * @returns {Promise<Array>} - Query results
+   */
+  async findWithIndexed(criteria, options = {}) {
+    if (this.opts.debugMode) {
+      console.log('📊 Using indexed strategy with real streaming');
+    }
+    let results = [];
+    const limit = options.limit; // No default limit - return all results unless explicitly limited
+
+    // Use IndexManager to get line numbers, then read specific records
+    const lineNumbers = this.indexManager.query(criteria, options);
+    if (this.opts.debugMode) {
+      console.log(`🔍 IndexManager returned ${lineNumbers.size} line numbers:`, Array.from(lineNumbers));
+    }
+    if (lineNumbers.size === 0) {
+      const missingIndexedFields = this._getIndexedFieldsWithMissingData(criteria);
+      if (missingIndexedFields.length > 0 && this._hasAnyRecords()) {
+        // Try to rebuild index before falling back to streaming (only if allowIndexRebuild is true)
+        if (this.database.opts.allowIndexRebuild) {
+          if (this.opts.debugMode) {
+            console.log(`⚠️ Indexed query returned no results because index data is missing for: ${missingIndexedFields.join(', ')}. Attempting index rebuild...`);
+          }
+          this.database._indexRebuildNeeded = true;
+          await this.database._rebuildIndexesIfNeeded();
+
+          // Retry indexed query after rebuild
+          const retryLineNumbers = this.indexManager.query(criteria, options);
+          if (retryLineNumbers.size > 0) {
+            if (this.opts.debugMode) {
+              console.log(`✅ Index rebuild successful, using indexed strategy.`);
+            }
+            // Update lineNumbers to use rebuilt index results
+            lineNumbers.clear();
+            for (const lineNumber of retryLineNumbers) {
+              lineNumbers.add(lineNumber);
+            }
+          } else {
+            // Still no results after rebuild, fall back to streaming
+            if (this.opts.debugMode) {
+              console.log(`⚠️ Index rebuild did not help, falling back to streaming.`);
+            }
+            return this.findWithStreaming(criteria, {
+              ...options,
+              forceFullScan: true
+            });
+          }
+        } else {
+          // allowIndexRebuild is false, fall back to streaming
+          if (this.opts.debugMode) {
+            console.log(`⚠️ Indexed query returned no results because index data is missing for: ${missingIndexedFields.join(', ')}. Falling back to streaming.`);
+          }
+          return this.findWithStreaming(criteria, {
+            ...options,
+            forceFullScan: true
+          });
+        }
+      }
+    }
+
+    // Read specific records using the line numbers
+    if (lineNumbers.size > 0) {
+      const lineNumbersArray = Array.from(lineNumbers);
+      const persistedCount = Array.isArray(this.database.offsets) ? this.database.offsets.length : 0;
+
+      // Separate lineNumbers into file records and writeBuffer records
+      const fileLineNumbers = [];
+      const writeBufferLineNumbers = [];
+      for (const lineNumber of lineNumbersArray) {
+        if (lineNumber >= persistedCount) {
+          // This lineNumber points to writeBuffer
+          writeBufferLineNumbers.push(lineNumber);
+        } else {
+          // This lineNumber points to file
+          fileLineNumbers.push(lineNumber);
+        }
+      }
+
+      // Read records from file
+      if (fileLineNumbers.length > 0) {
+        const ranges = this.database.getRanges(fileLineNumbers);
+        if (ranges.length > 0) {
+          const groupedRanges = await this.database.fileHandler.groupedRanges(ranges);
+          const fs = await import('fs');
+          const fd = await fs.promises.open(this.database.fileHandler.file, 'r');
+          try {
+            for (const groupedRange of groupedRanges) {
+              var _iteratorAbruptCompletion2 = false;
+              var _didIteratorError2 = false;
+              var _iteratorError2;
+              try {
+                for (var _iterator2 = _asyncIterator(this.database.fileHandler.readGroupedRange(groupedRange, fd)), _step2; _iteratorAbruptCompletion2 = !(_step2 = await _iterator2.next()).done; _iteratorAbruptCompletion2 = false) {
+                  const row = _step2.value;
+                  {
+                    try {
+                      const record = this.database.serializer.deserialize(row.line);
+                      const recordWithTerms = options.restoreTerms !== false ? this.database.restoreTermIdsAfterDeserialization(record) : record;
+                      results.push(recordWithTerms);
+                      if (limit && results.length >= limit) break;
+                    } catch (error) {
+                      // Skip invalid lines
+                    }
+                  }
+                }
+              } catch (err) {
+                _didIteratorError2 = true;
+                _iteratorError2 = err;
+              } finally {
+                try {
+                  if (_iteratorAbruptCompletion2 && _iterator2.return != null) {
+                    await _iterator2.return();
+                  }
+                } finally {
+                  if (_didIteratorError2) {
+                    throw _iteratorError2;
+                  }
+                }
+              }
+              if (limit && results.length >= limit) break;
+            }
+          } finally {
+            await fd.close();
+          }
+        }
+      }
+
+      // Read records from writeBuffer
+      if (writeBufferLineNumbers.length > 0 && this.database.writeBuffer) {
+        for (const lineNumber of writeBufferLineNumbers) {
+          if (limit && results.length >= limit) break;
+          const writeBufferIndex = lineNumber - persistedCount;
+          if (writeBufferIndex >= 0 && writeBufferIndex < this.database.writeBuffer.length) {
+            const record = this.database.writeBuffer[writeBufferIndex];
+            if (record) {
+              const recordWithTerms = options.restoreTerms !== false ? this.database.restoreTermIdsAfterDeserialization(record) : record;
+              results.push(recordWithTerms);
+            }
+          }
+        }
+      }
+    }
+    if (options.orderBy) {
+      const [field, direction = 'asc'] = options.orderBy.split(' ');
+      results.sort((a, b) => {
+        if (a[field] > b[field]) return direction === 'asc' ? 1 : -1;
+        if (a[field] < b[field]) return direction === 'asc' ? -1 : 1;
+        return 0;
+      });
+    }
+    return results;
+  }
+
+  /**
+   * Check if a record matches criteria
+   * @param {Object} record - Record to check
+   * @param {Object} criteria - Filter criteria
+   * @param {Object} options - Query options (for caseInsensitive, etc.)
+   * @returns {boolean} - True if matches
+   */
+  matchesCriteria(record, criteria, options = {}) {
+    if (!criteria || Object.keys(criteria).length === 0) {
+      return true;
+    }
+
+    // Handle explicit logical operators at the top level
+    if (criteria.$or && Array.isArray(criteria.$or)) {
+      let orMatches = false;
+      for (const orCondition of criteria.$or) {
+        if (this.matchesCriteria(record, orCondition, options)) {
+          orMatches = true;
+          break;
+        }
+      }
+
+      // If $or doesn't match, return false immediately
+      if (!orMatches) {
+        return false;
+      }
+
+      // If $or matches, continue to check other conditions if they exist
+      // Don't return true yet - we need to check other conditions
+    } else if (criteria.$and && Array.isArray(criteria.$and)) {
+      for (const andCondition of criteria.$and) {
+        if (!this.matchesCriteria(record, andCondition, options)) {
+          return false;
+        }
+      }
+      // $and matches, continue to check other conditions if they exist
+    }
+
+    // Handle individual field conditions and $not operator
+    for (const [field, condition] of Object.entries(criteria)) {
+      // Skip logical operators that are handled above
+      if (field.startsWith('$') && field !== '$not') {
+        continue;
+      }
+      if (field === '$not') {
+        // Handle $not operator - it should negate the result of its condition
+        if (typeof condition === 'object' && condition !== null) {
+          // Empty $not condition should not exclude anything
+          if (Object.keys(condition).length === 0) {
+            continue; // Don't exclude anything
+          }
+
+          // Check if the $not condition matches - if it does, this record should be excluded
+          if (this.matchesCriteria(record, condition, options)) {
+            return false; // Exclude this record
+          }
+        }
+      } else {
+        // Handle regular field conditions
+        if (!this.matchesFieldCondition(record, field, condition, options)) {
+          return false;
+        }
+      }
+    }
+
+    // If we have $or conditions and they matched, return true
+    if (criteria.$or && Array.isArray(criteria.$or)) {
+      return true;
+    }
+
+    // For other cases (no $or, or $and, or just field conditions), return true if we got this far
+    return true;
+  }
+
+  /**
+   * Check if a field matches a condition
+   * @param {Object} record - Record to check
+   * @param {string} field - Field name
+   * @param {*} condition - Condition to match
+   * @param {Object} options - Query options
+   * @returns {boolean} - True if matches
+   */
+  matchesFieldCondition(record, field, condition, options = {}) {
+    const value = record[field];
+
+    // Debug logging for all field conditions
+    if (this.database.opts.debugMode) {
+      console.log(`🔍 Checking field '${field}':`, {
+        value,
+        condition,
+        record: record.name || record.id
+      });
+    }
+
+    // Debug logging for term mapping fields
+    if (this.database.opts.termMapping && Object.keys(this.database.opts.indexes || {}).includes(field)) {
+      if (this.database.opts.debugMode) {
+        console.log(`🔍 Checking term mapping field '${field}':`, {
+          value,
+          condition,
+          record: record.name || record.id
+        });
+      }
+    }
+
+    // Handle null/undefined values
+    if (value === null || value === undefined) {
+      return condition === null || condition === undefined;
+    }
+
+    // Handle regex conditions (MUST come before object check since RegExp is an object)
+    if (condition instanceof RegExp) {
+      // For array fields, test regex against each element
+      if (Array.isArray(value)) {
+        return value.some(element => condition.test(String(element)));
+      }
+      // For non-array fields, test regex against the value directly
+      return condition.test(String(value));
+    }
+
+    // Handle array conditions
+    if (Array.isArray(condition)) {
+      // For array fields, check if any element in the field matches any element in the condition
+      if (Array.isArray(value)) {
+        return condition.some(condVal => value.includes(condVal));
+      }
+      // For non-array fields, check if value is in condition
+      return condition.includes(value);
+    }
+
+    // Handle object conditions (operators)
+    if (typeof condition === 'object' && !Array.isArray(condition)) {
+      for (const [operator, operatorValue] of Object.entries(condition)) {
+        const normalizedOperator = normalizeOperator(operator);
+        if (!this.matchesOperator(value, normalizedOperator, operatorValue, options)) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    // Handle case-insensitive string comparison
+    if (options.caseInsensitive && typeof value === 'string' && typeof condition === 'string') {
+      return value.toLowerCase() === condition.toLowerCase();
+    }
+
+    // Handle direct array field search (e.g., { nameTerms: 'channel' })
+    if (Array.isArray(value) && typeof condition === 'string') {
+      return value.includes(condition);
+    }
+
+    // Simple equality
+    return value === condition;
+  }
+
+  /**
+   * Check if a value matches an operator condition
+   * @param {*} value - Value to check
+   * @param {string} operator - Operator
+   * @param {*} operatorValue - Operator value
+   * @param {Object} options - Query options
+   * @returns {boolean} - True if matches
+   */
+  matchesOperator(value, operator, operatorValue, options = {}) {
+    switch (operator) {
+      case '$eq':
+        return value === operatorValue;
+      case '$gt':
+        return value > operatorValue;
+      case '$gte':
+        return value >= operatorValue;
+      case '$lt':
+        return value < operatorValue;
+      case '$lte':
+        return value <= operatorValue;
+      case '$ne':
+        return value !== operatorValue;
+      case '$not':
+        // $not operator should be handled at the criteria level, not field level
+        // This is a fallback for backward compatibility
+        return value !== operatorValue;
+      case '$in':
+        if (Array.isArray(value)) {
+          // For array fields, check if any element in the array matches any value in operatorValue
+          return Array.isArray(operatorValue) && operatorValue.some(opVal => value.includes(opVal));
+        } else {
+          // For non-array fields, check if value is in operatorValue
+          return Array.isArray(operatorValue) && operatorValue.includes(value);
+        }
+      case '$nin':
+        if (Array.isArray(value)) {
+          // For array fields, check if NO elements in the array match any value in operatorValue
+          return Array.isArray(operatorValue) && !operatorValue.some(opVal => value.includes(opVal));
+        } else {
+          // For non-array fields, check if value is not in operatorValue
+          return Array.isArray(operatorValue) && !operatorValue.includes(value);
+        }
+      case '$regex':
+        const regex = new RegExp(operatorValue, options.caseInsensitive ? 'i' : '');
+        // For array fields, test regex against each element
+        if (Array.isArray(value)) {
+          return value.some(element => regex.test(String(element)));
+        }
+        // For non-array fields, test regex against the value directly
+        return regex.test(String(value));
+      case '$contains':
+        if (Array.isArray(value)) {
+          return value.includes(operatorValue);
+        }
+        return String(value).includes(String(operatorValue));
+      case '$all':
+        if (!Array.isArray(value) || !Array.isArray(operatorValue)) {
+          return false;
+        }
+        return operatorValue.every(item => value.includes(item));
+      case '$exists':
+        return operatorValue ? value !== undefined && value !== null : value === undefined || value === null;
+      case '$size':
+        if (Array.isArray(value)) {
+          return value.length === operatorValue;
+        }
+        return false;
+      default:
+        return false;
+    }
+  }
+
+  /**
+   * Preprocess query to handle array field syntax automatically
+   * @param {Object} criteria - Query criteria
+   * @returns {Object} - Processed criteria
+   */
+  preprocessQuery(criteria) {
+    if (!criteria || typeof criteria !== 'object') {
+      return criteria;
+    }
+    const processed = {};
+    for (const [field, value] of Object.entries(criteria)) {
+      // Check if this is a term mapping field
+      const isTermMappingField = this.database.opts.termMapping && this.database.termManager && this.database.termManager.termMappingFields && this.database.termManager.termMappingFields.includes(field);
+      if (isTermMappingField) {
+        // Handle term mapping field queries
+        if (typeof value === 'string') {
+          // Convert term to $in query for term mapping fields
+          processed[field] = {
+            $in: [value]
+          };
+        } else if (Array.isArray(value)) {
+          // Convert array to $in query
+          processed[field] = {
+            $in: value
+          };
+        } else if (value && typeof value === 'object') {
+          // Handle special query operators for term mapping
+          if (value.$in) {
+            processed[field] = {
+              $in: value.$in
+            };
+          } else if (value.$all) {
+            processed[field] = {
+              $all: value.$all
+            };
+          } else {
+            processed[field] = value;
+          }
+        } else {
+          // Invalid value for term mapping field
+          throw new Error(`Invalid query for array field '${field}'. Use { $in: [value] } syntax or direct value.`);
+        }
+        if (this.database.opts.debugMode) {
+          console.log(`🔍 Processed term mapping query for field '${field}':`, processed[field]);
+        }
+      } else {
+        // Check if this field is defined as an array in the schema
+        const indexes = this.opts.indexes || {};
+        const fieldConfig = indexes[field];
+        const isArrayField = fieldConfig && (Array.isArray(fieldConfig) && fieldConfig.includes('array') || fieldConfig === 'array:string' || fieldConfig === 'array:number' || fieldConfig === 'array:boolean');
+        if (isArrayField) {
+          // Handle array field queries
+          if (typeof value === 'string' || typeof value === 'number') {
+            // Convert direct value to $in query for array fields
+            processed[field] = {
+              $in: [value]
+            };
+          } else if (Array.isArray(value)) {
+            // Convert array to $in query
+            processed[field] = {
+              $in: value
+            };
+          } else if (value && typeof value === 'object') {
+            // Already properly formatted query object
+            processed[field] = value;
+          } else {
+            // Invalid value for array field
+            throw new Error(`Invalid query for array field '${field}'. Use { $in: [value] } syntax or direct value.`);
+          }
+        } else {
+          // Non-array field, keep as is
+          processed[field] = value;
+        }
+      }
+    }
+    return processed;
+  }
+
+  /**
+   * Determine which query strategy to use
+   * @param {Object} criteria - Query criteria
+   * @param {Object} options - Query options
+   * @returns {string} - 'streaming' or 'indexed'
+   */
+  shouldUseStreaming(criteria, options = {}) {
+    const {
+      limit
+    } = options; // No default limit
+    const totalRecords = this.database.length || 0;
+
+    // Strategy 1: Always streaming for queries without criteria
+    if (!criteria || Object.keys(criteria).length === 0) {
+      if (this.opts.debugMode) {
+        console.log('📊 QueryStrategy: STREAMING - No criteria provided');
+      }
+      return 'streaming';
+    }
+
+    // Strategy 2: Check if all fields are indexed and support the operators used
+    // First, check if $not is present at root level - if so, we need to use streaming for proper $not handling
+    if (criteria.$not && !this.opts.termMapping) {
+      if (this.opts.debugMode) {
+        console.log('📊 QueryStrategy: STREAMING - $not operator requires streaming mode');
+      }
+      return 'streaming';
+    }
+
+    // OPTIMIZATION: For term mapping, we can process $not using indices
+    if (criteria.$not && this.opts.termMapping) {
+      // Check if all $not fields are indexed
+      const notFields = Object.keys(criteria.$not);
+      const allNotFieldsIndexed = notFields.every(field => this.indexManager.opts.indexes && this.indexManager.opts.indexes[field]);
+      if (allNotFieldsIndexed) {
+        if (this.opts.debugMode) {
+          console.log('📊 QueryStrategy: INDEXED - $not with term mapping can use indexed strategy');
+        }
+        // Continue to check other conditions instead of forcing streaming
+      } else {
+        if (this.opts.debugMode) {
+          console.log('📊 QueryStrategy: STREAMING - $not fields not all indexed');
+        }
+        return 'streaming';
+      }
+    }
+
+    // Handle $and queries - check if all conditions in $and are indexable
+    if (criteria.$and && Array.isArray(criteria.$and)) {
+      const allAndConditionsIndexed = criteria.$and.every(andCondition => {
+        // Handle $not conditions within $and
+        if (andCondition.$not) {
+          const notFields = Object.keys(andCondition.$not);
+          return notFields.every(field => {
+            if (!this.indexManager.opts.indexes || !this.indexManager.opts.indexes[field]) {
+              return false;
+            }
+            // For term mapping, $not can be processed with indices
+            return this.opts.termMapping && Object.keys(this.opts.indexes || {}).includes(field);
+          });
+        }
+
+        // Handle regular field conditions
+        return Object.keys(andCondition).every(field => {
+          if (!this.indexManager.opts.indexes || !this.indexManager.opts.indexes[field]) {
+            return false;
+          }
+          const condition = andCondition[field];
+
+          // RegExp cannot be efficiently queried using indices - must use streaming
+          if (condition instanceof RegExp) {
+            return false;
+          }
+          if (typeof condition === 'object' && !Array.isArray(condition)) {
+            const operators = Object.keys(condition).map(op => normalizeOperator(op));
+            const indexType = this.indexManager?.opts?.indexes?.[field];
+            const isNumericIndex = indexType === 'number' || indexType === 'auto' || indexType === 'array:number';
+            const disallowedForNumeric = ['$all', '$in', '$not', '$regex', '$contains', '$exists', '$size'];
+            const disallowedDefault = ['$all', '$in', '$gt', '$gte', '$lt', '$lte', '$ne', '$not', '$regex', '$contains', '$exists', '$size'];
+
+            // Check if this is a term mapping field (array:string or string fields with term mapping)
+            const isTermMappingField = this.database.termManager && this.database.termManager.termMappingFields && this.database.termManager.termMappingFields.includes(field);
+            if (isTermMappingField) {
+              const termMappingDisallowed = ['$gt', '$gte', '$lt', '$lte', '$ne', '$regex', '$contains', '$exists', '$size'];
+              return operators.every(op => !termMappingDisallowed.includes(op));
+            } else {
+              const disallowed = isNumericIndex ? disallowedForNumeric : disallowedDefault;
+              return operators.every(op => !disallowed.includes(op));
+            }
+          }
+          return true;
+        });
+      });
+      if (!allAndConditionsIndexed) {
+        if (this.opts.debugMode) {
+          console.log('📊 QueryStrategy: STREAMING - Some $and conditions not indexed or operators not supported');
+        }
+        return 'streaming';
+      }
+    }
+    const allFieldsIndexed = Object.keys(criteria).every(field => {
+      // Skip $and and $not as they're handled separately above
+      if (field === '$and' || field === '$not') return true;
+      if (!this.opts.indexes || !this.opts.indexes[field]) {
+        if (this.opts.debugMode) {
+          console.log(`🔍 Field '${field}' not indexed. Available indexes:`, Object.keys(this.opts.indexes || {}));
+        }
+        return false;
+      }
+
+      // Check if the field uses operators that are supported by IndexManager
+      const condition = criteria[field];
+
+      // RegExp cannot be efficiently queried using indices - must use streaming
+      if (condition instanceof RegExp) {
+        if (this.opts.debugMode) {
+          console.log(`🔍 Field '${field}' uses RegExp - requires streaming strategy`);
+        }
+        return false;
+      }
+      if (typeof condition === 'object' && !Array.isArray(condition)) {
+        const operators = Object.keys(condition).map(op => normalizeOperator(op));
+        if (this.opts.debugMode) {
+          console.log(`🔍 Field '${field}' has operators:`, operators);
+        }
+        const indexType = this.indexManager?.opts?.indexes?.[field];
+        const isNumericIndex = indexType === 'number' || indexType === 'auto' || indexType === 'array:number';
+        const isArrayStringIndex = indexType === 'array:string';
+        const disallowedForNumeric = ['$all', '$in', '$not', '$regex', '$contains', '$exists', '$size'];
+        const disallowedDefault = ['$all', '$in', '$gt', '$gte', '$lt', '$lte', '$ne', '$not', '$regex', '$contains', '$exists', '$size'];
+
+        // Check if this is a term mapping field (array:string or string fields with term mapping)
+        const isTermMappingField = this.database.termManager && this.database.termManager.termMappingFields && this.database.termManager.termMappingFields.includes(field);
+
+        // With term mapping enabled on THIS FIELD, we can support complex operators via partial reads
+        // Also support $all for array:string indexed fields (IndexManager.query supports it via Set intersection)
+        if (isTermMappingField) {
+          const termMappingDisallowed = ['$gt', '$gte', '$lt', '$lte', '$ne', '$regex', '$contains', '$exists', '$size'];
+          return operators.every(op => !termMappingDisallowed.includes(op));
+        } else {
+          let disallowed = isNumericIndex ? disallowedForNumeric : disallowedDefault;
+          // Remove $all from disallowed if field is array:string (IndexManager supports $all via Set intersection)
+          if (isArrayStringIndex) {
+            disallowed = disallowed.filter(op => op !== '$all');
+          }
+          return operators.every(op => !disallowed.includes(op));
+        }
+      }
+      return true;
+    });
+    if (!allFieldsIndexed) {
+      if (this.opts.debugMode) {
+        console.log('📊 QueryStrategy: STREAMING - Some fields not indexed or operators not supported');
+      }
+      return 'streaming';
+    }
+
+    // OPTIMIZATION 2: Hybrid strategy - use pre-filtered streaming when index is empty
+    const indexData = this.indexManager.index.data || {};
+    const hasIndexData = Object.keys(indexData).length > 0;
+    if (!hasIndexData) {
+      // Check if we can use pre-filtered streaming with term mapping
+      if (this.opts.termMapping && this._canUsePreFilteredStreaming(criteria)) {
+        if (this.opts.debugMode) {
+          console.log('📊 QueryStrategy: HYBRID - Using pre-filtered streaming with term mapping');
+        }
+        return 'streaming'; // Will use pre-filtered streaming in findWithStreaming
+      }
+      if (this.opts.debugMode) {
+        console.log('📊 QueryStrategy: STREAMING - Index is empty and no pre-filtering available');
+      }
+      return 'streaming';
+    }
+
+    // Strategy 3: Streaming if limit is very high (only if database has records)
+    if (totalRecords > 0 && limit > totalRecords * this.opts.streamingThreshold) {
+      if (this.opts.debugMode) {
+        console.log(`📊 QueryStrategy: STREAMING - High limit (${limit} > ${Math.round(totalRecords * this.opts.streamingThreshold)})`);
+      }
+      return 'streaming';
+    }
+
+    // Strategy 4: Use indexed strategy when all fields are indexed and streamingThreshold is respected
+    if (this.opts.debugMode) {
+      console.log(`📊 QueryStrategy: INDEXED - All fields indexed, using indexed strategy`);
+    }
+    return 'indexed';
+  }
+
+  /**
+   * Estimate number of results for a query
+   * @param {Object} criteria - Query criteria
+   * @param {number} totalRecords - Total records in database
+   * @returns {number} - Estimated results
+   */
+  estimateQueryResults(criteria, totalRecords) {
+    // If database is empty, return 0
+    if (totalRecords === 0) {
+      if (this.opts.debugMode) {
+        console.log(`📊 Estimation: Database empty → 0 results`);
+      }
+      return 0;
+    }
+    let minResults = Infinity;
+    for (const [field, condition] of Object.entries(criteria)) {
+      // Check if field is indexed
+      if (!this.indexManager.opts.indexes || !this.indexManager.opts.indexes[field]) {
+        // Non-indexed field - assume it could match any record
+        if (this.opts.debugMode) {
+          console.log(`📊 Estimation: ${field} = non-indexed → ~${totalRecords} results`);
+        }
+        return totalRecords;
+      }
+      const fieldIndex = this.indexManager.index.data[field];
+      if (!fieldIndex) {
+        // Non-indexed field - assume it could match any record
+        if (this.opts.debugMode) {
+          console.log(`📊 Estimation: ${field} = non-indexed → ~${totalRecords} results`);
+        }
+        return totalRecords;
+      }
+      let fieldEstimate = 0;
+      if (typeof condition === 'object' && !Array.isArray(condition)) {
+        // Handle different types of operators
+        for (const [operator, value] of Object.entries(condition)) {
+          if (operator === '$all') {
+            // Special handling for $all operator
+            fieldEstimate = this.estimateAllOperator(fieldIndex, value);
+          } else if (['$gt', '$gte', '$lt', '$lte', '$in', '$regex'].includes(operator)) {
+            // Numeric and other operators
+            fieldEstimate = this.estimateOperatorResults(fieldIndex, operator, value, totalRecords);
+          } else {
+            // Unknown operator, assume it could match any record
+            fieldEstimate = totalRecords;
+          }
+        }
+      } else {
+        // Simple equality
+        const recordIds = fieldIndex[condition];
+        fieldEstimate = recordIds ? recordIds.length : 0;
+      }
+      if (this.opts.debugMode) {
+        console.log(`📊 Estimation: ${field} = ${fieldEstimate} results`);
+      }
+      minResults = Math.min(minResults, fieldEstimate);
+    }
+    return minResults === Infinity ? 0 : minResults;
+  }
+
+  /**
+   * Estimate results for $all operator
+   * @param {Object} fieldIndex - Field index
+   * @param {Array} values - Values to match
+   * @returns {number} - Estimated results
+   */
+  estimateAllOperator(fieldIndex, values) {
+    if (!Array.isArray(values) || values.length === 0) {
+      return 0;
+    }
+    let minCount = Infinity;
+    for (const value of values) {
+      const recordIds = fieldIndex[value];
+      const count = recordIds ? recordIds.length : 0;
+      minCount = Math.min(minCount, count);
+    }
+    return minCount === Infinity ? 0 : minCount;
+  }
+
+  /**
+   * Estimate results for operators
+   * @param {Object} fieldIndex - Field index
+   * @param {string} operator - Operator
+   * @param {*} value - Value
+   * @param {number} totalRecords - Total records
+   * @returns {number} - Estimated results
+   */
+  estimateOperatorResults(fieldIndex, operator, value, totalRecords) {
+    // This is a simplified estimation - in practice, you might want more sophisticated logic
+    switch (operator) {
+      case '$in':
+        if (Array.isArray(value)) {
+          let total = 0;
+          for (const v of value) {
+            const recordIds = fieldIndex[v];
+            if (recordIds) total += recordIds.length;
+          }
+          return total;
+        }
+        break;
+      case '$gt':
+      case '$gte':
+      case '$lt':
+      case '$lte':
+        // For range queries, estimate based on data distribution
+        // This is a simplified approach - real implementation would be more sophisticated
+        return Math.floor(totalRecords * 0.1);
+      // Assume 10% of records match
+      case '$regex':
+        // Regex is hard to estimate without scanning
+        return Math.floor(totalRecords * 0.05);
+      // Assume 5% of records match
+    }
+    return 0;
+  }
+
+  /**
+   * Validate strict query mode
+   * @param {Object} criteria - Query criteria
+   * @param {Object} options - Query options
+   */
+  validateStrictQuery(criteria, options = {}) {
+    // Allow bypassing strict mode validation with allowNonIndexed option
+    if (options.allowNonIndexed === true) {
+      return; // Skip validation for this query
+    }
+    if (!criteria || Object.keys(criteria).length === 0) {
+      return; // Empty criteria are always allowed
+    }
+
+    // Handle logical operators at the top level
+    if (criteria.$not) {
+      this.validateStrictQuery(criteria.$not, options);
+      return;
+    }
+    if (criteria.$or && Array.isArray(criteria.$or)) {
+      for (const orCondition of criteria.$or) {
+        this.validateStrictQuery(orCondition, options);
+      }
+      return;
+    }
+    if (criteria.$and && Array.isArray(criteria.$and)) {
+      for (const andCondition of criteria.$and) {
+        this.validateStrictQuery(andCondition, options);
+      }
+      return;
+    }
+
+    // Get available indexed fields
+    const indexedFields = Object.keys(this.indexManager.opts.indexes || {});
+    const availableFields = indexedFields.length > 0 ? indexedFields.join(', ') : 'none';
+
+    // Check each field
+    const nonIndexedFields = [];
+    for (const [field, condition] of Object.entries(criteria)) {
+      // Skip logical operators
+      if (field.startsWith('$')) {
+        continue;
+      }
+
+      // Check if field is indexed
+      if (!this.indexManager.opts.indexes || !this.indexManager.opts.indexes[field]) {
+        nonIndexedFields.push(field);
+      }
+
+      // Check if condition uses supported operators
+      if (typeof condition === 'object' && !Array.isArray(condition)) {
+        const operators = Object.keys(condition);
+        for (const op of operators) {
+          if (!['$in', '$nin', '$contains', '$all', '>', '>=', '<', '<=', '!=', 'contains', 'regex'].includes(op)) {
+            throw new Error(`Operator '${op}' is not supported in strict mode for field '${field}'.`);
+          }
+        }
+      }
+    }
+
+    // Generate appropriate error message
+    if (nonIndexedFields.length > 0) {
+      if (nonIndexedFields.length === 1) {
+        throw new Error(`Strict indexed mode: Field '${nonIndexedFields[0]}' is not indexed. Available indexed fields: ${availableFields}`);
+      } else {
+        throw new Error(`Strict indexed mode: Fields '${nonIndexedFields.join("', '")}' are not indexed. Available indexed fields: ${availableFields}`);
+      }
+    }
+  }
+
+  /**
+   * Update average time for performance tracking
+   * @param {string} type - Type of operation ('streaming' or 'indexed')
+   * @param {number} time - Time taken
+   */
+  updateAverageTime(type, time) {
+    if (!this.usageStats[`${type}AverageTime`]) {
+      this.usageStats[`${type}AverageTime`] = 0;
+    }
+    const currentAverage = this.usageStats[`${type}AverageTime`];
+    const count = this.usageStats[`${type}Queries`] || 1;
+
+    // Calculate running average
+    this.usageStats[`${type}AverageTime`] = (currentAverage * (count - 1) + time) / count;
+  }
+
+  /**
+   * OPTIMIZATION 2: Check if we can use pre-filtered streaming with term mapping
+   * @param {Object} criteria - Query criteria
+   * @returns {boolean} - True if pre-filtered streaming can be used
+   */
+  _canUsePreFilteredStreaming(criteria) {
+    if (!criteria || typeof criteria !== 'object') {
+      return false;
+    }
+
+    // Check if we have term mapping fields in the query
+    const termMappingFields = Object.keys(this.opts.indexes || {});
+    const queryFields = Object.keys(criteria).filter(field => !field.startsWith('$'));
+
+    // Check if any query field is a term mapping field
+    const hasTermMappingFields = queryFields.some(field => termMappingFields.includes(field));
+    if (!hasTermMappingFields) {
+      return false;
+    }
+
+    // Check if the query is simple enough for pre-filtering
+    // Simple equality queries on term mapping fields work well with pre-filtering
+    for (const [field, condition] of Object.entries(criteria)) {
+      if (field.startsWith('$')) continue;
+      if (termMappingFields.includes(field)) {
+        // For term mapping fields, simple equality or $in queries work well
+        if (typeof condition === 'string' || typeof condition === 'object' && condition.$in && Array.isArray(condition.$in)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  // Simplified term mapping - handled in TermManager
+}
+
+/**
+ * ConcurrencyManager - Handles all concurrency control and synchronization
+ * 
+ * Responsibilities:
+ * - _acquireMutexWithTimeout()
+ * - Mutex and fileMutex management
+ * - Concurrent operations control
+ */
+
+class ConcurrencyManager {
+  constructor(database) {
+    this.database = database;
+    this.opts = database.opts;
+    this.mutex = database.mutex;
+    this.fileMutex = database.fileMutex;
+    this.operationQueue = database.operationQueue;
+    this.pendingOperations = database.pendingOperations || 0;
+    this.pendingPromises = database.pendingPromises || new Set();
+  }
+
+  /**
+   * Acquire mutex with timeout
+   * @param {Mutex} mutex - Mutex to acquire
+   * @param {number} timeout - Timeout in milliseconds
+   * @returns {Promise<Function>} - Release function
+   */
+  async _acquireMutexWithTimeout(mutex, timeout = null) {
+    const timeoutMs = timeout || this.opts.mutexTimeout;
+    const startTime = Date.now();
+    try {
+      const release = await Promise.race([mutex.acquire(), new Promise((_, reject) => setTimeout(() => reject(new Error(`Mutex acquisition timeout after ${timeoutMs}ms`)), timeoutMs))]);
+      if (this.opts.debugMode) {
+        const acquireTime = Date.now() - startTime;
+        if (acquireTime > 1000) {
+          console.warn(`⚠️ Slow mutex acquisition: ${acquireTime}ms`);
+        }
+      }
+
+      // Wrap release function to track mutex usage
+      const originalRelease = release;
+      return () => {
+        try {
+          originalRelease();
+        } catch (error) {
+          console.error(`❌ Error releasing mutex: ${error.message}`);
+        }
+      };
+    } catch (error) {
+      if (this.opts.debugMode) {
+        console.error(`❌ Mutex acquisition failed: ${error.message}`);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Execute operation with queue management
+   * @param {Function} operation - Operation to execute
+   * @returns {Promise} - Operation result
+   */
+  async executeWithQueue(operation) {
+    if (!this.operationQueue) {
+      return operation();
+    }
+    return this.operationQueue.enqueue(operation);
+  }
+
+  /**
+   * Wait for all pending operations to complete
+   * @returns {Promise<void>}
+   */
+  async waitForPendingOperations() {
+    if (this.pendingOperations === 0) {
+      return;
+    }
+    const pendingPromisesArray = Array.from(this.pendingPromises);
+    if (pendingPromisesArray.length === 0) {
+      return;
+    }
+    try {
+      await Promise.allSettled(pendingPromisesArray);
+      this.pendingPromises.clear();
+      this.pendingOperations = 0;
+    } catch (error) {
+      console.warn('Error waiting for pending operations:', error);
+      this.pendingPromises.clear();
+      this.pendingOperations = 0;
+    }
+  }
+
+  /**
+   * Get concurrency statistics
+   * @returns {Object} - Concurrency statistics
+   */
+  getConcurrencyStats() {
+    return {
+      pendingOperations: this.pendingOperations,
+      pendingPromises: this.pendingPromises.size,
+      mutexTimeout: this.opts.mutexTimeout,
+      hasOperationQueue: !!this.operationQueue
+    };
+  }
+
+  /**
+   * Check if system is under high concurrency load
+   * @returns {boolean} - True if under high load
+   */
+  isUnderHighLoad() {
+    const maxOperations = this.opts.maxConcurrentOperations || 10;
+    return this.pendingOperations >= maxOperations * 0.8; // 80% of max capacity
+  }
+
+  /**
+   * Get recommended timeout based on current load
+   * @returns {number} - Recommended timeout in milliseconds
+   */
+  getRecommendedTimeout() {
+    const baseTimeout = this.opts.mutexTimeout || 15000; // Reduced from 30000 to 15000
+    const loadFactor = this.pendingOperations / 10; // Use fixed limit of 10
+
+    // Increase timeout based on load
+    return Math.min(baseTimeout * (1 + loadFactor), baseTimeout * 3);
+  }
+
+  /**
+   * Acquire multiple mutexes in order to prevent deadlocks
+   * @param {Array<Mutex>} mutexes - Mutexes to acquire in order
+   * @param {number} timeout - Timeout in milliseconds
+   * @returns {Promise<Array<Function>>} - Array of release functions
+   */
+  async acquireMultipleMutexes(mutexes, timeout = null) {
+    const releases = [];
+    try {
+      for (const mutex of mutexes) {
+        const release = await this._acquireMutexWithTimeout(mutex, timeout);
+        releases.push(release);
+      }
+      return releases;
+    } catch (error) {
+      // Release already acquired mutexes on error
+      for (const release of releases) {
+        try {
+          release();
+        } catch (releaseError) {
+          console.warn('Error releasing mutex:', releaseError);
+        }
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Execute operation with automatic mutex management
+   * @param {Function} operation - Operation to execute
+   * @param {Object} options - Options for execution
+   * @returns {Promise} - Operation result
+   */
+  async executeWithMutex(operation, options = {}) {
+    const {
+      mutex = this.mutex,
+      timeout = null,
+      retries = 0,
+      retryDelay = 100
+    } = options;
+    let lastError = null;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        const release = await this._acquireMutexWithTimeout(mutex, timeout);
+        try {
+          const result = await operation();
+          return result;
+        } finally {
+          release();
+        }
+      } catch (error) {
+        lastError = error;
+        if (attempt < retries) {
+          // Wait before retry with exponential backoff
+          const delay = retryDelay * Math.pow(2, attempt);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      }
+    }
+    throw lastError;
+  }
+
+  /**
+   * Create a semaphore for limiting concurrent operations
+   * @param {number} limit - Maximum concurrent operations
+   * @returns {Object} - Semaphore object
+   */
+  createSemaphore(limit) {
+    let current = 0;
+    const queue = [];
+    return {
+      async acquire() {
+        return new Promise(resolve => {
+          if (current < limit) {
+            current++;
+            resolve();
+          } else {
+            queue.push(resolve);
+          }
+        });
+      },
+      release() {
+        if (queue.length > 0) {
+          const next = queue.shift();
+          next();
+        } else {
+          current--;
+        }
+      },
+      getCurrent() {
+        return current;
+      },
+      getQueueLength() {
+        return queue.length;
+      }
+    };
+  }
+
+  /**
+   * Cleanup concurrency resources
+   */
+  cleanup() {
+    this.pendingPromises.clear();
+    this.pendingOperations = 0;
+    if (this.opts.debugMode) {
+      console.log('🧹 Concurrency manager cleaned up');
+    }
+  }
+}
+
+/**
+ * StatisticsManager - Handles all statistics and metrics collection
+ * 
+ * Responsibilities:
+ * - getJournalStats()
+ * - Performance metrics
+ * - Usage statistics
+ */
+
+class StatisticsManager {
+  constructor(database) {
+    this.database = database;
+    this.opts = database.opts;
+    this.usageStats = database.usageStats || {
+      totalQueries: 0,
+      streamingQueries: 0,
+      indexedQueries: 0,
+      streamingAverageTime: 0,
+      indexedAverageTime: 0
+    };
+    this.performanceMetrics = {
+      startTime: Date.now(),
+      lastResetTime: Date.now(),
+      totalOperations: 0,
+      totalErrors: 0,
+      averageOperationTime: 0,
+      peakMemoryUsage: 0,
+      cacheHits: 0,
+      cacheMisses: 0
+    };
+  }
+
+  /**
+   * Get journal statistics
+   * @returns {Object} - Journal statistics
+   */
+  getJournalStats() {
+    return {
+      enabled: false,
+      message: 'Journal mode has been removed'
+    };
+  }
+
+  /**
+   * Get performance metrics
+   * @returns {Object} - Performance metrics
+   */
+  getPerformanceMetrics() {
+    const now = Date.now();
+    const uptime = now - this.performanceMetrics.startTime;
+    return {
+      uptime: uptime,
+      totalOperations: this.performanceMetrics.totalOperations,
+      totalErrors: this.performanceMetrics.totalErrors,
+      averageOperationTime: this.performanceMetrics.averageOperationTime,
+      operationsPerSecond: this.performanceMetrics.totalOperations / (uptime / 1000),
+      errorRate: this.performanceMetrics.totalErrors / Math.max(1, this.performanceMetrics.totalOperations),
+      peakMemoryUsage: this.performanceMetrics.peakMemoryUsage,
+      cacheHitRate: this.performanceMetrics.cacheHits / Math.max(1, this.performanceMetrics.cacheHits + this.performanceMetrics.cacheMisses),
+      lastResetTime: this.performanceMetrics.lastResetTime
+    };
+  }
+
+  /**
+   * Get usage statistics
+   * @returns {Object} - Usage statistics
+   */
+  getUsageStats() {
+    return {
+      totalQueries: this.usageStats.totalQueries,
+      streamingQueries: this.usageStats.streamingQueries,
+      indexedQueries: this.usageStats.indexedQueries,
+      streamingAverageTime: this.usageStats.streamingAverageTime,
+      indexedAverageTime: this.usageStats.indexedAverageTime,
+      queryDistribution: {
+        streaming: this.usageStats.streamingQueries / Math.max(1, this.usageStats.totalQueries),
+        indexed: this.usageStats.indexedQueries / Math.max(1, this.usageStats.totalQueries)
+      }
+    };
+  }
+
+  /**
+   * Get database statistics
+   * @returns {Object} - Database statistics
+   */
+  getDatabaseStats() {
+    return {
+      totalRecords: this.database.offsets?.length || 0,
+      indexOffset: this.database.indexOffset || 0,
+      writeBufferSize: this.database.writeBuffer?.length || 0,
+      indexedFields: Object.keys(this.database.indexManager?.index?.data || {}),
+      totalIndexedFields: Object.keys(this.database.indexManager?.index?.data || {}).length,
+      isInitialized: this.database.initialized || false,
+      isDestroyed: this.database.destroyed || false
+    };
+  }
+
+  /**
+   * Get comprehensive statistics
+   * @returns {Object} - All statistics combined
+   */
+  getComprehensiveStats() {
+    return {
+      database: this.getDatabaseStats(),
+      performance: this.getPerformanceMetrics(),
+      usage: this.getUsageStats(),
+      journal: this.getJournalStats(),
+      timestamp: Date.now()
+    };
+  }
+
+  /**
+   * Record operation performance
+   * @param {string} operation - Operation name
+   * @param {number} duration - Duration in milliseconds
+   * @param {boolean} success - Whether operation was successful
+   */
+  recordOperation(operation, duration, success = true) {
+    this.performanceMetrics.totalOperations++;
+    if (!success) {
+      this.performanceMetrics.totalErrors++;
+    }
+
+    // Update average operation time
+    const currentAverage = this.performanceMetrics.averageOperationTime;
+    const totalOps = this.performanceMetrics.totalOperations;
+    this.performanceMetrics.averageOperationTime = (currentAverage * (totalOps - 1) + duration) / totalOps;
+
+    // Update peak memory usage (if available)
+    if (typeof process !== 'undefined' && process.memoryUsage) {
+      const memoryUsage = process.memoryUsage();
+      this.performanceMetrics.peakMemoryUsage = Math.max(this.performanceMetrics.peakMemoryUsage, memoryUsage.heapUsed);
+    }
+  }
+
+  /**
+   * Record cache hit
+   */
+  recordCacheHit() {
+    this.performanceMetrics.cacheHits++;
+  }
+
+  /**
+   * Record cache miss
+   */
+  recordCacheMiss() {
+    this.performanceMetrics.cacheMisses++;
+  }
+
+  /**
+   * Update query statistics
+   * @param {string} type - Query type ('streaming' or 'indexed')
+   * @param {number} duration - Query duration in milliseconds
+   */
+  updateQueryStats(type, duration) {
+    this.usageStats.totalQueries++;
+    if (type === 'streaming') {
+      this.usageStats.streamingQueries++;
+      this.updateAverageTime('streaming', duration);
+    } else if (type === 'indexed') {
+      this.usageStats.indexedQueries++;
+      this.updateAverageTime('indexed', duration);
+    }
+  }
+
+  /**
+   * Update average time for a query type
+   * @param {string} type - Query type
+   * @param {number} time - Time taken
+   */
+  updateAverageTime(type, time) {
+    const key = `${type}AverageTime`;
+    if (!this.usageStats[key]) {
+      this.usageStats[key] = 0;
+    }
+    const currentAverage = this.usageStats[key];
+    const count = this.usageStats[`${type}Queries`] || 1;
+
+    // Calculate running average
+    this.usageStats[key] = (currentAverage * (count - 1) + time) / count;
+  }
+
+  /**
+   * Reset all statistics
+   */
+  resetStats() {
+    this.usageStats = {
+      totalQueries: 0,
+      streamingQueries: 0,
+      indexedQueries: 0,
+      streamingAverageTime: 0,
+      indexedAverageTime: 0
+    };
+    this.performanceMetrics = {
+      startTime: Date.now(),
+      lastResetTime: Date.now(),
+      totalOperations: 0,
+      totalErrors: 0,
+      averageOperationTime: 0,
+      peakMemoryUsage: 0,
+      cacheHits: 0,
+      cacheMisses: 0
+    };
+    if (this.opts.debugMode) {
+      console.log('📊 Statistics reset');
+    }
+  }
+
+  /**
+   * Export statistics to JSON
+   * @returns {string} - JSON string of statistics
+   */
+  exportStats() {
+    return JSON.stringify(this.getComprehensiveStats(), null, 2);
+  }
+
+  /**
+   * Get statistics summary for logging
+   * @returns {string} - Summary string
+   */
+  getStatsSummary() {
+    const stats = this.getComprehensiveStats();
+    return `
+📊 Database Statistics Summary:
+  Records: ${stats.database.totalRecords}
+  Queries: ${stats.usage.totalQueries} (${Math.round(stats.usage.queryDistribution.streaming * 100)}% streaming, ${Math.round(stats.usage.queryDistribution.indexed * 100)}% indexed)
+  Operations: ${stats.performance.totalOperations}
+  Errors: ${stats.performance.totalErrors}
+  Uptime: ${Math.round(stats.performance.uptime / 1000)}s
+  Cache Hit Rate: ${Math.round(stats.performance.cacheHitRate * 100)}%
+    `.trim();
+  }
+
+  /**
+   * Check if statistics collection is enabled
+   * @returns {boolean} - True if enabled
+   */
+  isEnabled() {
+    return this.opts.collectStatistics !== false;
+  }
+
+  /**
+   * Enable or disable statistics collection
+   * @param {boolean} enabled - Whether to enable statistics
+   */
+  setEnabled(enabled) {
+    this.opts.collectStatistics = enabled;
+    if (this.opts.debugMode) {
+      console.log(`📊 Statistics collection ${enabled ? 'enabled' : 'disabled'}`);
+    }
+  }
+}
+
+/**
+ * StreamingProcessor - Efficient streaming processing for large datasets
+ * 
+ * Features:
+ * - Memory-efficient processing of large files
+ * - Configurable batch sizes
+ * - Progress tracking
+ * - Error handling and recovery
+ * - Transform pipelines
+ * - Backpressure control
+ */
+class StreamingProcessor extends events.EventEmitter {
+  constructor(opts = {}) {
+    super();
+    this.opts = {
+      batchSize: opts.batchSize || 1000,
+      maxConcurrency: opts.maxConcurrency || 5,
+      bufferSize: opts.bufferSize || 64 * 1024,
+      // 64KB
+      enableProgress: opts.enableProgress !== false,
+      progressInterval: opts.progressInterval || 1000,
+      // 1 second
+      enableBackpressure: opts.enableBackpressure !== false,
+      maxPendingBatches: opts.maxPendingBatches || 10,
+      ...opts
+    };
+    this.isProcessing = false;
+    this.currentBatch = 0;
+    this.totalBatches = 0;
+    this.processedItems = 0;
+    this.totalItems = 0;
+    this.pendingBatches = 0;
+    this.stats = {
+      startTime: 0,
+      endTime: 0,
+      totalProcessingTime: 0,
+      averageBatchTime: 0,
+      itemsPerSecond: 0,
+      memoryUsage: 0
+    };
+    this.progressTimer = null;
+    this.transformPipeline = [];
+  }
+
+  /**
+   * Add a transform function to the pipeline
+   */
+  addTransform(transformFn) {
+    this.transformPipeline.push(transformFn);
+    return this;
+  }
+
+  /**
+   * Process a file stream
+   */
+  async processFileStream(filePath, processorFn) {
+    if (this.isProcessing) {
+      throw new Error('Streaming processor is already running');
+    }
+    this.isProcessing = true;
+    this.stats.startTime = Date.now();
+    this.currentBatch = 0;
+    this.processedItems = 0;
+    try {
+      // Get file size for progress tracking
+      const stats = await fs.promises.stat(filePath);
+      this.totalItems = Math.ceil(stats.size / this.opts.bufferSize);
+
+      // Start progress tracking
+      if (this.opts.enableProgress) {
+        this._startProgressTracking();
+      }
+
+      // Create read stream
+      const fileStream = fs.createReadStream(filePath, {
+        encoding: 'utf8',
+        highWaterMark: this.opts.bufferSize
+      });
+
+      // Create readline interface
+      const rl = readline.createInterface({
+        input: fileStream,
+        crlfDelay: Infinity
+      });
+      let batch = [];
+      let lineCount = 0;
+
+      // Process lines in batches
+      var _iteratorAbruptCompletion = false;
+      var _didIteratorError = false;
+      var _iteratorError;
+      try {
+        for (var _iterator = _asyncIterator(rl), _step; _iteratorAbruptCompletion = !(_step = await _iterator.next()).done; _iteratorAbruptCompletion = false) {
+          const line = _step.value;
+          {
+            if (line.trim()) {
+              batch.push(line);
+              lineCount++;
+
+              // Process batch when it reaches the configured size
+              if (batch.length >= this.opts.batchSize) {
+                await this._processBatch(batch, processorFn);
+                batch = [];
+              }
+            }
+          }
+        }
+
+        // Process remaining items in the last batch
+      } catch (err) {
+        _didIteratorError = true;
+        _iteratorError = err;
+      } finally {
+        try {
+          if (_iteratorAbruptCompletion && _iterator.return != null) {
+            await _iterator.return();
+          }
+        } finally {
+          if (_didIteratorError) {
+            throw _iteratorError;
+          }
+        }
+      }
+      if (batch.length > 0) {
+        await this._processBatch(batch, processorFn);
+      }
+      this.stats.endTime = Date.now();
+      this.stats.totalProcessingTime = this.stats.endTime - this.stats.startTime;
+      this.stats.itemsPerSecond = this.processedItems / (this.stats.totalProcessingTime / 1000);
+      this.emit('complete', {
+        totalItems: this.processedItems,
+        totalBatches: this.currentBatch,
+        processingTime: this.stats.totalProcessingTime,
+        itemsPerSecond: this.stats.itemsPerSecond
+      });
+    } catch (error) {
+      this.emit('error', error);
+      throw error;
+    } finally {
+      this.isProcessing = false;
+      this._stopProgressTracking();
+    }
+  }
+
+  /**
+   * Process an array of items in streaming fashion
+   */
+  async processArray(items, processorFn) {
+    if (this.isProcessing) {
+      throw new Error('Streaming processor is already running');
+    }
+    this.isProcessing = true;
+    this.stats.startTime = Date.now();
+    this.currentBatch = 0;
+    this.processedItems = 0;
+    this.totalItems = items.length;
+    this.totalBatches = Math.ceil(items.length / this.opts.batchSize);
+    try {
+      // Start progress tracking
+      if (this.opts.enableProgress) {
+        this._startProgressTracking();
+      }
+
+      // Process items in batches
+      for (let i = 0; i < items.length; i += this.opts.batchSize) {
+        const batch = items.slice(i, i + this.opts.batchSize);
+        await this._processBatch(batch, processorFn);
+      }
+      this.stats.endTime = Date.now();
+      this.stats.totalProcessingTime = this.stats.endTime - this.stats.startTime;
+      this.stats.itemsPerSecond = this.processedItems / (this.stats.totalProcessingTime / 1000);
+      this.emit('complete', {
+        totalItems: this.processedItems,
+        totalBatches: this.currentBatch,
+        processingTime: this.stats.totalProcessingTime,
+        itemsPerSecond: this.stats.itemsPerSecond
+      });
+    } catch (error) {
+      this.emit('error', error);
+      throw error;
+    } finally {
+      this.isProcessing = false;
+      this._stopProgressTracking();
+    }
+  }
+
+  /**
+   * Process a generator function
+   */
+  async processGenerator(generatorFn, processorFn) {
+    if (this.isProcessing) {
+      throw new Error('Streaming processor is already running');
+    }
+    this.isProcessing = true;
+    this.stats.startTime = Date.now();
+    this.currentBatch = 0;
+    this.processedItems = 0;
+    this.totalItems = 0; // Unknown for generators
+
+    try {
+      // Start progress tracking
+      if (this.opts.enableProgress) {
+        this._startProgressTracking();
+      }
+      const generator = generatorFn();
+      let batch = [];
+      var _iteratorAbruptCompletion2 = false;
+      var _didIteratorError2 = false;
+      var _iteratorError2;
+      try {
+        for (var _iterator2 = _asyncIterator(generator), _step2; _iteratorAbruptCompletion2 = !(_step2 = await _iterator2.next()).done; _iteratorAbruptCompletion2 = false) {
+          const item = _step2.value;
+          {
+            batch.push(item);
+            this.totalItems++;
+
+            // Process batch when it reaches the configured size
+            if (batch.length >= this.opts.batchSize) {
+              await this._processBatch(batch, processorFn);
+              batch = [];
+            }
+          }
+        }
+
+        // Process remaining items in the last batch
+      } catch (err) {
+        _didIteratorError2 = true;
+        _iteratorError2 = err;
+      } finally {
+        try {
+          if (_iteratorAbruptCompletion2 && _iterator2.return != null) {
+            await _iterator2.return();
+          }
+        } finally {
+          if (_didIteratorError2) {
+            throw _iteratorError2;
+          }
+        }
+      }
+      if (batch.length > 0) {
+        await this._processBatch(batch, processorFn);
+      }
+      this.stats.endTime = Date.now();
+      this.stats.totalProcessingTime = this.stats.endTime - this.stats.startTime;
+      this.stats.itemsPerSecond = this.processedItems / (this.stats.totalProcessingTime / 1000);
+      this.emit('complete', {
+        totalItems: this.processedItems,
+        totalBatches: this.currentBatch,
+        processingTime: this.stats.totalProcessingTime,
+        itemsPerSecond: this.stats.itemsPerSecond
+      });
+    } catch (error) {
+      this.emit('error', error);
+      throw error;
+    } finally {
+      this.isProcessing = false;
+      this._stopProgressTracking();
+    }
+  }
+
+  /**
+   * Process a single batch
+   */
+  async _processBatch(batch, processorFn) {
+    if (this.opts.enableBackpressure && this.pendingBatches >= this.opts.maxPendingBatches) {
+      // Wait for backpressure to reduce
+      await this._waitForBackpressure();
+    }
+    this.pendingBatches++;
+    this.currentBatch++;
+    try {
+      const startTime = Date.now();
+
+      // Apply transform pipeline
+      let transformedBatch = batch;
+      for (const transform of this.transformPipeline) {
+        transformedBatch = await transform(transformedBatch);
+      }
+
+      // Process the batch
+      const result = await processorFn(transformedBatch, this.currentBatch);
+      const batchTime = Date.now() - startTime;
+      this.stats.averageBatchTime = (this.stats.averageBatchTime + batchTime) / 2;
+      this.processedItems += batch.length;
+      this.emit('batchComplete', {
+        batchNumber: this.currentBatch,
+        batchSize: batch.length,
+        processingTime: batchTime,
+        result
+      });
+    } catch (error) {
+      this.emit('batchError', {
+        batchNumber: this.currentBatch,
+        batchSize: batch.length,
+        error
+      });
+      throw error;
+    } finally {
+      this.pendingBatches--;
+    }
+  }
+
+  /**
+   * Wait for backpressure to reduce
+   */
+  async _waitForBackpressure() {
+    return new Promise(resolve => {
+      const checkBackpressure = () => {
+        if (this.pendingBatches < this.opts.maxPendingBatches) {
+          resolve();
+        } else {
+          setTimeout(checkBackpressure, 10);
+        }
+      };
+      checkBackpressure();
+    });
+  }
+
+  /**
+   * Start progress tracking
+   */
+  _startProgressTracking() {
+    this.progressTimer = setInterval(() => {
+      const progress = {
+        currentBatch: this.currentBatch,
+        totalBatches: this.totalBatches,
+        processedItems: this.processedItems,
+        totalItems: this.totalItems,
+        percentage: this.totalItems > 0 ? this.processedItems / this.totalItems * 100 : 0,
+        itemsPerSecond: this.stats.itemsPerSecond,
+        averageBatchTime: this.stats.averageBatchTime,
+        memoryUsage: process.memoryUsage().heapUsed / 1024 / 1024 // MB
+      };
+      this.emit('progress', progress);
+    }, this.opts.progressInterval);
+    this.progressTimer.unref(); // Allow process to exit without waiting for this timer
+  }
+
+  /**
+   * Stop progress tracking
+   */
+  _stopProgressTracking() {
+    if (this.progressTimer) {
+      clearInterval(this.progressTimer);
+      this.progressTimer = null;
+    }
+  }
+
+  /**
+   * Get current statistics
+   */
+  getStats() {
+    return {
+      ...this.stats,
+      isProcessing: this.isProcessing,
+      currentBatch: this.currentBatch,
+      totalBatches: this.totalBatches,
+      processedItems: this.processedItems,
+      totalItems: this.totalItems,
+      pendingBatches: this.pendingBatches,
+      transformPipelineLength: this.transformPipeline.length
+    };
+  }
+
+  /**
+   * Stop processing
+   */
+  stop() {
+    this.isProcessing = false;
+    this._stopProgressTracking();
+    this.emit('stopped');
+  }
+
+  /**
+   * Reset the processor
+   */
+  reset() {
+    this.stop();
+    this.currentBatch = 0;
+    this.totalBatches = 0;
+    this.processedItems = 0;
+    this.totalItems = 0;
+    this.pendingBatches = 0;
+    this.stats = {
+      startTime: 0,
+      endTime: 0,
+      totalProcessingTime: 0,
+      averageBatchTime: 0,
+      itemsPerSecond: 0,
+      memoryUsage: 0
+    };
+    this.transformPipeline = [];
+  }
+}
+
+/**
+ * TermManager - Manages term-to-ID mapping for efficient storage
+ * 
+ * Responsibilities:
+ * - Map terms to numeric IDs for space efficiency
+ * - Track term usage counts for cleanup
+ * - Load/save terms from/to index file
+ * - Clean up orphaned terms
+ */
+class TermManager {
+  constructor() {
+    this.termToId = new Map(); // "bra" -> 1
+    this.idToTerm = new Map(); // 1 -> "bra"
+    this.termCounts = new Map(); // 1 -> 1500 (how many times used)
+    this.nextId = 1;
+  }
+
+  /**
+   * Get ID for a term (create if doesn't exist)
+   * @param {string} term - Term to get ID for
+   * @returns {number} - Numeric ID for the term
+   */
+  getTermId(term) {
+    if (this.termToId.has(term)) {
+      const id = this.termToId.get(term);
+      this.termCounts.set(id, (this.termCounts.get(id) || 0) + 1);
+      return id;
+    }
+    const id = this.nextId++;
+    this.termToId.set(term, id);
+    this.idToTerm.set(id, term);
+    this.termCounts.set(id, 1);
+    return id;
+  }
+
+  /**
+   * Get term ID without incrementing count (for IndexManager use)
+   * @param {string} term - Term to get ID for
+   * @returns {number|undefined} - Numeric ID for the term, or undefined if not found
+   * CRITICAL: Does NOT create new IDs - only returns existing ones
+   * This prevents creating invalid term IDs during queries when terms haven't been loaded yet
+   */
+  getTermIdWithoutIncrement(term) {
+    if (this.termToId.has(term)) {
+      return this.termToId.get(term);
+    }
+
+    // CRITICAL FIX: Don't create new IDs during queries
+    // If term doesn't exist, return undefined
+    // This ensures queries only work with terms that were actually saved to the database
+    return undefined;
+  }
+
+  /**
+   * Get term by ID
+   * @param {number} id - Numeric ID
+   * @returns {string|null} - Term or null if not found
+   */
+  getTerm(id) {
+    return this.idToTerm.get(id) || null;
+  }
+
+  /**
+   * Bulk get term IDs for multiple terms (optimized for performance)
+   * @param {string[]} terms - Array of terms to get IDs for
+   * @returns {number[]} - Array of term IDs in the same order
+   */
+  bulkGetTermIds(terms) {
+    if (!Array.isArray(terms) || terms.length === 0) {
+      return [];
+    }
+    const termIds = new Array(terms.length);
+
+    // Process all terms in a single pass
+    for (let i = 0; i < terms.length; i++) {
+      const term = terms[i];
+      if (this.termToId.has(term)) {
+        const id = this.termToId.get(term);
+        this.termCounts.set(id, (this.termCounts.get(id) || 0) + 1);
+        termIds[i] = id;
+      } else {
+        const id = this.nextId++;
+        this.termToId.set(term, id);
+        this.idToTerm.set(id, term);
+        this.termCounts.set(id, 1);
+        termIds[i] = id;
+      }
+    }
+    return termIds;
+  }
+
+  /**
+   * Load terms from file data
+   * @param {Object} termsData - Terms data from file
+   */
+  loadTerms(termsData) {
+    if (!termsData || typeof termsData !== 'object') {
+      return;
+    }
+    for (const [id, term] of Object.entries(termsData)) {
+      const numericId = parseInt(id);
+      if (!isNaN(numericId) && term) {
+        this.termToId.set(term, numericId);
+        this.idToTerm.set(numericId, term);
+        this.nextId = Math.max(this.nextId, numericId + 1);
+        // Initialize count to 0 - will be updated as terms are used
+        this.termCounts.set(numericId, 0);
+      }
+    }
+  }
+
+  /**
+   * Save terms to file format
+   * @returns {Object} - Terms data for file
+   */
+  saveTerms() {
+    const termsData = {};
+    for (const [id, term] of this.idToTerm) {
+      termsData[id] = term;
+    }
+    return termsData;
+  }
+
+  /**
+   * Clean up orphaned terms (terms with count 0)
+   * @param {boolean} forceCleanup - Force cleanup even if conditions not met
+   * @param {Object} options - Cleanup options
+   * @returns {number} - Number of orphaned terms removed
+   */
+  cleanupOrphanedTerms(forceCleanup = false, options = {}) {
+    const {
+      intelligentCleanup = true,
+      minOrphanCount = 10,
+      orphanPercentage = 0.15,
+      checkSystemState = true
+    } = options;
+
+    // INTELLIGENT CLEANUP: Check if cleanup should be performed
+    if (!forceCleanup && intelligentCleanup) {
+      const stats = this.getStats();
+      const orphanedCount = stats.orphanedTerms;
+      const totalTerms = stats.totalTerms;
+
+      // Only cleanup if conditions are met
+      const shouldCleanup = orphanedCount >= minOrphanCount &&
+      // Minimum orphan count
+      orphanedCount > totalTerms * orphanPercentage && (
+      // Orphans > percentage of total
+      !checkSystemState || this.isSystemSafe()) // System is safe (if check enabled)
+      ;
+      if (!shouldCleanup) {
+        return 0; // Don't cleanup if conditions not met
+      }
+    } else if (!forceCleanup) {
+      return 0; // Don't remove anything during normal operations
+    }
+
+    // PERFORM CLEANUP: Remove orphaned terms
+    const orphanedIds = [];
+    for (const [id, count] of this.termCounts) {
+      if (count === 0) {
+        orphanedIds.push(id);
+      }
+    }
+
+    // Remove orphaned terms with additional safety checks
+    for (const id of orphanedIds) {
+      const term = this.idToTerm.get(id);
+      if (term && typeof term === 'string') {
+        // Extra safety: only remove string terms
+        this.termToId.delete(term);
+        this.idToTerm.delete(id);
+        this.termCounts.delete(id);
+      }
+    }
+    return orphanedIds.length;
+  }
+
+  /**
+   * Check if system is safe for cleanup operations
+   * @returns {boolean} - True if system is safe for cleanup
+   */
+  isSystemSafe() {
+    // This method should be overridden by the database instance
+    // to provide system state information
+    return true; // Default to safe for backward compatibility
+  }
+
+  /**
+   * Perform intelligent automatic cleanup
+   * @param {Object} options - Cleanup options
+   * @returns {number} - Number of orphaned terms removed
+   */
+  performIntelligentCleanup(options = {}) {
+    return this.cleanupOrphanedTerms(false, {
+      intelligentCleanup: true,
+      minOrphanCount: 5,
+      // Lower threshold for automatic cleanup
+      orphanPercentage: 0.1,
+      // 10% of total terms
+      checkSystemState: true,
+      ...options
+    });
+  }
+
+  /**
+   * Decrement term count (when term is removed from index)
+   * @param {number} termId - Term ID to decrement
+   */
+  decrementTermCount(termId) {
+    const count = this.termCounts.get(termId) || 0;
+    this.termCounts.set(termId, Math.max(0, count - 1));
+  }
+
+  /**
+   * Increment term count (when term is added to index)
+   * @param {number} termId - Term ID to increment
+   */
+  incrementTermCount(termId) {
+    const count = this.termCounts.get(termId) || 0;
+    this.termCounts.set(termId, count + 1);
+  }
+
+  /**
+   * Get statistics about terms
+   * @returns {Object} - Term statistics
+   */
+  getStats() {
+    return {
+      totalTerms: this.termToId.size,
+      nextId: this.nextId,
+      orphanedTerms: Array.from(this.termCounts.entries()).filter(([_, count]) => count === 0).length
+    };
+  }
+
+  /**
+   * Check if a term exists
+   * @param {string} term - Term to check
+   * @returns {boolean} - True if term exists
+   */
+  hasTerm(term) {
+    return this.termToId.has(term);
+  }
+
+  /**
+   * Get all terms
+   * @returns {Array} - Array of all terms
+   */
+  getAllTerms() {
+    return Array.from(this.termToId.keys());
+  }
+
+  /**
+   * Get all term IDs
+   * @returns {Array} - Array of all term IDs
+   */
+  getAllTermIds() {
+    return Array.from(this.idToTerm.keys());
+  }
+
+  /**
+   * Get statistics about term mapping
+   * @returns {Object} - Statistics object
+   */
+  getStatistics() {
+    return {
+      totalTerms: this.termToId.size,
+      nextId: this.nextId,
+      termCounts: Object.fromEntries(this.termCounts),
+      sampleTerms: Array.from(this.termToId.entries()).slice(0, 5)
+    };
+  }
+}
+
 /**
  * IterateEntry class for intuitive API with automatic change detection
  * Uses native JavaScript setters for maximum performance
@@ -80,8 +7560,6 @@ class IterateEntry {
     return 'IterateEntry';
   }
 }
-
-// Import managers
 
 /**
  * InsertSession - Simple batch insertion without memory duplication
@@ -318,7 +7796,7 @@ class InsertSession {
  * - Recovery mechanisms
  * - Performance optimizations
  */
-class Database extends _events.EventEmitter {
+class Database extends events.EventEmitter {
   constructor(file, opts = {}) {
     super();
 
@@ -378,7 +7856,7 @@ class Database extends _events.EventEmitter {
     this.operationCounter = 0;
 
     // CRITICAL FIX: Initialize OperationQueue to prevent race conditions
-    this.operationQueue = new _OperationQueue.OperationQueue(false); // Disable debug mode for queue
+    this.operationQueue = new OperationQueue(false); // Disable debug mode for queue
 
     // Normalize file path to ensure it ends with .jdb
     this.normalizedFile = this.normalizeFilePath(file);
@@ -399,7 +7877,7 @@ class Database extends _events.EventEmitter {
     this.initializeManagers();
 
     // Initialize file mutex for thread safety
-    this.fileMutex = new _asyncMutex.Mutex();
+    this.fileMutex = new asyncMutex.Mutex();
 
     // Initialize performance tracking
     this.performanceStats = {
@@ -542,8 +8020,36 @@ class Database extends _events.EventEmitter {
       return;
     }
 
+    // Handle legacy 'schema' option migration
+    if (this.opts.schema) {
+      // If fields is already provided and valid, ignore schema
+      if (this.opts.fields && typeof this.opts.fields === 'object' && Object.keys(this.opts.fields).length > 0) {
+        if (this.opts.debugMode) {
+          console.log(`⚠️  Both 'schema' and 'fields' options provided. Ignoring 'schema' and using 'fields'. [${this.instanceId}]`);
+        }
+      } else if (Array.isArray(this.opts.schema)) {
+        // Schema as array is no longer supported
+        throw new Error('The "schema" option as an array is no longer supported. Please use "fields" as an object instead. Example: { fields: { id: "number", name: "string" } }');
+      } else if (typeof this.opts.schema === 'object' && this.opts.schema !== null) {
+        // Schema as object - migrate to fields
+        this.opts.fields = {
+          ...this.opts.schema
+        };
+        if (this.opts.debugMode) {
+          console.log(`⚠️  Migrated 'schema' option to 'fields'. Please update your code to use 'fields' instead of 'schema'. [${this.instanceId}]`);
+        }
+      } else {
+        throw new Error('The "schema" option must be an object. Example: { schema: { id: "number", name: "string" } }');
+      }
+    }
+
+    // Validate that fields is provided (mandatory)
+    if (!this.opts.fields || typeof this.opts.fields !== 'object' || Object.keys(this.opts.fields).length === 0) {
+      throw new Error('The "fields" option is mandatory and must be an object with at least one field definition. Example: { fields: { id: "number", name: "string" } }');
+    }
+
     // CRITICAL FIX: Initialize serializer first - this was missing and causing crashes
-    this.serializer = new _Serializer.default(this.opts);
+    this.serializer = new Serializer(this.opts);
 
     // Initialize schema for array-based serialization
     if (this.opts.enableArraySerialization !== false) {
@@ -551,7 +8057,7 @@ class Database extends _events.EventEmitter {
     }
 
     // Initialize TermManager - always enabled for optimal performance
-    this.termManager = new _TermManager.default();
+    this.termManager = new TermManager();
 
     // Auto-detect term mapping fields from indexes
     const termMappingFields = this.getTermMappingFields();
@@ -585,7 +8091,7 @@ class Database extends _events.EventEmitter {
     this.validateIndexConfiguration();
 
     // Initialize IndexManager with database reference for term mapping
-    this.indexManager = new _IndexManager.default(this.opts, null, this);
+    this.indexManager = new IndexManager(this.opts, null, this);
     if (this.opts.debugMode) {
       console.log(`🔍 IndexManager initialized with fields: ${this.indexManager.indexedFields.join(', ')} [${this.instanceId}]`);
     }
@@ -600,11 +8106,11 @@ class Database extends _events.EventEmitter {
     this.isInsideOperationQueue = false; // Flag to prevent deadlock in save() calls
 
     // Initialize other managers
-    this.fileHandler = new _FileHandler.default(this.normalizedFile, this.fileMutex, this.opts);
-    this.queryManager = new _QueryManager.QueryManager(this);
-    this.concurrencyManager = new _ConcurrencyManager.ConcurrencyManager(this.opts);
-    this.statisticsManager = new _StatisticsManager.StatisticsManager(this, this.opts);
-    this.streamingProcessor = new _StreamingProcessor.default(this.opts);
+    this.fileHandler = new FileHandler(this.normalizedFile, this.fileMutex, this.opts);
+    this.queryManager = new QueryManager(this);
+    this.concurrencyManager = new ConcurrencyManager(this.opts);
+    this.statisticsManager = new StatisticsManager(this, this.opts);
+    this.streamingProcessor = new StreamingProcessor(this.opts);
   }
 
   /**
@@ -778,7 +8284,7 @@ class Database extends _events.EventEmitter {
 
       // Clear index file
       const idxPath = this.normalizedFile.replace('.jdb', '.idx.jdb');
-      const idxFileHandler = new _FileHandler.default(idxPath, this.fileMutex, this.opts);
+      const idxFileHandler = new FileHandler(idxPath, this.fileMutex, this.opts);
       if (await idxFileHandler.exists()) {
         await idxFileHandler.delete();
         if (this.opts.debugMode) {
@@ -827,7 +8333,7 @@ class Database extends _events.EventEmitter {
       if (this.indexManager) {
         const idxPath = this.normalizedFile.replace('.jdb', '.idx.jdb');
         try {
-          const idxFileHandler = new _FileHandler.default(idxPath, this.fileMutex, this.opts);
+          const idxFileHandler = new FileHandler(idxPath, this.fileMutex, this.opts);
 
           // Check if file exists BEFORE trying to read it
           const fileExists = await idxFileHandler.exists();
@@ -985,11 +8491,21 @@ class Database extends _events.EventEmitter {
                 }
               }
 
-              // Reinitialize schema from saved configuration
-              if (config.schema && this.serializer) {
+              // Reinitialize schema from saved configuration (only if fields not provided)
+              // Note: fields option takes precedence over saved schema
+              if (!this.opts.fields && config.schema && this.serializer) {
                 this.serializer.initializeSchema(config.schema);
                 if (this.opts.debugMode) {
                   console.log(`📂 Loaded schema from ${idxPath}:`, config.schema.join(', '));
+                }
+              } else if (this.opts.fields && this.serializer) {
+                // Use fields option instead of saved schema
+                const fieldNames = Object.keys(this.opts.fields);
+                if (fieldNames.length > 0) {
+                  this.serializer.initializeSchema(fieldNames);
+                  if (this.opts.debugMode) {
+                    console.log(`📂 Schema initialized from fields option:`, fieldNames.join(', '));
+                  }
                 }
               }
             }
@@ -1197,7 +8713,8 @@ class Database extends _events.EventEmitter {
 
       // CRITICAL FIX: Capture writeBuffer and deletedIds at the start to prevent race conditions
       const writeBufferSnapshot = [...this.writeBuffer];
-      const deletedIdsSnapshot = new Set(this.deletedIds);
+      // CRITICAL FIX: Normalize deleted IDs to strings for consistent comparison
+      const deletedIdsSnapshot = new Set(Array.from(this.deletedIds).map(id => String(id)));
 
       // OPTIMIZATION: Process pending index updates in batch before save
       if (this.pendingIndexUpdates && this.pendingIndexUpdates.length > 0) {
@@ -1216,41 +8733,25 @@ class Database extends _events.EventEmitter {
         this.pendingIndexUpdates = [];
       }
 
-      // CRITICAL FIX: Flush write buffer completely after capturing snapshot
-      await this._flushWriteBufferCompletely();
-
-      // CRITICAL FIX: Wait for all I/O operations to complete before clearing writeBuffer
-      await this._waitForIOCompletion();
-
-      // CRITICAL FIX: Verify write buffer is empty after I/O completion
-      // But allow for ongoing insertions during high-volume scenarios
-      if (this.writeBuffer.length > 0) {
-        if (this.opts.debugMode) {
-          console.log(`💾 Save: WriteBuffer still has ${this.writeBuffer.length} items after flush - this may indicate ongoing insertions`);
-        }
-
-        // If we have a reasonable number of items, continue processing
-        if (this.writeBuffer.length < 10000) {
-          // Reasonable threshold
-          if (this.opts.debugMode) {
-            console.log(`💾 Save: Continuing to process remaining ${this.writeBuffer.length} items`);
-          }
-          // Continue with the save process - the remaining items will be included in the final save
-        } else {
-          // Too many items remaining - likely a real problem
-          throw new Error(`WriteBuffer has too many items after flush: ${this.writeBuffer.length} items remaining (threshold: 10000)`);
-        }
+      // CRITICAL FIX: DO NOT flush writeBuffer before processing existing records
+      // This prevents duplicating updated records in the file.
+      // The _streamExistingRecords() will handle replacing old records with updated ones from writeBufferSnapshot.
+      // After processing, all records (existing + updated + new) will be written to file in one operation.
+      if (this.opts.debugMode) {
+        console.log(`💾 Save: writeBufferSnapshot captured with ${writeBufferSnapshot.length} records (will be processed with existing records)`);
       }
 
       // OPTIMIZATION: Parallel operations - cleanup and data preparation
       let allData = [];
       let orphanedCount = 0;
 
-      // Check if there are new records to save (after flush, writeBuffer should be empty)
+      // Check if there are records to save from writeBufferSnapshot
+      // CRITICAL FIX: Process writeBufferSnapshot records (both new and updated) with existing records
+      // Updated records will replace old ones via _streamExistingRecords, new records will be added
       if (this.opts.debugMode) {
         console.log(`💾 Save: writeBuffer.length=${this.writeBuffer.length}, writeBufferSnapshot.length=${writeBufferSnapshot.length}`);
       }
-      if (this.writeBuffer.length > 0) {
+      if (this.writeBuffer.length > 0 || writeBufferSnapshot.length > 0) {
         if (this.opts.debugMode) {
           console.log(`💾 Save: WriteBuffer has ${writeBufferSnapshot.length} records, using streaming approach`);
         }
@@ -1280,19 +8781,68 @@ class Database extends _events.EventEmitter {
 
           // Add streaming operation
           parallelOperations.push(this._streamExistingRecords(deletedIdsSnapshot, writeBufferSnapshot).then(existingRecords => {
+            // CRITICAL FIX: _streamExistingRecords already handles updates via updatedRecordsMap
+            // So existingRecords already contains updated records from writeBufferSnapshot
+            // We only need to add records from writeBufferSnapshot that are NEW (not updates)
             allData = [...existingRecords];
 
-            // OPTIMIZATION: Use Map for faster lookups
-            const existingRecordMap = new Map(existingRecords.filter(r => r && r.id).map(r => [r.id, r]));
+            // OPTIMIZATION: Use Set for faster lookups of existing record IDs
+            // CRITICAL FIX: Normalize IDs to strings for consistent comparison
+            const existingRecordIds = new Set(existingRecords.filter(r => r && r.id).map(r => String(r.id)));
+
+            // CRITICAL FIX: Create a map of records in existingRecords by ID for comparison
+            const existingRecordsById = new Map();
+            existingRecords.forEach(r => {
+              if (r && r.id) {
+                existingRecordsById.set(String(r.id), r);
+              }
+            });
+
+            // Add only NEW records from writeBufferSnapshot (not updates, as those are already in existingRecords)
+            // CRITICAL FIX: Also ensure that if an updated record wasn't properly replaced, we replace it now
             for (const record of writeBufferSnapshot) {
-              if (!deletedIdsSnapshot.has(record.id)) {
-                if (existingRecordMap.has(record.id)) {
-                  // Replace existing record
-                  const existingIndex = allData.findIndex(r => r.id === record.id);
-                  allData[existingIndex] = record;
-                } else {
-                  // Add new record
-                  allData.push(record);
+              if (!record || !record.id) continue;
+              if (deletedIdsSnapshot.has(String(record.id))) continue;
+              const recordIdStr = String(record.id);
+              const existingRecord = existingRecordsById.get(recordIdStr);
+              if (!existingRecord) {
+                // This is a new record, not an update
+                allData.push(record);
+                if (this.opts.debugMode) {
+                  console.log(`💾 Save: Adding NEW record to allData:`, {
+                    id: recordIdStr,
+                    price: record.price,
+                    app_id: record.app_id,
+                    currency: record.currency
+                  });
+                }
+              } else {
+                // This is an update - verify that existingRecords contains the updated version
+                // If not, replace it (this handles edge cases where substitution might have failed)
+                const existingIndex = allData.findIndex(r => r && r.id && String(r.id) === recordIdStr);
+                if (existingIndex !== -1) {
+                  // Verify if the existing record is actually the updated one
+                  // Compare key fields to detect if replacement is needed
+                  const needsReplacement = JSON.stringify(allData[existingIndex]) !== JSON.stringify(record);
+                  if (needsReplacement) {
+                    if (this.opts.debugMode) {
+                      console.log(`💾 Save: REPLACING existing record with updated version in allData:`, {
+                        old: {
+                          id: String(allData[existingIndex].id),
+                          price: allData[existingIndex].price
+                        },
+                        new: {
+                          id: recordIdStr,
+                          price: record.price
+                        }
+                      });
+                    }
+                    allData[existingIndex] = record;
+                  } else if (this.opts.debugMode) {
+                    console.log(`💾 Save: Record already correctly updated in allData:`, {
+                      id: recordIdStr
+                    });
+                  }
                 }
               }
             }
@@ -1334,15 +8884,106 @@ class Database extends _events.EventEmitter {
                 console.log(`💾 Save: _streamExistingRecords returned ${existingRecords.length} records`);
                 console.log(`💾 Save: existingRecords:`, existingRecords);
               }
-              // Combine existing records with new records from writeBuffer
-              allData = [...existingRecords, ...writeBufferSnapshot.filter(record => !deletedIdsSnapshot.has(record.id))];
+              // CRITICAL FIX: _streamExistingRecords already handles updates via updatedRecordsMap
+              // So existingRecords already contains updated records from writeBufferSnapshot
+              // We only need to add records from writeBufferSnapshot that are NEW (not updates)
+              allData = [...existingRecords];
+
+              // OPTIMIZATION: Use Set for faster lookups of existing record IDs
+              // CRITICAL FIX: Normalize IDs to strings for consistent comparison
+              const existingRecordIds = new Set(existingRecords.filter(r => r && r.id).map(r => String(r.id)));
+
+              // CRITICAL FIX: Create a map of records in existingRecords by ID for comparison
+              const existingRecordsById = new Map();
+              existingRecords.forEach(r => {
+                if (r && r.id) {
+                  existingRecordsById.set(String(r.id), r);
+                }
+              });
+
+              // Add only NEW records from writeBufferSnapshot (not updates, as those are already in existingRecords)
+              // CRITICAL FIX: Also ensure that if an updated record wasn't properly replaced, we replace it now
+              for (const record of writeBufferSnapshot) {
+                if (!record || !record.id) continue;
+                if (deletedIdsSnapshot.has(String(record.id))) continue;
+                const recordIdStr = String(record.id);
+                const existingRecord = existingRecordsById.get(recordIdStr);
+                if (!existingRecord) {
+                  // This is a new record, not an update
+                  allData.push(record);
+                  if (this.opts.debugMode) {
+                    console.log(`💾 Save: Adding NEW record to allData:`, {
+                      id: recordIdStr,
+                      price: record.price,
+                      app_id: record.app_id,
+                      currency: record.currency
+                    });
+                  }
+                } else {
+                  // This is an update - verify that existingRecords contains the updated version
+                  // If not, replace it (this handles edge cases where substitution might have failed)
+                  const existingIndex = allData.findIndex(r => r && r.id && String(r.id) === recordIdStr);
+                  if (existingIndex !== -1) {
+                    // Verify if the existing record is actually the updated one
+                    // Compare key fields to detect if replacement is needed
+                    const needsReplacement = JSON.stringify(allData[existingIndex]) !== JSON.stringify(record);
+                    if (needsReplacement) {
+                      if (this.opts.debugMode) {
+                        console.log(`💾 Save: REPLACING existing record with updated version in allData:`, {
+                          old: {
+                            id: String(allData[existingIndex].id),
+                            price: allData[existingIndex].price
+                          },
+                          new: {
+                            id: recordIdStr,
+                            price: record.price
+                          }
+                        });
+                      }
+                      allData[existingIndex] = record;
+                    } else if (this.opts.debugMode) {
+                      console.log(`💾 Save: Record already correctly updated in allData:`, {
+                        id: recordIdStr
+                      });
+                    }
+                  }
+                }
+              }
+              if (this.opts.debugMode) {
+                const updatedCount = writeBufferSnapshot.filter(r => r && r.id && existingRecordIds.has(String(r.id))).length;
+                const newCount = writeBufferSnapshot.filter(r => r && r.id && !existingRecordIds.has(String(r.id))).length;
+                console.log(`💾 Save: Combined data - existingRecords: ${existingRecords.length}, updatedFromBuffer: ${updatedCount}, newFromBuffer: ${newCount}, total: ${allData.length}`);
+                console.log(`💾 Save: WriteBuffer record IDs:`, writeBufferSnapshot.map(r => r && r.id ? String(r.id) : 'no-id'));
+                console.log(`💾 Save: Existing record IDs:`, Array.from(existingRecordIds));
+                console.log(`💾 Save: All records in allData:`, allData.map(r => r && r.id ? {
+                  id: String(r.id),
+                  price: r.price,
+                  app_id: r.app_id,
+                  currency: r.currency
+                } : 'no-id'));
+                console.log(`💾 Save: Sample existing record:`, existingRecords[0] ? {
+                  id: String(existingRecords[0].id),
+                  price: existingRecords[0].price,
+                  app_id: existingRecords[0].app_id,
+                  currency: existingRecords[0].currency
+                } : 'null');
+                console.log(`💾 Save: Sample writeBuffer record:`, writeBufferSnapshot[0] ? {
+                  id: String(writeBufferSnapshot[0].id),
+                  price: writeBufferSnapshot[0].price,
+                  app_id: writeBufferSnapshot[0].app_id,
+                  currency: writeBufferSnapshot[0].currency
+                } : 'null');
+              }
             }).catch(error => {
               if (this.opts.debugMode) {
                 console.log(`💾 Save: _streamExistingRecords failed:`, error.message);
               }
               // CRITICAL FIX: Use safe fallback to preserve existing data instead of losing it
               return this._loadExistingRecordsFallback(deletedIdsSnapshot, writeBufferSnapshot).then(fallbackRecords => {
-                allData = [...fallbackRecords, ...writeBufferSnapshot.filter(record => !deletedIdsSnapshot.has(record.id))];
+                // CRITICAL FIX: Avoid duplicating updated records
+                const fallbackRecordIds = new Set(fallbackRecords.map(r => r.id));
+                const newRecordsFromBuffer = writeBufferSnapshot.filter(record => !deletedIdsSnapshot.has(String(record.id)) && !fallbackRecordIds.has(record.id));
+                allData = [...fallbackRecords, ...newRecordsFromBuffer];
                 if (this.opts.debugMode) {
                   console.log(`💾 Save: Fallback preserved ${fallbackRecords.length} existing records, total: ${allData.length}`);
                 }
@@ -1352,7 +8993,7 @@ class Database extends _events.EventEmitter {
                   console.log(`💾 Save: CRITICAL - Data loss may occur, only writeBuffer will be saved`);
                 }
                 // Last resort: at least save what we have in writeBuffer
-                allData = writeBufferSnapshot.filter(record => !deletedIdsSnapshot.has(record.id));
+                allData = writeBufferSnapshot.filter(record => !deletedIdsSnapshot.has(String(record.id)));
               });
             }));
 
@@ -1365,7 +9006,10 @@ class Database extends _events.EventEmitter {
             // CRITICAL FIX: Use safe fallback to preserve existing data instead of losing it
             try {
               const fallbackRecords = await this._loadExistingRecordsFallback(deletedIdsSnapshot, writeBufferSnapshot);
-              allData = [...fallbackRecords, ...writeBufferSnapshot.filter(record => !deletedIdsSnapshot.has(record.id))];
+              // CRITICAL FIX: Avoid duplicating updated records
+              const fallbackRecordIds = new Set(fallbackRecords.map(r => r.id));
+              const newRecordsFromBuffer = writeBufferSnapshot.filter(record => !deletedIdsSnapshot.has(String(record.id)) && !fallbackRecordIds.has(record.id));
+              allData = [...fallbackRecords, ...newRecordsFromBuffer];
               if (this.opts.debugMode) {
                 console.log(`💾 Save: Fallback preserved ${fallbackRecords.length} existing records, total: ${allData.length}`);
               }
@@ -1375,20 +9019,52 @@ class Database extends _events.EventEmitter {
                 console.log(`💾 Save: CRITICAL - Data loss may occur, only writeBuffer will be saved`);
               }
               // Last resort: at least save what we have in writeBuffer
-              allData = writeBufferSnapshot.filter(record => !deletedIdsSnapshot.has(record.id));
+              allData = writeBufferSnapshot.filter(record => !deletedIdsSnapshot.has(String(record.id)));
             }
           }
         } else {
           // No existing data, use only writeBuffer
-          allData = writeBufferSnapshot.filter(record => !deletedIdsSnapshot.has(record.id));
+          allData = writeBufferSnapshot.filter(record => !deletedIdsSnapshot.has(String(record.id)));
         }
       }
 
       // CRITICAL FIX: Calculate offsets based on actual serialized data that will be written
       // This ensures consistency between offset calculation and file writing
-      const jsonlData = allData.length > 0 ? this.serializer.serializeBatch(allData) : '';
+      // CRITICAL FIX: Remove term IDs before serialization to ensure proper serialization
+      const cleanedData = allData.map(record => {
+        if (!record || typeof record !== 'object') {
+          if (this.opts.debugMode) {
+            console.log(`💾 Save: WARNING - Invalid record in allData:`, record);
+          }
+          return record;
+        }
+        return this.removeTermIdsForSerialization(record);
+      });
+      if (this.opts.debugMode) {
+        console.log(`💾 Save: allData.length=${allData.length}, cleanedData.length=${cleanedData.length}`);
+        console.log(`💾 Save: All records in allData before serialization:`, allData.map(r => r && r.id ? {
+          id: String(r.id),
+          price: r.price,
+          app_id: r.app_id,
+          currency: r.currency
+        } : 'no-id'));
+        console.log(`💾 Save: Sample cleaned record:`, cleanedData[0] ? Object.keys(cleanedData[0]) : 'null');
+      }
+      const jsonlData = cleanedData.length > 0 ? this.serializer.serializeBatch(cleanedData) : '';
       const jsonlString = jsonlData.toString('utf8');
       const lines = jsonlString.split('\n').filter(line => line.trim());
+      if (this.opts.debugMode) {
+        console.log(`💾 Save: Serialized ${lines.length} lines`);
+        console.log(`💾 Save: All records in allData after serialization check:`, allData.map(r => r && r.id ? {
+          id: String(r.id),
+          price: r.price,
+          app_id: r.app_id,
+          currency: r.currency
+        } : 'no-id'));
+        if (lines.length > 0) {
+          console.log(`💾 Save: First line (first 200 chars):`, lines[0].substring(0, 200));
+        }
+      }
       this.offsets = [];
       let currentOffset = 0;
       for (let i = 0; i < lines.length; i++) {
@@ -1405,51 +9081,9 @@ class Database extends _events.EventEmitter {
         console.log(`💾 Save: Calculated indexOffset: ${this.indexOffset}, allData.length: ${allData.length}`);
       }
 
-      // OPTIMIZATION: Parallel operations - file writing and index data preparation
-      const parallelWriteOperations = [];
-
-      // Add main file write operation
-      parallelWriteOperations.push(this.fileHandler.writeBatch([jsonlData]));
-
-      // Add index file operations - ALWAYS save offsets, even without indexed fields
-      if (this.indexManager) {
-        const idxPath = this.normalizedFile.replace('.jdb', '.idx.jdb');
-
-        // OPTIMIZATION: Parallel data preparation
-        const indexDataPromise = Promise.resolve({
-          index: this.indexManager.indexedFields && this.indexManager.indexedFields.length > 0 ? this.indexManager.toJSON() : {},
-          offsets: this.offsets,
-          // Save actual offsets for efficient file operations
-          indexOffset: this.indexOffset // Save file size for proper range calculations
-        });
-
-        // Add term mapping data if needed
-        const termMappingFields = this.getTermMappingFields();
-        if (termMappingFields.length > 0 && this.termManager) {
-          const termDataPromise = this.termManager.saveTerms();
-
-          // Combine index data and term data
-          const combinedDataPromise = Promise.all([indexDataPromise, termDataPromise]).then(([indexData, termData]) => {
-            indexData.termMapping = termData;
-            return indexData;
-          });
-
-          // Add index file write operation
-          parallelWriteOperations.push(combinedDataPromise.then(indexData => {
-            const idxFileHandler = new _FileHandler.default(idxPath, this.fileMutex, this.opts);
-            return idxFileHandler.writeAll(JSON.stringify(indexData, null, 2));
-          }));
-        } else {
-          // Add index file write operation without term mapping
-          parallelWriteOperations.push(indexDataPromise.then(indexData => {
-            const idxFileHandler = new _FileHandler.default(idxPath, this.fileMutex, this.opts);
-            return idxFileHandler.writeAll(JSON.stringify(indexData, null, 2));
-          }));
-        }
-      }
-
-      // Execute parallel write operations
-      await Promise.all(parallelWriteOperations);
+      // CRITICAL FIX: Write main data file first
+      // Index will be saved AFTER reconstruction to ensure it contains correct data
+      await this.fileHandler.writeBatch([jsonlData]);
       if (this.opts.debugMode) {
         console.log(`💾 Saved ${allData.length} records to ${this.normalizedFile}`);
       }
@@ -1461,20 +9095,39 @@ class Database extends _events.EventEmitter {
 
       // Clear writeBuffer and deletedIds after successful save only if we had data to save
       if (allData.length > 0) {
-        // Rebuild index when records were deleted to maintain consistency
+        // Rebuild index when records were deleted or updated to maintain consistency
         const hadDeletedRecords = deletedIdsSnapshot.size > 0;
+        const hadUpdatedRecords = writeBufferSnapshot.length > 0;
         if (this.indexManager && this.indexManager.indexedFields && this.indexManager.indexedFields.length > 0) {
-          if (hadDeletedRecords) {
-            // Clear the index and rebuild it from the remaining records
+          if (hadDeletedRecords || hadUpdatedRecords) {
+            // Clear the index and rebuild it from the saved records
+            // This ensures that lineNumbers point to the correct positions in the file
             this.indexManager.clear();
             if (this.opts.debugMode) {
-              console.log(`🧹 Rebuilding index after removing ${deletedIdsSnapshot.size} deleted records`);
+              if (hadDeletedRecords && hadUpdatedRecords) {
+                console.log(`🧹 Rebuilding index after removing ${deletedIdsSnapshot.size} deleted records and updating ${writeBufferSnapshot.length} records`);
+              } else if (hadDeletedRecords) {
+                console.log(`🧹 Rebuilding index after removing ${deletedIdsSnapshot.size} deleted records`);
+              } else {
+                console.log(`🧹 Rebuilding index after updating ${writeBufferSnapshot.length} records`);
+              }
             }
 
             // Rebuild index from the saved records
             // CRITICAL: Process term mapping for records loaded from file to ensure ${field}Ids are available
+            if (this.opts.debugMode) {
+              console.log(`💾 Save: Rebuilding index from ${allData.length} records in allData`);
+            }
             for (let i = 0; i < allData.length; i++) {
               let record = allData[i];
+              if (this.opts.debugMode && i < 3) {
+                console.log(`💾 Save: Rebuilding index record[${i}]:`, {
+                  id: String(record.id),
+                  price: record.price,
+                  app_id: record.app_id,
+                  currency: record.currency
+                });
+              }
 
               // CRITICAL FIX: Ensure records have ${field}Ids for term mapping fields
               // Records from writeBuffer already have ${field}Ids from processTermMapping
@@ -1500,6 +9153,9 @@ class Database extends _events.EventEmitter {
                 }
               }
               await this.indexManager.add(record, i);
+            }
+            if (this.opts.debugMode) {
+              console.log(`💾 Save: Index rebuilt with ${allData.length} records`);
             }
           }
         }
@@ -1581,11 +9237,20 @@ class Database extends _events.EventEmitter {
               this.termManager.decrementTermCount(termId);
             }
           } else if (oldRecord[field] && Array.isArray(oldRecord[field])) {
-            // Use terms to decrement (fallback for backward compatibility)
-            for (const term of oldRecord[field]) {
-              const termId = this.termManager.termToId.get(term);
-              if (termId) {
+            // Check if field contains term IDs (numbers) or terms (strings)
+            const firstValue = oldRecord[field][0];
+            if (typeof firstValue === 'number') {
+              // Field contains term IDs (from find with restoreTerms: false)
+              for (const termId of oldRecord[field]) {
                 this.termManager.decrementTermCount(termId);
+              }
+            } else if (typeof firstValue === 'string') {
+              // Field contains terms (strings) - convert to term IDs
+              for (const term of oldRecord[field]) {
+                const termId = this.termManager.termToId.get(term);
+                if (termId) {
+                  this.termManager.decrementTermCount(termId);
+                }
               }
             }
           }
@@ -1827,6 +9492,7 @@ class Database extends _events.EventEmitter {
         }
 
         // Apply schema enforcement - convert to array format and back to enforce schema
+        // This will discard any fields not in the schema
         const schemaEnforcedRecord = this.applySchemaEnforcement(record);
 
         // Don't store in this.data - only use writeBuffer and index
@@ -2332,11 +9998,20 @@ class Database extends _events.EventEmitter {
             ...updateData
           };
 
+          // DEBUG: Log the update operation details
+          if (this.opts.debugMode) {
+            console.log(`🔄 UPDATE: Original record ID: ${record.id}, type: ${typeof record.id}`);
+            console.log(`🔄 UPDATE: Updated record ID: ${updated.id}, type: ${typeof updated.id}`);
+            console.log(`🔄 UPDATE: Update data keys:`, Object.keys(updateData));
+            console.log(`🔄 UPDATE: Updated record keys:`, Object.keys(updated));
+          }
+
           // Process term mapping for update
           const termMappingStart = Date.now();
           this.processTermMapping(updated, true, record);
           if (this.opts.debugMode) {
             console.log(`🔄 UPDATE: Term mapping completed in ${Date.now() - termMappingStart}ms`);
+            console.log(`🔄 UPDATE: After term mapping - ID: ${updated.id}, type: ${typeof updated.id}`);
           }
 
           // CRITICAL FIX: Remove old terms from index before adding new ones
@@ -2347,7 +10022,8 @@ class Database extends _events.EventEmitter {
             }
           }
 
-          // Update record in writeBuffer or add to writeBuffer if not present
+          // CRITICAL FIX: Update record in writeBuffer or add to writeBuffer if not present
+          // For records in the file, we need to ensure they are properly marked for replacement
           const index = this.writeBuffer.findIndex(r => r.id === record.id);
           let lineNumber = null;
           if (index !== -1) {
@@ -2359,11 +10035,12 @@ class Database extends _events.EventEmitter {
             }
           } else {
             // Record is in file, add updated version to writeBuffer
-            // This will ensure the updated record is saved and replaces the file version
+            // CRITICAL FIX: Ensure the old record in file will be replaced by checking if it exists in offsets
+            // The save() method will handle replacement via _streamExistingRecords which checks updatedRecordsMap
             this.writeBuffer.push(updated);
             lineNumber = this._getAbsoluteLineNumber(this.writeBuffer.length - 1);
             if (this.opts.debugMode) {
-              console.log(`🔄 UPDATE: Added new record to writeBuffer at index ${lineNumber}`);
+              console.log(`🔄 UPDATE: Added updated record to writeBuffer (will replace file record ${record.id})`);
             }
           }
           const indexUpdateStart = Date.now();
@@ -2485,16 +10162,7 @@ class Database extends _events.EventEmitter {
       return;
     }
 
-    // Try to get schema from options first
-    if (this.opts.schema && Array.isArray(this.opts.schema)) {
-      this.serializer.initializeSchema(this.opts.schema);
-      if (this.opts.debugMode) {
-        console.log(`🔍 Schema initialized from options: ${this.opts.schema.join(', ')} [${this.instanceId}]`);
-      }
-      return;
-    }
-
-    // Try to initialize from fields configuration (new format)
+    // Initialize from fields configuration (mandatory)
     if (this.opts.fields && typeof this.opts.fields === 'object') {
       const fieldNames = Object.keys(this.opts.fields);
       if (fieldNames.length > 0) {
@@ -2506,7 +10174,7 @@ class Database extends _events.EventEmitter {
       }
     }
 
-    // Try to auto-detect schema from existing data
+    // Try to auto-detect schema from existing data (fallback for migration scenarios)
     if (this.data && this.data.length > 0) {
       this.serializer.initializeSchema(this.data, true); // autoDetect = true
       if (this.opts.debugMode) {
@@ -2514,11 +10182,6 @@ class Database extends _events.EventEmitter {
       }
       return;
     }
-
-    // CRITICAL FIX: Don't initialize schema from indexes
-    // This was causing data loss because only indexed fields were preserved
-    // Let schema be auto-detected from actual data instead
-
     if (this.opts.debugMode) {
       console.log(`🔍 No schema initialization possible - will auto-detect on first insert [${this.instanceId}]`);
     }
@@ -2558,7 +10221,7 @@ class Database extends _events.EventEmitter {
         if (this.fileHandler && this.fileHandler.file) {
           try {
             // Use synchronous file stats to check if file is empty
-            const stats = _fs.default.statSync(this.fileHandler.file);
+            const stats = fs.statSync(this.fileHandler.file);
             if (stats && stats.size === 0 && savedRecords > 0) {
               // File is empty but offsets array has records - this is the bug condition
               if (this.opts.debugMode) {
@@ -2674,8 +10337,8 @@ class Database extends _events.EventEmitter {
 
       // Auto-detect schema from first line if not initialized
       if (!this.serializer.schemaManager.isInitialized) {
-        const fs = await Promise.resolve().then(() => _interopRequireWildcard(require('fs')));
-        const readline = await Promise.resolve().then(() => _interopRequireWildcard(require('readline')));
+        const fs = await import('fs');
+        const readline = await import('readline');
         const stream = fs.createReadStream(this.fileHandler.file, {
           highWaterMark: 64 * 1024,
           encoding: 'utf8'
@@ -2747,8 +10410,8 @@ class Database extends _events.EventEmitter {
 
       // Use streaming to read records without loading everything into memory
       // Also rebuild offsets while we're at it
-      const fs = await Promise.resolve().then(() => _interopRequireWildcard(require('fs')));
-      const readline = await Promise.resolve().then(() => _interopRequireWildcard(require('readline')));
+      const fs = await import('fs');
+      const readline = await import('readline');
       this.offsets = [];
       let currentOffset = 0;
       const stream = fs.createReadStream(this.fileHandler.file, {
@@ -3322,64 +10985,112 @@ class Database extends _events.EventEmitter {
     // Fetch actual records
     const lineNumbers = limitedEntries.map(([lineNumber]) => lineNumber);
     const scoresByLineNumber = new Map(limitedEntries);
+    const persistedCount = Array.isArray(this.offsets) ? this.offsets.length : 0;
 
-    // Use getRanges and fileHandler to read records
-    const ranges = this.getRanges(lineNumbers);
-    const groupedRanges = await this.fileHandler.groupedRanges(ranges);
-    const fs = await Promise.resolve().then(() => _interopRequireWildcard(require('fs')));
-    const fd = await fs.promises.open(this.fileHandler.file, 'r');
+    // Separate lineNumbers into file records and writeBuffer records
+    const fileLineNumbers = [];
+    const writeBufferLineNumbers = [];
+    for (const lineNumber of lineNumbers) {
+      if (lineNumber >= persistedCount) {
+        // This lineNumber points to writeBuffer
+        writeBufferLineNumbers.push(lineNumber);
+      } else {
+        // This lineNumber points to file
+        fileLineNumbers.push(lineNumber);
+      }
+    }
     const results = [];
-    try {
-      for (const groupedRange of groupedRanges) {
-        var _iteratorAbruptCompletion3 = false;
-        var _didIteratorError3 = false;
-        var _iteratorError3;
+
+    // Read records from file
+    if (fileLineNumbers.length > 0) {
+      const ranges = this.getRanges(fileLineNumbers);
+      if (ranges.length > 0) {
+        // Create a map from start offset to lineNumber for accurate mapping
+        const startToLineNumber = new Map();
+        for (const range of ranges) {
+          if (range.index !== undefined) {
+            startToLineNumber.set(range.start, range.index);
+          }
+        }
+        const groupedRanges = await this.fileHandler.groupedRanges(ranges);
+        const fs = await import('fs');
+        const fd = await fs.promises.open(this.fileHandler.file, 'r');
         try {
-          for (var _iterator3 = _asyncIterator(this.fileHandler.readGroupedRange(groupedRange, fd)), _step3; _iteratorAbruptCompletion3 = !(_step3 = await _iterator3.next()).done; _iteratorAbruptCompletion3 = false) {
-            const row = _step3.value;
-            {
-              try {
-                const record = this.serializer.deserialize(row.line);
+          for (const groupedRange of groupedRanges) {
+            var _iteratorAbruptCompletion3 = false;
+            var _didIteratorError3 = false;
+            var _iteratorError3;
+            try {
+              for (var _iterator3 = _asyncIterator(this.fileHandler.readGroupedRange(groupedRange, fd)), _step3; _iteratorAbruptCompletion3 = !(_step3 = await _iterator3.next()).done; _iteratorAbruptCompletion3 = false) {
+                const row = _step3.value;
+                {
+                  try {
+                    const record = this.serializer.deserialize(row.line);
 
-                // Get line number from the row
-                const lineNumber = row._ || 0;
+                    // Get line number from the row, fallback to start offset mapping
+                    let lineNumber = row._ !== null && row._ !== undefined ? row._ : startToLineNumber.get(row.start) ?? 0;
 
-                // Restore term IDs to terms
-                const recordWithTerms = this.restoreTermIdsAfterDeserialization(record);
+                    // Restore term IDs to terms
+                    const recordWithTerms = this.restoreTermIdsAfterDeserialization(record);
 
-                // Add line number
-                recordWithTerms._ = lineNumber;
+                    // Add line number
+                    recordWithTerms._ = lineNumber;
 
-                // Add score if includeScore is true
-                if (opts.includeScore) {
-                  recordWithTerms.score = scoresByLineNumber.get(lineNumber) || 0;
+                    // Add score if includeScore is true (default is true)
+                    if (opts.includeScore !== false) {
+                      recordWithTerms.score = scoresByLineNumber.get(lineNumber) || 0;
+                    }
+                    results.push(recordWithTerms);
+                  } catch (error) {
+                    // Skip invalid lines
+                    if (this.opts.debugMode) {
+                      console.error('Error deserializing record in score():', error);
+                    }
+                  }
                 }
-                results.push(recordWithTerms);
-              } catch (error) {
-                // Skip invalid lines
-                if (this.opts.debugMode) {
-                  console.error('Error deserializing record in score():', error);
+              }
+            } catch (err) {
+              _didIteratorError3 = true;
+              _iteratorError3 = err;
+            } finally {
+              try {
+                if (_iteratorAbruptCompletion3 && _iterator3.return != null) {
+                  await _iterator3.return();
+                }
+              } finally {
+                if (_didIteratorError3) {
+                  throw _iteratorError3;
                 }
               }
             }
           }
-        } catch (err) {
-          _didIteratorError3 = true;
-          _iteratorError3 = err;
         } finally {
-          try {
-            if (_iteratorAbruptCompletion3 && _iterator3.return != null) {
-              await _iterator3.return();
+          await fd.close();
+        }
+      }
+    }
+
+    // Read records from writeBuffer
+    if (writeBufferLineNumbers.length > 0 && this.writeBuffer) {
+      for (const lineNumber of writeBufferLineNumbers) {
+        const writeBufferIndex = lineNumber - persistedCount;
+        if (writeBufferIndex >= 0 && writeBufferIndex < this.writeBuffer.length) {
+          const record = this.writeBuffer[writeBufferIndex];
+          if (record) {
+            // Restore term IDs to terms
+            const recordWithTerms = this.restoreTermIdsAfterDeserialization(record);
+
+            // Add line number
+            recordWithTerms._ = lineNumber;
+
+            // Add score if includeScore is true
+            if (opts.includeScore) {
+              recordWithTerms.score = scoresByLineNumber.get(lineNumber) || 0;
             }
-          } finally {
-            if (_didIteratorError3) {
-              throw _iteratorError3;
-            }
+            results.push(recordWithTerms);
           }
         }
       }
-    } finally {
-      await fd.close();
     }
 
     // Re-sort results to maintain score order (since reads might be out of order)
@@ -3700,15 +11411,17 @@ class Database extends _events.EventEmitter {
 
       // Method 1: Try to read the entire file and filter
       if (this.fileHandler.exists()) {
-        const fs = await Promise.resolve().then(() => _interopRequireWildcard(require('fs')));
+        const fs = await import('fs');
         const fileContent = await fs.promises.readFile(this.normalizedFile, 'utf8');
         const lines = fileContent.split('\n').filter(line => line.trim());
         for (let i = 0; i < lines.length && i < this.offsets.length; i++) {
           try {
             const record = this.serializer.deserialize(lines[i]);
-            if (record && !deletedIdsSnapshot.has(record.id)) {
+            if (record && !deletedIdsSnapshot.has(String(record.id))) {
               // Check if this record is not being updated in writeBuffer
-              const updatedRecord = writeBufferSnapshot.find(r => r.id === record.id);
+              // CRITICAL FIX: Normalize IDs to strings for consistent comparison
+              const normalizedRecordId = String(record.id);
+              const updatedRecord = writeBufferSnapshot.find(r => r && r.id && String(r.id) === normalizedRecordId);
               if (!updatedRecord) {
                 existingRecords.push(record);
               }
@@ -3748,10 +11461,26 @@ class Database extends _events.EventEmitter {
     // existingRecords.length = this.offsets.length
 
     // Create a map of updated records for quick lookup
+    // CRITICAL FIX: Normalize IDs to strings for consistent comparison
     const updatedRecordsMap = new Map();
-    writeBufferSnapshot.forEach(record => {
-      updatedRecordsMap.set(record.id, record);
+    writeBufferSnapshot.forEach((record, index) => {
+      if (record && record.id !== undefined && record.id !== null) {
+        // Normalize ID to string for consistent comparison
+        const normalizedId = String(record.id);
+        updatedRecordsMap.set(normalizedId, record);
+        if (this.opts.debugMode) {
+          console.log(`💾 Save: Added to updatedRecordsMap: ID=${normalizedId} (original: ${record.id}, type: ${typeof record.id}), index=${index}`);
+        }
+      } else if (this.opts.debugMode) {
+        console.log(`⚠️ Save: Skipped record in writeBufferSnapshot[${index}] - missing or invalid ID:`, record ? {
+          id: record.id,
+          keys: Object.keys(record)
+        } : 'null');
+      }
     });
+    if (this.opts.debugMode) {
+      console.log(`💾 Save: updatedRecordsMap size: ${updatedRecordsMap.size}, keys:`, Array.from(updatedRecordsMap.keys()));
+    }
 
     // OPTIMIZATION: Cache file stats to avoid repeated stat() calls
     let fileSize = 0;
@@ -3760,7 +11489,7 @@ class Database extends _events.EventEmitter {
       fileSize = this._cachedFileStats.size;
     } else {
       // Get fresh stats and cache them
-      const fileStats = (await this.fileHandler.exists()) ? await _fs.default.promises.stat(this.normalizedFile) : null;
+      const fileStats = (await this.fileHandler.exists()) ? await fs.promises.stat(this.normalizedFile) : null;
       fileSize = fileStats ? fileStats.size : 0;
       this._cachedFileStats = {
         size: fileSize,
@@ -3911,7 +11640,8 @@ class Database extends _events.EventEmitter {
             if (recordId !== undefined && recordId !== null) {
               recordId = String(recordId);
               // Check if this record needs full parsing (updated or deleted)
-              needsFullParse = updatedRecordsMap.has(recordId) || deletedIdsSnapshot.has(recordId);
+              // CRITICAL FIX: Normalize ID to string for consistent comparison
+              needsFullParse = updatedRecordsMap.has(recordId) || deletedIdsSnapshot.has(String(recordId));
             } else {
               needsFullParse = true;
             }
@@ -3926,7 +11656,8 @@ class Database extends _events.EventEmitter {
         const idMatch = trimmedLine.match(/"id"\s*:\s*"([^"]+)"|"id"\s*:\s*(\d+)/);
         if (idMatch) {
           recordId = idMatch[1] || idMatch[2];
-          needsFullParse = updatedRecordsMap.has(recordId) || deletedIdsSnapshot.has(recordId);
+          // CRITICAL FIX: Normalize ID to string for consistent comparison
+          needsFullParse = updatedRecordsMap.has(String(recordId)) || deletedIdsSnapshot.has(String(recordId));
         } else {
           needsFullParse = true;
         }
@@ -3949,11 +11680,33 @@ class Database extends _events.EventEmitter {
 
         // Use record directly (no need to restore term IDs)
         const recordWithIds = record;
-        if (updatedRecordsMap.has(recordWithIds.id)) {
+
+        // CRITICAL FIX: Normalize ID to string for consistent comparison
+        const normalizedId = String(recordWithIds.id);
+        if (this.opts.debugMode) {
+          console.log(`💾 Save: Checking record ID=${normalizedId} (original: ${recordWithIds.id}, type: ${typeof recordWithIds.id}) in updatedRecordsMap`);
+          console.log(`💾 Save: updatedRecordsMap.has(${normalizedId}): ${updatedRecordsMap.has(normalizedId)}`);
+          if (!updatedRecordsMap.has(normalizedId)) {
+            console.log(`💾 Save: Record ${normalizedId} NOT found in updatedRecordsMap. Available keys:`, Array.from(updatedRecordsMap.keys()));
+          }
+        }
+        if (updatedRecordsMap.has(normalizedId)) {
           // Replace with updated version
-          const updatedRecord = updatedRecordsMap.get(recordWithIds.id);
+          const updatedRecord = updatedRecordsMap.get(normalizedId);
           if (this.opts.debugMode) {
-            console.log(`💾 Save: Updated record ${recordWithIds.id} (${recordWithIds.name || 'Unnamed'})`);
+            console.log(`💾 Save: ✅ REPLACING record ${recordWithIds.id} with updated version`);
+            console.log(`💾 Save: Old record:`, {
+              id: recordWithIds.id,
+              price: recordWithIds.price,
+              app_id: recordWithIds.app_id,
+              currency: recordWithIds.currency
+            });
+            console.log(`💾 Save: New record:`, {
+              id: updatedRecord.id,
+              price: updatedRecord.price,
+              app_id: updatedRecord.app_id,
+              currency: updatedRecord.currency
+            });
           }
           return {
             type: 'updated',
@@ -3961,7 +11714,7 @@ class Database extends _events.EventEmitter {
             id: recordWithIds.id,
             needsParse: false
           };
-        } else if (!deletedIdsSnapshot.has(recordWithIds.id)) {
+        } else if (!deletedIdsSnapshot.has(String(recordWithIds.id))) {
           // Keep existing record if not deleted
           if (this.opts.debugMode) {
             console.log(`💾 Save: Kept record ${recordWithIds.id} (${recordWithIds.name || 'Unnamed'})`);
@@ -4224,7 +11977,7 @@ class Database extends _events.EventEmitter {
         return;
       }
       _this._offsetRecoveryInProgress = true;
-      const fsModule = _this._fsModule || (_this._fsModule = yield _awaitAsyncGenerator(Promise.resolve().then(() => _interopRequireWildcard(require('fs')))));
+      const fsModule = _this._fsModule || (_this._fsModule = yield _awaitAsyncGenerator(import('fs')));
       let fd;
       try {
         fd = yield _awaitAsyncGenerator(fsModule.promises.open(_this.fileHandler.file, 'r'));
@@ -4241,7 +11994,6 @@ class Database extends _events.EventEmitter {
       const originalOffsets = Array.isArray(_this.offsets) ? [..._this.offsets] : [];
       const newOffsets = [];
       let offsetAdjusted = false;
-      let limitReached = false;
       let lineIndex = 0;
       let lastLineEnd = 0;
       let producedTotal = alreadyYielded || 0;
@@ -4325,9 +12077,7 @@ class Database extends _events.EventEmitter {
               start: lineStart,
               _: lineIndex
             } : entryWithTerms;
-          } else {
-            limitReached = true;
-          }
+          } else ;
         }
         lineIndex++;
         if (yieldedEntry) {
@@ -4522,7 +12272,7 @@ class Database extends _events.EventEmitter {
             // OPTIMIZATION: Use ranges instead of reading entire file
             const ranges = _this2.getRanges(map);
             const groupedRanges = yield _awaitAsyncGenerator(_this2.fileHandler.groupedRanges(ranges));
-            const fs = yield _awaitAsyncGenerator(Promise.resolve().then(() => _interopRequireWildcard(require('fs'))));
+            const fs = yield _awaitAsyncGenerator(import('fs'));
             const fd = yield _awaitAsyncGenerator(fs.promises.open(_this2.fileHandler.file, 'r'));
             try {
               for (const groupedRange of groupedRanges) {
@@ -4667,7 +12417,7 @@ class Database extends _events.EventEmitter {
       // Use file-based streaming for saved data
       const ranges = _this2.getRanges(map);
       const groupedRanges = yield _awaitAsyncGenerator(_this2.fileHandler.groupedRanges(ranges));
-      const fd = yield _awaitAsyncGenerator(_fs.default.promises.open(_this2.fileHandler.file, 'r'));
+      const fd = yield _awaitAsyncGenerator(fs.promises.open(_this2.fileHandler.file, 'r'));
       try {
         let count = 0;
         for (const groupedRange of groupedRanges) {
@@ -5078,7 +12828,7 @@ class Database extends _events.EventEmitter {
         // If the .idx.jdb file exists and has data, and we're trying to save empty index,
         // skip the save to prevent corruption
         if (isEmpty && !this.offsets?.length) {
-          const fs = await Promise.resolve().then(() => _interopRequireWildcard(require('fs')));
+          const fs = await import('fs');
           if (fs.existsSync(idxPath)) {
             try {
               const existingData = JSON.parse(await fs.promises.readFile(idxPath, 'utf8'));
@@ -5164,7 +12914,6 @@ class Database extends _events.EventEmitter {
   async waitForOperations(maxWaitTime = null) {
     // Accept any falsy/undefined/empty call as "wait for all"
     const actualWaitTime = arguments.length === 0 ? null : maxWaitTime;
-    const startTime = Date.now();
     const hasTimeout = actualWaitTime !== null && actualWaitTime !== undefined;
 
     // Wait for operation queue
@@ -5200,5 +12949,6 @@ class Database extends _events.EventEmitter {
     return true;
   }
 }
+
 exports.Database = Database;
-var _default = exports.default = Database;
+exports.default = Database;

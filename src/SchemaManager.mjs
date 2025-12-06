@@ -90,14 +90,12 @@ export default class SchemaManager {
 
   /**
    * Initialize schema from database options
+   * Note: schema option is no longer supported, use fields instead
    */
   initializeFromOptions(opts) {
-    if (opts.schema && Array.isArray(opts.schema)) {
-      this.setSchema(opts.schema)
-    }
-    // CRITICAL FIX: Don't auto-initialize schema from indexes
-    // This was causing data loss because only indexed fields were preserved
-    // Let schema be auto-detected from actual data instead
+    // Schema option is no longer supported - fields should be used instead
+    // This method is kept for compatibility but does nothing
+    // Schema initialization is handled by Database.initializeSchema() using fields
   }
 
   /**
@@ -140,6 +138,12 @@ export default class SchemaManager {
       const fieldName = this.schema[i]
       result[i] = obj[fieldName] !== undefined ? obj[fieldName] : undefined
     }
+    
+    // CRITICAL FIX: Always append 'id' field if it exists and is not in schema
+    // The 'id' field must be preserved even if not in the schema
+    if (obj.id !== undefined && obj.id !== null && this.schema.indexOf('id') === -1) {
+      result.push(obj.id)
+    }
 
     return result
   }
@@ -157,14 +161,67 @@ export default class SchemaManager {
     }
 
     const obj = {}
+    const idIndex = this.schema.indexOf('id')
+    
+    // CRITICAL FIX: Handle schema migration where 'id' was first field in old schema
+    // but is not in current schema. Check if first element looks like an ID.
+    // Only do this if:
+    // 1. 'id' is not in current schema
+    // 2. Array has significantly more elements than current schema (2+ extra elements)
+    //    This suggests the old schema had more fields, and 'id' was likely the first
+    // 3. First element is a very short string (max 20 chars) that looks like a generated ID
+    //    (typically alphanumeric, often starting with letters like 'mit...' or similar patterns)
+    // 4. First field in current schema is not 'id' (to avoid false positives)
+    // 5. First element is not an array (to avoid false positives with array fields)
+    let arrayOffset = 0
+    if (idIndex === -1 && arr.length >= this.schema.length + 2 && this.schema.length > 0) {
+      // Only apply if array has at least 2 extra elements (suggests old schema had more fields)
+      const firstElement = arr[0]
+      const firstFieldName = this.schema[0]
+      
+      // Only apply shift if:
+      // - First field is not 'id'
+      // - First element is a very short string (max 20 chars) that looks like a generated ID
+      // - First element is not an array (to avoid false positives)
+      // - Array has at least 2 extra elements (strong indicator of schema migration)
+      if (firstFieldName !== 'id' && 
+          typeof firstElement === 'string' && 
+          !Array.isArray(firstElement) &&
+          firstElement.length > 0 && 
+          firstElement.length <= 20 && // Very conservative: max 20 chars (typical ID length)
+          /^[a-zA-Z0-9_-]+$/.test(firstElement)) {
+        // First element is likely the ID from old schema
+        obj.id = firstElement
+        arrayOffset = 1
+      }
+    }
     
     // Map array values to object properties
     // Only include fields that are in the schema
-    for (let i = 0; i < Math.min(arr.length, this.schema.length); i++) {
+    for (let i = 0; i < Math.min(arr.length - arrayOffset, this.schema.length); i++) {
       const fieldName = this.schema[i]
+      const arrayIndex = i + arrayOffset
       // Only include non-undefined values to avoid cluttering the object
-      if (arr[i] !== undefined) {
-        obj[fieldName] = arr[i]
+      if (arr[arrayIndex] !== undefined) {
+        obj[fieldName] = arr[arrayIndex]
+      }
+    }
+    
+    // CRITICAL FIX: Always preserve 'id' field if it exists in the original object
+    // The 'id' field may not be in the schema but must be preserved
+    if (idIndex !== -1 && arr[idIndex] !== undefined) {
+      // 'id' is in schema and has a value
+      obj.id = arr[idIndex]
+    } else if (!obj.id && arr.length > this.schema.length + arrayOffset) {
+      // 'id' is not in schema but array has extra element(s) - check if last element could be ID
+      // This handles cases where ID was added after schema initialization
+      for (let i = this.schema.length + arrayOffset; i < arr.length; i++) {
+        // Try to infer if this is an ID (string that looks like an ID)
+        const potentialId = arr[i]
+        if (potentialId !== undefined && potentialId !== null && typeof potentialId === 'string' && potentialId.length > 0 && potentialId.length < 100) {
+          obj.id = potentialId
+          break // Use first potential ID found
+        }
       }
     }
 

@@ -1,6 +1,6 @@
 {
   "name": "jexidb",
-  "version": "2.1.1",
+  "version": "2.1.3",
   "type": "module",
   "description": "JexiDB is a pure JS NPM library for managing data on disk efficiently, without the need for a server.",
   "main": "./dist/Database.cjs",
@@ -17,7 +17,7 @@
     "test:coverage": "jest --coverage && npm run clean:test-files",
     "test:legacy": "node --expose-gc test/test.mjs",
     "clean:test-files": "node scripts/clean-test-files.js",
-    "build": "npx babel src/Database.mjs --plugins @babel/plugin-transform-async-generator-functions --out-file-extension .cjs --out-dir dist",
+    "build": "rollup -c",
     "prepare": "node scripts/prepare.js"
   },
   "author": "EdenwareApps",
@@ -27,6 +27,7 @@
     "@babel/core": "^7.25.2",
     "@babel/plugin-transform-async-generator-functions": "^7.25.4",
     "@babel/preset-env": "^7.28.3",
+    "@rollup/plugin-babel": "^6.1.0",
     "@rollup/plugin-commonjs": "^28.0.6",
     "@rollup/plugin-node-resolve": "^16.0.1",
     "babel-jest": "^30.0.5",
@@ -47,6 +48,12 @@
   "directories": {
     "test": "test"
   },
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/EdenwareApps/jexidb.git"

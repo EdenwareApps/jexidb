@@ -14,6 +14,7 @@ describe('WriteBuffer Flush Resilience', () => {
     fs.mkdirSync(testDir, { recursive: true })
 
     db = new Database(path.join(testDir, 'test'), {
+      fields: { name: 'string', tags: 'array:string' },
       indexes: { name: 'string', tags: 'array:string' },
       debugMode: false, // Disable debug mode to reduce noise
     })

@@ -25,6 +25,7 @@ describe('Explicit indexes with comparison operators', () => {
 
   test('should reuse persisted index configuration when explicit indexes array is provided', async () => {
     const seedDb = new Database(testDbPath, {
+      fields: { id: 'string', channel: 'string', end: 'number', start: 'number', terms: 'array:string' },
       indexes: {
         channel: 'string',
         end: 'number',
@@ -60,7 +61,8 @@ describe('Explicit indexes with comparison operators', () => {
     await seedDb.save()
     await seedDb.close()
 
-    const reopenedDb = new Database(testDbPath, {
+    const reopenedDb = new Database(testDbPath, {fields: {"channel":"string","end":"string"},
+      
       create: false,
       indexes: ['channel', 'end'],
       debugMode: false
@@ -85,6 +87,7 @@ describe('Explicit indexes with comparison operators', () => {
 
   test('should return results for equality mixed with comparison operators after reopening with persisted indexes', async () => {
     const seedDb = new Database(testDbPath, {
+      fields: { id: 'string', channel: 'string', start: 'number', end: 'number', terms: 'array:string' },
       indexes: {
         channel: 'string',
         start: 'number',
@@ -132,6 +135,7 @@ describe('Explicit indexes with comparison operators', () => {
 
     const reopenedDb = new Database(testDbPath, {
       create: false,
+      fields: { id: 'string', channel: 'string', start: 'number', end: 'number', terms: 'array:string' },
       indexes: {
         channel: 'string',
         start: 'number',

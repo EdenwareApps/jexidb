@@ -24,7 +24,8 @@ describe('Legacy operator compatibility', () => {
   })
 
   test('should support string comparison operators for find/count', async () => {
-    const db = new Database(testDbPath, {
+    const db = new Database(testDbPath, {fields: {"start":"number","end":"number","id":"number"},
+      
       indexes: {
         start: 'number',
         end: 'number'
@@ -75,7 +76,8 @@ describe('Legacy operator compatibility', () => {
   })
 
   test('should support string inequality operator', async () => {
-    const db = new Database(testDbPath, {
+    const db = new Database(testDbPath, {fields: {"end":"number","id":"number"},
+      
       indexes: {
         end: 'number'
       },
@@ -107,7 +109,8 @@ describe('Legacy operator compatibility', () => {
   })
 
   test('should support mongo-style comparison operators when using indexes', async () => {
-    const db = new Database(testDbPath, {
+    const db = new Database(testDbPath, {fields: {"numericField":"number","id":"number"},
+      
       indexes: {
         numericField: 'number'
       },
@@ -121,7 +124,8 @@ describe('Legacy operator compatibility', () => {
     await db.save()
     await db.close()
 
-    const reopenedDb = new Database(testDbPath, {
+    const reopenedDb = new Database(testDbPath, {fields: {"numericField":"number","id":"number"},
+      
       create: false,
       indexes: {
         numericField: 'number'

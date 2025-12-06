@@ -26,6 +26,11 @@ describe('Coverage Method Tests', () => {
     cleanUp(testIdxPath)
 
     db = new Database(testDbPath, {
+      fields: {
+        name: 'string',
+        nameTerms: 'array:string',
+        genre: 'string'
+      },
       indexes: {
         nameTerms: 'array:string',
         genre: 'string'

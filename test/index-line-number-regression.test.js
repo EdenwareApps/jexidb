@@ -26,6 +26,7 @@ describe('Term mapping index line number regression', () => {
   test('should index new term mapping values appended after reload', async () => {
     // Seed database with a first record and persist it to disk
     const initialDb = new Database(testDbPath, {
+      fields: { name: 'string', nameTerms: 'array:string' },
       indexes: { nameTerms: 'array:string' },
       debugMode: false
     })
@@ -40,6 +41,7 @@ describe('Term mapping index line number regression', () => {
 
     // Reopen the same database and append a new record with different terms
     const db = new Database(testDbPath, {
+      fields: { name: 'string', nameTerms: 'array:string' },
       indexes: { nameTerms: 'array:string' },
       debugMode: false
     })
@@ -66,6 +68,7 @@ describe('Term mapping index line number regression', () => {
 
   test('should remove old term mapping entries when record is updated', async () => {
     const db = new Database(testDbPath, {
+      fields: { name: 'string', nameTerms: 'array:string' },
       indexes: { nameTerms: 'array:string' },
       debugMode: false
     })

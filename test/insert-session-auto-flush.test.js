@@ -38,7 +38,11 @@ describe('InsertSession Auto-Flush', () => {
   describe('Auto-flush on batch size', () => {
     test('should auto-flush when batch size is reached', async () => {
       const dbPath = path.join(testDir, 'auto-flush-basic.jdb')
-      db = new Database(dbPath, { clear: true, create: true })
+      db = new Database(dbPath, { 
+        fields: { name: 'string', value: 'number' },
+        clear: true, 
+        create: true 
+      })
       await db.init()
 
       const session = db.beginInsertSession({ batchSize: 10 })
@@ -62,7 +66,11 @@ describe('InsertSession Auto-Flush', () => {
 
     test('should auto-flush multiple batches without accumulating in memory', async () => {
       const dbPath = path.join(testDir, 'auto-flush-multiple.jdb')
-      db = new Database(dbPath, { clear: true, create: true })
+      db = new Database(dbPath, { 
+        fields: { name: 'string', value: 'number' },
+        clear: true, 
+        create: true 
+      })
       await db.init()
 
       const session = db.beginInsertSession({ batchSize: 100 })
@@ -105,7 +113,11 @@ describe('InsertSession Auto-Flush', () => {
 
     test('should handle concurrent inserts during flush', async () => {
       const dbPath = path.join(testDir, 'auto-flush-concurrent.jdb')
-      db = new Database(dbPath, { clear: true, create: true })
+      db = new Database(dbPath, { 
+        fields: { name: 'string', value: 'number' },
+        clear: true, 
+        create: true 
+      })
       await db.init()
 
       const session = db.beginInsertSession({ batchSize: 50 })
@@ -135,7 +147,11 @@ describe('InsertSession Auto-Flush', () => {
   describe('Commit waits for auto-flushes', () => {
     test('commit() should wait for all pending auto-flushes', async () => {
       const dbPath = path.join(testDir, 'commit-waits.jdb')
-      db = new Database(dbPath, { clear: true, create: true })
+      db = new Database(dbPath, { 
+        fields: { name: 'string', value: 'number' },
+        clear: true, 
+        create: true 
+      })
       await db.init()
 
       const session = db.beginInsertSession({ batchSize: 10 })
@@ -161,7 +177,11 @@ describe('InsertSession Auto-Flush', () => {
 
     test('commit() should flush remaining data after waiting for auto-flushes', async () => {
       const dbPath = path.join(testDir, 'commit-flush-remaining.jdb')
-      db = new Database(dbPath, { clear: true, create: true })
+      db = new Database(dbPath, { 
+        fields: { name: 'string', value: 'number' },
+        clear: true, 
+        create: true 
+      })
       await db.init()
 
       const session = db.beginInsertSession({ batchSize: 100 })
@@ -187,7 +207,11 @@ describe('InsertSession Auto-Flush', () => {
   describe('_doFlush handles concurrent inserts', () => {
     test('_doFlush should process all data even if new data is added during flush', async () => {
       const dbPath = path.join(testDir, 'doflush-concurrent.jdb')
-      db = new Database(dbPath, { clear: true, create: true })
+      db = new Database(dbPath, { 
+        fields: { name: 'string', value: 'number' },
+        clear: true, 
+        create: true 
+      })
       await db.init()
 
       const session = db.beginInsertSession({ batchSize: 10 })
@@ -219,7 +243,11 @@ describe('InsertSession Auto-Flush', () => {
 
     test('_doFlush should continue until queue is empty', async () => {
       const dbPath = path.join(testDir, 'doflush-empty-queue.jdb')
-      db = new Database(dbPath, { clear: true, create: true })
+      db = new Database(dbPath, { 
+        fields: { name: 'string', value: 'number' },
+        clear: true, 
+        create: true 
+      })
       await db.init()
 
       const session = db.beginInsertSession({ batchSize: 5 })
@@ -249,7 +277,11 @@ describe('InsertSession Auto-Flush', () => {
   describe('Memory management', () => {
     test('should not accumulate batches in memory', async () => {
       const dbPath = path.join(testDir, 'memory-management.jdb')
-      db = new Database(dbPath, { clear: true, create: true })
+      db = new Database(dbPath, { 
+        fields: { name: 'string', value: 'number' },
+        clear: true, 
+        create: true 
+      })
       await db.init()
 
       const session = db.beginInsertSession({ batchSize: 100 })
@@ -288,7 +320,11 @@ describe('InsertSession Auto-Flush', () => {
   describe('Edge cases', () => {
     test('should handle empty commit', async () => {
       const dbPath = path.join(testDir, 'empty-commit.jdb')
-      db = new Database(dbPath, { clear: true, create: true })
+      db = new Database(dbPath, { 
+        fields: { name: 'string', value: 'number' },
+        clear: true, 
+        create: true 
+      })
       await db.init()
 
       const session = db.beginInsertSession()
@@ -302,7 +338,11 @@ describe('InsertSession Auto-Flush', () => {
 
     test('should handle multiple commits on same session', async () => {
       const dbPath = path.join(testDir, 'multiple-commits.jdb')
-      db = new Database(dbPath, { clear: true, create: true })
+      db = new Database(dbPath, { 
+        fields: { name: 'string', value: 'number' },
+        clear: true, 
+        create: true 
+      })
       await db.init()
 
       const session = db.beginInsertSession({ batchSize: 10 })
@@ -324,7 +364,11 @@ describe('InsertSession Auto-Flush', () => {
 
     test('should handle hasPendingOperations correctly', async () => {
       const dbPath = path.join(testDir, 'pending-operations.jdb')
-      db = new Database(dbPath, { clear: true, create: true })
+      db = new Database(dbPath, { 
+        fields: { name: 'string', value: 'number' },
+        clear: true, 
+        create: true 
+      })
       await db.init()
 
       const session = db.beginInsertSession({ batchSize: 10 })

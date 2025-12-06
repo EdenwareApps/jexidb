@@ -154,7 +154,12 @@ describe('Deserialize Corruption Fixes', () => {
   describe('walk() error handling', () => {
     test('should continue processing after encountering corrupted line', async () => {
       const dbPath = path.join(testDir, 'walk-corruption.jdb')
-      db = new Database(dbPath, { clear: true, create: true, debugMode: false })
+      db = new Database(dbPath, { 
+        fields: { name: 'string', value: 'number' },
+        clear: true, 
+        create: true, 
+        debugMode: false 
+      })
       await db.init()
 
       // Insert multiple records
@@ -196,7 +201,12 @@ describe('Deserialize Corruption Fixes', () => {
 
     test('should log errors in debug mode', async () => {
       const dbPath = path.join(testDir, 'walk-debug.jdb')
-      db = new Database(dbPath, { clear: true, create: true, debugMode: true })
+      db = new Database(dbPath, { 
+        fields: { name: 'string', value: 'number' },
+        clear: true, 
+        create: true, 
+        debugMode: true 
+      })
       await db.init()
 
       await db.insert({ name: 'Test1', value: 1 })
@@ -247,7 +257,11 @@ describe('Deserialize Corruption Fixes', () => {
   describe('save() waits for auto-flushes', () => {
     test('save() should wait for auto-flushes before writing', async () => {
       const dbPath = path.join(testDir, 'save-waits-flush.jdb')
-      db = new Database(dbPath, { clear: true, create: true })
+      db = new Database(dbPath, { 
+        fields: { name: 'string', value: 'number' },
+        clear: true, 
+        create: true 
+      })
       await db.init()
 
       const session = db.beginInsertSession({ batchSize: 10 })
@@ -270,7 +284,11 @@ describe('Deserialize Corruption Fixes', () => {
 
     test('save() should handle multiple active sessions', async () => {
       const dbPath = path.join(testDir, 'save-multiple-sessions.jdb')
-      db = new Database(dbPath, { clear: true, create: true })
+      db = new Database(dbPath, { 
+        fields: { name: 'string', value: 'number' },
+        clear: true, 
+        create: true 
+      })
       await db.init()
 
       const session1 = db.beginInsertSession({ batchSize: 10 })

@@ -337,9 +337,26 @@ export class QueryManager {
       }
     }
     
+    // Handle $not operator - include it if it can be processed by IndexManager
+    if (criteria.$not && typeof criteria.$not === 'object') {
+      // Check if $not condition contains only indexable fields
+      const notFields = Object.keys(criteria.$not);
+      const allNotFieldsIndexed = notFields.every(field => 
+        this.indexManager.opts.indexes && this.indexManager.opts.indexes[field]
+      );
+      
+      if (allNotFieldsIndexed && notFields.length > 0) {
+        // Extract indexable criteria from $not condition
+        const indexableNotCriteria = this._extractIndexableCriteria(criteria.$not);
+        if (Object.keys(indexableNotCriteria).length > 0) {
+          indexableCriteria.$not = indexableNotCriteria;
+        }
+      }
+    }
+    
     // Handle regular field conditions
     for (const [field, condition] of Object.entries(criteria)) {
-      if (field.startsWith('$')) continue; // Skip logical operators
+      if (field.startsWith('$')) continue; // Skip logical operators (already handled above)
       
       // RegExp conditions cannot be pre-filtered using indices
       if (condition instanceof RegExp) {
@@ -690,30 +707,69 @@ export class QueryManager {
     // Read specific records using the line numbers
     if (lineNumbers.size > 0) {
       const lineNumbersArray = Array.from(lineNumbers)
-      const ranges = this.database.getRanges(lineNumbersArray)
-      const groupedRanges = await this.database.fileHandler.groupedRanges(ranges)
+      const persistedCount = Array.isArray(this.database.offsets) ? this.database.offsets.length : 0
       
-      const fs = await import('fs')
-      const fd = await fs.promises.open(this.database.fileHandler.file, 'r')
+      // Separate lineNumbers into file records and writeBuffer records
+      const fileLineNumbers = []
+      const writeBufferLineNumbers = []
       
-      try {
-        for (const groupedRange of groupedRanges) {
-          for await (const row of this.database.fileHandler.readGroupedRange(groupedRange, fd)) {
-            try {
-              const record = this.database.serializer.deserialize(row.line)
+      for (const lineNumber of lineNumbersArray) {
+        if (lineNumber >= persistedCount) {
+          // This lineNumber points to writeBuffer
+          writeBufferLineNumbers.push(lineNumber)
+        } else {
+          // This lineNumber points to file
+          fileLineNumbers.push(lineNumber)
+        }
+      }
+      
+      // Read records from file
+      if (fileLineNumbers.length > 0) {
+        const ranges = this.database.getRanges(fileLineNumbers)
+        if (ranges.length > 0) {
+          const groupedRanges = await this.database.fileHandler.groupedRanges(ranges)
+          
+          const fs = await import('fs')
+          const fd = await fs.promises.open(this.database.fileHandler.file, 'r')
+          
+          try {
+            for (const groupedRange of groupedRanges) {
+              for await (const row of this.database.fileHandler.readGroupedRange(groupedRange, fd)) {
+                try {
+                  const record = this.database.serializer.deserialize(row.line)
+                  const recordWithTerms = options.restoreTerms !== false ? 
+                    this.database.restoreTermIdsAfterDeserialization(record) : 
+                    record
+                  results.push(recordWithTerms)
+                  if (limit && results.length >= limit) break
+                } catch (error) {
+                  // Skip invalid lines
+                }
+              }
+              if (limit && results.length >= limit) break
+            }
+          } finally {
+            await fd.close()
+          }
+        }
+      }
+      
+      // Read records from writeBuffer
+      if (writeBufferLineNumbers.length > 0 && this.database.writeBuffer) {
+        for (const lineNumber of writeBufferLineNumbers) {
+          if (limit && results.length >= limit) break
+          
+          const writeBufferIndex = lineNumber - persistedCount
+          if (writeBufferIndex >= 0 && writeBufferIndex < this.database.writeBuffer.length) {
+            const record = this.database.writeBuffer[writeBufferIndex]
+            if (record) {
               const recordWithTerms = options.restoreTerms !== false ? 
                 this.database.restoreTermIdsAfterDeserialization(record) : 
                 record
               results.push(recordWithTerms)
-              if (limit && results.length >= limit) break
-            } catch (error) {
-              // Skip invalid lines
             }
           }
-          if (limit && results.length >= limit) break
         }
-      } finally {
-        await fd.close()
       }
     }
     
@@ -1138,8 +1194,8 @@ export class QueryManager {
     }
     
     const allFieldsIndexed = Object.keys(criteria).every(field => {
-      // Skip $and as it's handled separately above
-      if (field === '$and') return true;
+      // Skip $and and $not as they're handled separately above
+      if (field === '$and' || field === '$not') return true;
       
       if (!this.opts.indexes || !this.opts.indexes[field]) {
         if (this.opts.debugMode) {

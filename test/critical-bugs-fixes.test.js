@@ -39,6 +39,7 @@ describe('Critical Bugs Fixes', () => {
       db = new Database(dbPath, {
         clear: true,
         create: true,
+        fields: { name: 'string', nameTerms: 'array:string', groupTerms: 'array:string', url: 'string' },
         indexes: {
           nameTerms: 'array:string',
           groupTerms: 'array:string'
@@ -73,6 +74,7 @@ describe('Critical Bugs Fixes', () => {
       db = new Database(dbPath, {
         clear: true,
         create: true,
+        fields: { name: 'string', nameTerms: 'array:string' },
         indexes: {
           nameTerms: 'array:string'
         },
@@ -109,6 +111,7 @@ describe('Critical Bugs Fixes', () => {
       db = new Database(dbPath, {
         clear: true,
         create: true,
+        fields: { name: 'string', nameTerms: 'array:string' },
         indexes: {
           nameTerms: 'array:string'
         }
@@ -143,6 +146,7 @@ describe('Critical Bugs Fixes', () => {
       db = new Database(dbPath, {
         clear: true,
         create: true,
+        fields: { name: 'string', nameTerms: 'array:string' },
         indexes: {
           nameTerms: 'array:string'
         },
@@ -181,6 +185,7 @@ describe('Critical Bugs Fixes', () => {
         clear: true,
         create: true,
         debugMode: false,
+        fields: { name: 'string', nameTerms: 'array:string', tags: 'array:string' },
         indexes: {
           nameTerms: 'array:string',
           tags: 'array:string'
@@ -223,6 +228,7 @@ describe('Critical Bugs Fixes', () => {
       db = new Database(dbPath, {
         clear: true,
         create: true,
+        fields: { name: 'string', nameTerms: 'array:string' },
         indexes: {
           nameTerms: 'array:string'
         }
@@ -250,6 +256,7 @@ describe('Critical Bugs Fixes', () => {
       db = new Database(dbPath, {
         clear: true,
         create: true,
+        fields: { name: 'string', nameTerms: 'array:string' },
         indexes: {
           nameTerms: 'array:string'
         },
@@ -292,6 +299,7 @@ describe('Critical Bugs Fixes', () => {
       db = new Database(dbPath, {
         clear: true,
         create: true,
+        fields: { name: 'string', nameTerms: 'array:string' },
         indexes: {
           nameTerms: 'array:string'
         },
@@ -323,6 +331,7 @@ describe('Critical Bugs Fixes', () => {
       db = new Database(dbPath, {
         clear: true,
         create: true,
+        fields: { name: 'string', nameTerms: 'array:string' },
         indexes: {
           nameTerms: 'array:string'
         }
@@ -351,6 +360,7 @@ describe('Critical Bugs Fixes', () => {
       db = new Database(dbPath, {
         clear: true,
         create: true,
+        fields: { name: 'string', nameTerms: 'array:string' },
         indexes: {
           nameTerms: 'array:string'
         }
@@ -379,6 +389,8 @@ describe('Critical Bugs Fixes', () => {
       
       // Configuration similar to the workaround
       db = new Database(dbPath, {
+        fields: { name: 'string', nameTerms: 'array:string', groupTerms: 'array:string' },
+        indexes: { nameTerms: 'array:string', groupTerms: 'array:string' },
         clear: true,
         create: true,
         indexes: {
@@ -436,7 +448,11 @@ describe('Critical Bugs Fixes', () => {
   describe('🚨 CRITICAL: Save Buffer Regression Tests', () => {
     test('save() should automatically flush writeBuffer and ensure it is empty', async () => {
       const dbPath = path.join(testDir, 'test-flush.jdb')
-      db = new Database(dbPath, { clear: true, create: true })
+      db = new Database(dbPath, { 
+        fields: { name: 'string', url: 'string' },
+        clear: true, 
+        create: true 
+      })
       await db.init()
       
       // Insert data to populate writeBuffer
@@ -455,7 +471,11 @@ describe('Critical Bugs Fixes', () => {
 
     test('save() should persist data correctly after flushing buffer', async () => {
       const dbPath = path.join(testDir, 'test-persist.jdb')
-      db = new Database(dbPath, { clear: true, create: true })
+      db = new Database(dbPath, { 
+        fields: { name: 'string', url: 'string' },
+        clear: true, 
+        create: true 
+      })
       
       await db.init()
       
@@ -475,7 +495,11 @@ describe('Critical Bugs Fixes', () => {
 
     test('save() should work with immediate destroy without data loss', async () => {
       const dbPath = path.join(testDir, 'test-immediate-destroy.jdb')
-      db = new Database(dbPath, { clear: true, create: true })
+      db = new Database(dbPath, { 
+        fields: { name: 'string', url: 'string' },
+        clear: true, 
+        create: true 
+      })
       await db.init()
       
       // Insert data
@@ -485,7 +509,10 @@ describe('Critical Bugs Fixes', () => {
       await db.close()
       
       // Create new database instance and verify data persisted
-      const db2 = new Database(dbPath, { create: true })
+      const db2 = new Database(dbPath, { 
+        fields: { name: 'string', url: 'string' },
+        create: true 
+      })
       await db2.init()
       
       const results = await db2.find()
@@ -498,7 +525,11 @@ describe('Critical Bugs Fixes', () => {
 
     test('save() should handle multiple inserts correctly', async () => {
       const dbPath = path.join(testDir, 'test-multiple.jdb')
-      db = new Database(dbPath, { clear: true, create: true })
+      db = new Database(dbPath, { 
+        fields: { name: 'string', url: 'string' },
+        clear: true, 
+        create: true 
+      })
       
       await db.init()
       
@@ -529,7 +560,11 @@ describe('Critical Bugs Fixes', () => {
 
     test('save() should not return before file operations are complete', async () => {
       const dbPath = path.join(testDir, 'test-io-completion.jdb')
-      db = new Database(dbPath, { clear: true, create: true })
+      db = new Database(dbPath, { 
+        fields: { name: 'string', url: 'string' },
+        clear: true, 
+        create: true 
+      })
       
       await db.init()
       
@@ -562,7 +597,11 @@ describe('Critical Bugs Fixes', () => {
 
     test('flushInsertionBuffer() should work for backward compatibility', async () => {
       const dbPath = path.join(testDir, 'test-backward-compat.jdb')
-      db = new Database(dbPath, { clear: true, create: true })
+      db = new Database(dbPath, { 
+        fields: { name: 'string', url: 'string' },
+        clear: true, 
+        create: true 
+      })
       
       await db.init()
       
@@ -582,7 +621,11 @@ describe('Critical Bugs Fixes', () => {
 
     test('should handle rapid insert-save cycles', async () => {
       const dbPath = path.join(testDir, 'test-rapid-cycles.jdb')
-      db = new Database(dbPath, { clear: true, create: true })
+      db = new Database(dbPath, { 
+        fields: { name: 'string', url: 'string' },
+        clear: true, 
+        create: true 
+      })
       
       await db.init()
       
@@ -879,7 +922,11 @@ describe('Critical Bugs Fixes', () => {
 
     test('length should be correct after close() + init() cycle', async () => {
       const dbPath = path.join(testDir, 'test-close-init-length.jdb')
-      db = new Database(dbPath, { clear: true, create: true })
+      db = new Database(dbPath, { 
+        fields: { name: 'string', url: 'string' },
+        clear: true, 
+        create: true 
+      })
       
       await db.init()
       
@@ -907,7 +954,10 @@ describe('Critical Bugs Fixes', () => {
       await db.close()
       
       // Create new database instance
-      const db2 = new Database(dbPath, { create: true })
+      const db2 = new Database(dbPath, { 
+        fields: { name: 'string', url: 'string' },
+        create: true 
+      })
       await db2.init()
       
       // CRITICAL: length should be correct after init()
@@ -925,7 +975,12 @@ describe('Critical Bugs Fixes', () => {
 
     test('EPGManager-like scenario: database state after close + init', async () => {
       const dbPath = path.join(testDir, 'test-epg-manager-scenario.jdb')
-      db = new Database(dbPath, { clear: true, create: true })
+      db = new Database(dbPath, { 
+        fields: { ch: 'string', t: 'string', start: 'number', e: 'number', terms: 'array:string' },
+        indexes: ['ch', 'start', 'e', 'terms'],
+        clear: true, 
+        create: true 
+      })
       
       await db.init()
       
@@ -950,7 +1005,11 @@ describe('Critical Bugs Fixes', () => {
       await db.close()
       
       // Create new database instance (like EPGManager does)
-      const db2 = new Database(dbPath, { create: true })
+      const db2 = new Database(dbPath, { 
+        fields: { ch: 'string', t: 'string', start: 'number', e: 'number', terms: 'array:string' },
+        indexes: ['ch', 'start', 'e', 'terms'],
+        create: true 
+      })
       
       // Simulate EPGManager initialization sequence
       await db2.init()
@@ -976,7 +1035,11 @@ describe('Critical Bugs Fixes', () => {
 
     test('IMMEDIATE ACCESS: No delay should be needed after init()', async () => {
       const dbPath = path.join(testDir, 'test-immediate-access.jdb')
-      db = new Database(dbPath, { clear: true, create: true })
+      db = new Database(dbPath, { 
+        fields: { name: 'string', value: 'number' },
+        clear: true, 
+        create: true 
+      })
       
       await db.init()
       
@@ -998,7 +1061,10 @@ describe('Critical Bugs Fixes', () => {
       await db.close()
       
       // Create new database instance
-      const db2 = new Database(dbPath, { create: true })
+      const db2 = new Database(dbPath, { 
+        fields: { name: 'string', value: 'number' },
+        create: true 
+      })
       
       // CRITICAL: init() should return only when everything is ready
       await db2.init()
@@ -1020,7 +1086,11 @@ describe('Critical Bugs Fixes', () => {
 
     test('PERFORMANCE: length vs count() performance comparison', async () => {
       const dbPath = path.join(testDir, 'test-performance-comparison.jdb')
-      db = new Database(dbPath, { clear: true, create: true })
+      db = new Database(dbPath, { 
+        fields: { name: 'string', value: 'number' },
+        clear: true, 
+        create: true 
+      })
       
       await db.init()
       
@@ -1041,7 +1111,10 @@ describe('Critical Bugs Fixes', () => {
       await db.close()
       
       // Create new database instance
-      const db2 = new Database(dbPath, { create: true })
+      const db2 = new Database(dbPath, { 
+        fields: { name: 'string', url: 'string' },
+        create: true 
+      })
       await db2.init()
       
       // Test performance of length vs count()

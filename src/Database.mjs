@@ -545,6 +545,32 @@ class Database extends EventEmitter {
       return
     }
     
+    // Handle legacy 'schema' option migration
+    if (this.opts.schema) {
+      // If fields is already provided and valid, ignore schema
+      if (this.opts.fields && typeof this.opts.fields === 'object' && Object.keys(this.opts.fields).length > 0) {
+        if (this.opts.debugMode) {
+          console.log(`⚠️  Both 'schema' and 'fields' options provided. Ignoring 'schema' and using 'fields'. [${this.instanceId}]`)
+        }
+      } else if (Array.isArray(this.opts.schema)) {
+        // Schema as array is no longer supported
+        throw new Error('The "schema" option as an array is no longer supported. Please use "fields" as an object instead. Example: { fields: { id: "number", name: "string" } }')
+      } else if (typeof this.opts.schema === 'object' && this.opts.schema !== null) {
+        // Schema as object - migrate to fields
+        this.opts.fields = { ...this.opts.schema }
+        if (this.opts.debugMode) {
+          console.log(`⚠️  Migrated 'schema' option to 'fields'. Please update your code to use 'fields' instead of 'schema'. [${this.instanceId}]`)
+        }
+      } else {
+        throw new Error('The "schema" option must be an object. Example: { schema: { id: "number", name: "string" } }')
+      }
+    }
+    
+    // Validate that fields is provided (mandatory)
+    if (!this.opts.fields || typeof this.opts.fields !== 'object' || Object.keys(this.opts.fields).length === 0) {
+      throw new Error('The "fields" option is mandatory and must be an object with at least one field definition. Example: { fields: { id: "number", name: "string" } }')
+    }
+    
     // CRITICAL FIX: Initialize serializer first - this was missing and causing crashes
     this.serializer = new Serializer(this.opts)
     
@@ -1027,11 +1053,21 @@ class Database extends EventEmitter {
                 }
               }
               
-              // Reinitialize schema from saved configuration
-              if (config.schema && this.serializer) {
+              // Reinitialize schema from saved configuration (only if fields not provided)
+              // Note: fields option takes precedence over saved schema
+              if (!this.opts.fields && config.schema && this.serializer) {
                 this.serializer.initializeSchema(config.schema)
                 if (this.opts.debugMode) {
                   console.log(`📂 Loaded schema from ${idxPath}:`, config.schema.join(', '))
+                }
+              } else if (this.opts.fields && this.serializer) {
+                // Use fields option instead of saved schema
+                const fieldNames = Object.keys(this.opts.fields)
+                if (fieldNames.length > 0) {
+                  this.serializer.initializeSchema(fieldNames)
+                  if (this.opts.debugMode) {
+                    console.log(`📂 Schema initialized from fields option:`, fieldNames.join(', '))
+                  }
                 }
               }
             }
@@ -1263,7 +1299,8 @@ class Database extends EventEmitter {
             
       // CRITICAL FIX: Capture writeBuffer and deletedIds at the start to prevent race conditions
       const writeBufferSnapshot = [...this.writeBuffer]
-      const deletedIdsSnapshot = new Set(this.deletedIds)
+      // CRITICAL FIX: Normalize deleted IDs to strings for consistent comparison
+      const deletedIdsSnapshot = new Set(Array.from(this.deletedIds).map(id => String(id)))
       
       // OPTIMIZATION: Process pending index updates in batch before save
       if (this.pendingIndexUpdates && this.pendingIndexUpdates.length > 0) {
@@ -1282,40 +1319,25 @@ class Database extends EventEmitter {
         this.pendingIndexUpdates = []
       }
       
-      // CRITICAL FIX: Flush write buffer completely after capturing snapshot
-      await this._flushWriteBufferCompletely()
-      
-      // CRITICAL FIX: Wait for all I/O operations to complete before clearing writeBuffer
-      await this._waitForIOCompletion()
-      
-      // CRITICAL FIX: Verify write buffer is empty after I/O completion
-      // But allow for ongoing insertions during high-volume scenarios
-      if (this.writeBuffer.length > 0) {
-        if (this.opts.debugMode) {
-          console.log(`💾 Save: WriteBuffer still has ${this.writeBuffer.length} items after flush - this may indicate ongoing insertions`)
-        }
-        
-        // If we have a reasonable number of items, continue processing
-        if (this.writeBuffer.length < 10000) { // Reasonable threshold
-          if (this.opts.debugMode) {
-            console.log(`💾 Save: Continuing to process remaining ${this.writeBuffer.length} items`)
-          }
-          // Continue with the save process - the remaining items will be included in the final save
-        } else {
-          // Too many items remaining - likely a real problem
-          throw new Error(`WriteBuffer has too many items after flush: ${this.writeBuffer.length} items remaining (threshold: 10000)`)
-        }
+      // CRITICAL FIX: DO NOT flush writeBuffer before processing existing records
+      // This prevents duplicating updated records in the file.
+      // The _streamExistingRecords() will handle replacing old records with updated ones from writeBufferSnapshot.
+      // After processing, all records (existing + updated + new) will be written to file in one operation.
+      if (this.opts.debugMode) {
+        console.log(`💾 Save: writeBufferSnapshot captured with ${writeBufferSnapshot.length} records (will be processed with existing records)`)
       }
       
       // OPTIMIZATION: Parallel operations - cleanup and data preparation
       let allData = []
       let orphanedCount = 0
       
-      // Check if there are new records to save (after flush, writeBuffer should be empty)
+      // Check if there are records to save from writeBufferSnapshot
+      // CRITICAL FIX: Process writeBufferSnapshot records (both new and updated) with existing records
+      // Updated records will replace old ones via _streamExistingRecords, new records will be added
       if (this.opts.debugMode) {
         console.log(`💾 Save: writeBuffer.length=${this.writeBuffer.length}, writeBufferSnapshot.length=${writeBufferSnapshot.length}`)
       }
-      if (this.writeBuffer.length > 0) {
+      if (this.writeBuffer.length > 0 || writeBufferSnapshot.length > 0) {
         if (this.opts.debugMode) {
           console.log(`💾 Save: WriteBuffer has ${writeBufferSnapshot.length} records, using streaming approach`)
         }
@@ -1349,20 +1371,57 @@ class Database extends EventEmitter {
           // Add streaming operation
           parallelOperations.push(
             this._streamExistingRecords(deletedIdsSnapshot, writeBufferSnapshot).then(existingRecords => {
+              // CRITICAL FIX: _streamExistingRecords already handles updates via updatedRecordsMap
+              // So existingRecords already contains updated records from writeBufferSnapshot
+              // We only need to add records from writeBufferSnapshot that are NEW (not updates)
               allData = [...existingRecords]
               
-              // OPTIMIZATION: Use Map for faster lookups
-              const existingRecordMap = new Map(existingRecords.filter(r => r && r.id).map(r => [r.id, r]))
+              // OPTIMIZATION: Use Set for faster lookups of existing record IDs
+              // CRITICAL FIX: Normalize IDs to strings for consistent comparison
+              const existingRecordIds = new Set(existingRecords.filter(r => r && r.id).map(r => String(r.id)))
               
+              // CRITICAL FIX: Create a map of records in existingRecords by ID for comparison
+              const existingRecordsById = new Map()
+              existingRecords.forEach(r => {
+                if (r && r.id) {
+                  existingRecordsById.set(String(r.id), r)
+                }
+              })
+              
+              // Add only NEW records from writeBufferSnapshot (not updates, as those are already in existingRecords)
+              // CRITICAL FIX: Also ensure that if an updated record wasn't properly replaced, we replace it now
               for (const record of writeBufferSnapshot) {
-                if (!deletedIdsSnapshot.has(record.id)) {
-                  if (existingRecordMap.has(record.id)) {
-                    // Replace existing record
-                    const existingIndex = allData.findIndex(r => r.id === record.id)
-                    allData[existingIndex] = record
-                  } else {
-                    // Add new record
-                    allData.push(record)
+                if (!record || !record.id) continue
+                if (deletedIdsSnapshot.has(String(record.id))) continue
+                
+                const recordIdStr = String(record.id)
+                const existingRecord = existingRecordsById.get(recordIdStr)
+                
+                if (!existingRecord) {
+                  // This is a new record, not an update
+                  allData.push(record)
+                  if (this.opts.debugMode) {
+                    console.log(`💾 Save: Adding NEW record to allData:`, { id: recordIdStr, price: record.price, app_id: record.app_id, currency: record.currency })
+                  }
+                } else {
+                  // This is an update - verify that existingRecords contains the updated version
+                  // If not, replace it (this handles edge cases where substitution might have failed)
+                  const existingIndex = allData.findIndex(r => r && r.id && String(r.id) === recordIdStr)
+                  if (existingIndex !== -1) {
+                    // Verify if the existing record is actually the updated one
+                    // Compare key fields to detect if replacement is needed
+                    const needsReplacement = JSON.stringify(allData[existingIndex]) !== JSON.stringify(record)
+                    if (needsReplacement) {
+                      if (this.opts.debugMode) {
+                        console.log(`💾 Save: REPLACING existing record with updated version in allData:`, {
+                          old: { id: String(allData[existingIndex].id), price: allData[existingIndex].price },
+                          new: { id: recordIdStr, price: record.price }
+                        })
+                      }
+                      allData[existingIndex] = record
+                    } else if (this.opts.debugMode) {
+                      console.log(`💾 Save: Record already correctly updated in allData:`, { id: recordIdStr })
+                    }
                   }
                 }
               }
@@ -1408,15 +1467,83 @@ class Database extends EventEmitter {
                   console.log(`💾 Save: _streamExistingRecords returned ${existingRecords.length} records`)
                   console.log(`💾 Save: existingRecords:`, existingRecords)
                 }
-                // Combine existing records with new records from writeBuffer
-                allData = [...existingRecords, ...writeBufferSnapshot.filter(record => !deletedIdsSnapshot.has(record.id))]
+                // CRITICAL FIX: _streamExistingRecords already handles updates via updatedRecordsMap
+                // So existingRecords already contains updated records from writeBufferSnapshot
+                // We only need to add records from writeBufferSnapshot that are NEW (not updates)
+                allData = [...existingRecords]
+                
+                // OPTIMIZATION: Use Set for faster lookups of existing record IDs
+                // CRITICAL FIX: Normalize IDs to strings for consistent comparison
+                const existingRecordIds = new Set(existingRecords.filter(r => r && r.id).map(r => String(r.id)))
+                
+                // CRITICAL FIX: Create a map of records in existingRecords by ID for comparison
+                const existingRecordsById = new Map()
+                existingRecords.forEach(r => {
+                  if (r && r.id) {
+                    existingRecordsById.set(String(r.id), r)
+                  }
+                })
+                
+                // Add only NEW records from writeBufferSnapshot (not updates, as those are already in existingRecords)
+                // CRITICAL FIX: Also ensure that if an updated record wasn't properly replaced, we replace it now
+                for (const record of writeBufferSnapshot) {
+                  if (!record || !record.id) continue
+                  if (deletedIdsSnapshot.has(String(record.id))) continue
+                  
+                  const recordIdStr = String(record.id)
+                  const existingRecord = existingRecordsById.get(recordIdStr)
+                  
+                  if (!existingRecord) {
+                    // This is a new record, not an update
+                    allData.push(record)
+                    if (this.opts.debugMode) {
+                      console.log(`💾 Save: Adding NEW record to allData:`, { id: recordIdStr, price: record.price, app_id: record.app_id, currency: record.currency })
+                    }
+                  } else {
+                    // This is an update - verify that existingRecords contains the updated version
+                    // If not, replace it (this handles edge cases where substitution might have failed)
+                    const existingIndex = allData.findIndex(r => r && r.id && String(r.id) === recordIdStr)
+                    if (existingIndex !== -1) {
+                      // Verify if the existing record is actually the updated one
+                      // Compare key fields to detect if replacement is needed
+                      const needsReplacement = JSON.stringify(allData[existingIndex]) !== JSON.stringify(record)
+                      if (needsReplacement) {
+                        if (this.opts.debugMode) {
+                          console.log(`💾 Save: REPLACING existing record with updated version in allData:`, {
+                            old: { id: String(allData[existingIndex].id), price: allData[existingIndex].price },
+                            new: { id: recordIdStr, price: record.price }
+                          })
+                        }
+                        allData[existingIndex] = record
+                      } else if (this.opts.debugMode) {
+                        console.log(`💾 Save: Record already correctly updated in allData:`, { id: recordIdStr })
+                      }
+                    }
+                  }
+                }
+                
+                if (this.opts.debugMode) {
+                  const updatedCount = writeBufferSnapshot.filter(r => r && r.id && existingRecordIds.has(String(r.id))).length
+                  const newCount = writeBufferSnapshot.filter(r => r && r.id && !existingRecordIds.has(String(r.id))).length
+                  console.log(`💾 Save: Combined data - existingRecords: ${existingRecords.length}, updatedFromBuffer: ${updatedCount}, newFromBuffer: ${newCount}, total: ${allData.length}`)
+                  console.log(`💾 Save: WriteBuffer record IDs:`, writeBufferSnapshot.map(r => r && r.id ? String(r.id) : 'no-id'))
+                  console.log(`💾 Save: Existing record IDs:`, Array.from(existingRecordIds))
+                  console.log(`💾 Save: All records in allData:`, allData.map(r => r && r.id ? { id: String(r.id), price: r.price, app_id: r.app_id, currency: r.currency } : 'no-id'))
+                  console.log(`💾 Save: Sample existing record:`, existingRecords[0] ? { id: String(existingRecords[0].id), price: existingRecords[0].price, app_id: existingRecords[0].app_id, currency: existingRecords[0].currency } : 'null')
+                  console.log(`💾 Save: Sample writeBuffer record:`, writeBufferSnapshot[0] ? { id: String(writeBufferSnapshot[0].id), price: writeBufferSnapshot[0].price, app_id: writeBufferSnapshot[0].app_id, currency: writeBufferSnapshot[0].currency } : 'null')
+                }
               }).catch(error => {
                 if (this.opts.debugMode) {
                   console.log(`💾 Save: _streamExistingRecords failed:`, error.message)
                 }
                 // CRITICAL FIX: Use safe fallback to preserve existing data instead of losing it
                 return this._loadExistingRecordsFallback(deletedIdsSnapshot, writeBufferSnapshot).then(fallbackRecords => {
-                  allData = [...fallbackRecords, ...writeBufferSnapshot.filter(record => !deletedIdsSnapshot.has(record.id))]
+                  // CRITICAL FIX: Avoid duplicating updated records
+                  const fallbackRecordIds = new Set(fallbackRecords.map(r => r.id))
+                  const newRecordsFromBuffer = writeBufferSnapshot.filter(record => 
+                    !deletedIdsSnapshot.has(String(record.id)) && !fallbackRecordIds.has(record.id)
+                  )
+                  allData = [...fallbackRecords, ...newRecordsFromBuffer]
                   if (this.opts.debugMode) {
                     console.log(`💾 Save: Fallback preserved ${fallbackRecords.length} existing records, total: ${allData.length}`)
                   }
@@ -1426,7 +1553,7 @@ class Database extends EventEmitter {
                     console.log(`💾 Save: CRITICAL - Data loss may occur, only writeBuffer will be saved`)
                   }
                   // Last resort: at least save what we have in writeBuffer
-                  allData = writeBufferSnapshot.filter(record => !deletedIdsSnapshot.has(record.id))
+                  allData = writeBufferSnapshot.filter(record => !deletedIdsSnapshot.has(String(record.id)))
                 })
               })
             )
@@ -1440,7 +1567,12 @@ class Database extends EventEmitter {
             // CRITICAL FIX: Use safe fallback to preserve existing data instead of losing it
             try {
               const fallbackRecords = await this._loadExistingRecordsFallback(deletedIdsSnapshot, writeBufferSnapshot)
-              allData = [...fallbackRecords, ...writeBufferSnapshot.filter(record => !deletedIdsSnapshot.has(record.id))]
+              // CRITICAL FIX: Avoid duplicating updated records
+              const fallbackRecordIds = new Set(fallbackRecords.map(r => r.id))
+              const newRecordsFromBuffer = writeBufferSnapshot.filter(record => 
+                !deletedIdsSnapshot.has(String(record.id)) && !fallbackRecordIds.has(record.id)
+              )
+              allData = [...fallbackRecords, ...newRecordsFromBuffer]
               if (this.opts.debugMode) {
                 console.log(`💾 Save: Fallback preserved ${fallbackRecords.length} existing records, total: ${allData.length}`)
               }
@@ -1450,22 +1582,47 @@ class Database extends EventEmitter {
                 console.log(`💾 Save: CRITICAL - Data loss may occur, only writeBuffer will be saved`)
               }
               // Last resort: at least save what we have in writeBuffer
-              allData = writeBufferSnapshot.filter(record => !deletedIdsSnapshot.has(record.id))
+              allData = writeBufferSnapshot.filter(record => !deletedIdsSnapshot.has(String(record.id)))
             }
           }
         } else {
           // No existing data, use only writeBuffer
-          allData = writeBufferSnapshot.filter(record => !deletedIdsSnapshot.has(record.id))
+          allData = writeBufferSnapshot.filter(record => !deletedIdsSnapshot.has(String(record.id)))
         }
       }
       
       // CRITICAL FIX: Calculate offsets based on actual serialized data that will be written
       // This ensures consistency between offset calculation and file writing
-      const jsonlData = allData.length > 0 
-        ? this.serializer.serializeBatch(allData)
+      // CRITICAL FIX: Remove term IDs before serialization to ensure proper serialization
+      const cleanedData = allData.map(record => {
+        if (!record || typeof record !== 'object') {
+          if (this.opts.debugMode) {
+            console.log(`💾 Save: WARNING - Invalid record in allData:`, record)
+          }
+          return record
+        }
+        return this.removeTermIdsForSerialization(record)
+      })
+      
+      if (this.opts.debugMode) {
+        console.log(`💾 Save: allData.length=${allData.length}, cleanedData.length=${cleanedData.length}`)
+        console.log(`💾 Save: All records in allData before serialization:`, allData.map(r => r && r.id ? { id: String(r.id), price: r.price, app_id: r.app_id, currency: r.currency } : 'no-id'))
+        console.log(`💾 Save: Sample cleaned record:`, cleanedData[0] ? Object.keys(cleanedData[0]) : 'null')
+      }
+      
+      const jsonlData = cleanedData.length > 0 
+        ? this.serializer.serializeBatch(cleanedData)
         : ''
       const jsonlString = jsonlData.toString('utf8')
       const lines = jsonlString.split('\n').filter(line => line.trim())
+      
+      if (this.opts.debugMode) {
+        console.log(`💾 Save: Serialized ${lines.length} lines`)
+        console.log(`💾 Save: All records in allData after serialization check:`, allData.map(r => r && r.id ? { id: String(r.id), price: r.price, app_id: r.app_id, currency: r.currency } : 'no-id'))
+        if (lines.length > 0) {
+          console.log(`💾 Save: First line (first 200 chars):`, lines[0].substring(0, 200))
+        }
+      }
       
       this.offsets = []
       let currentOffset = 0
@@ -1484,56 +1641,9 @@ class Database extends EventEmitter {
         console.log(`💾 Save: Calculated indexOffset: ${this.indexOffset}, allData.length: ${allData.length}`)
       }
       
-      // OPTIMIZATION: Parallel operations - file writing and index data preparation
-      const parallelWriteOperations = []
-      
-      // Add main file write operation
-      parallelWriteOperations.push(
-        this.fileHandler.writeBatch([jsonlData])
-      )
-      
-      // Add index file operations - ALWAYS save offsets, even without indexed fields
-      if (this.indexManager) {
-        const idxPath = this.normalizedFile.replace('.jdb', '.idx.jdb')
-        
-        // OPTIMIZATION: Parallel data preparation
-        const indexDataPromise = Promise.resolve({
-          index: this.indexManager.indexedFields && this.indexManager.indexedFields.length > 0 ? this.indexManager.toJSON() : {},
-          offsets: this.offsets, // Save actual offsets for efficient file operations
-          indexOffset: this.indexOffset // Save file size for proper range calculations
-        })
-        
-        // Add term mapping data if needed
-        const termMappingFields = this.getTermMappingFields()
-        if (termMappingFields.length > 0 && this.termManager) {
-          const termDataPromise = this.termManager.saveTerms()
-          
-          // Combine index data and term data
-          const combinedDataPromise = Promise.all([indexDataPromise, termDataPromise]).then(([indexData, termData]) => {
-            indexData.termMapping = termData
-            return indexData
-          })
-          
-          // Add index file write operation
-          parallelWriteOperations.push(
-            combinedDataPromise.then(indexData => {
-              const idxFileHandler = new FileHandler(idxPath, this.fileMutex, this.opts)
-              return idxFileHandler.writeAll(JSON.stringify(indexData, null, 2))
-            })
-          )
-        } else {
-          // Add index file write operation without term mapping
-          parallelWriteOperations.push(
-            indexDataPromise.then(indexData => {
-              const idxFileHandler = new FileHandler(idxPath, this.fileMutex, this.opts)
-              return idxFileHandler.writeAll(JSON.stringify(indexData, null, 2))
-            })
-          )
-        }
-      }
-      
-      // Execute parallel write operations
-      await Promise.all(parallelWriteOperations)
+      // CRITICAL FIX: Write main data file first
+      // Index will be saved AFTER reconstruction to ensure it contains correct data
+      await this.fileHandler.writeBatch([jsonlData])
       
       if (this.opts.debugMode) {
         console.log(`💾 Saved ${allData.length} records to ${this.normalizedFile}`)
@@ -1547,20 +1657,35 @@ class Database extends EventEmitter {
       
       // Clear writeBuffer and deletedIds after successful save only if we had data to save
       if (allData.length > 0) {
-        // Rebuild index when records were deleted to maintain consistency
+        // Rebuild index when records were deleted or updated to maintain consistency
         const hadDeletedRecords = deletedIdsSnapshot.size > 0
+        const hadUpdatedRecords = writeBufferSnapshot.length > 0
         if (this.indexManager && this.indexManager.indexedFields && this.indexManager.indexedFields.length > 0) {
-          if (hadDeletedRecords) {
-            // Clear the index and rebuild it from the remaining records
+          if (hadDeletedRecords || hadUpdatedRecords) {
+            // Clear the index and rebuild it from the saved records
+            // This ensures that lineNumbers point to the correct positions in the file
             this.indexManager.clear()
             if (this.opts.debugMode) {
-              console.log(`🧹 Rebuilding index after removing ${deletedIdsSnapshot.size} deleted records`)
+              if (hadDeletedRecords && hadUpdatedRecords) {
+                console.log(`🧹 Rebuilding index after removing ${deletedIdsSnapshot.size} deleted records and updating ${writeBufferSnapshot.length} records`)
+              } else if (hadDeletedRecords) {
+                console.log(`🧹 Rebuilding index after removing ${deletedIdsSnapshot.size} deleted records`)
+              } else {
+                console.log(`🧹 Rebuilding index after updating ${writeBufferSnapshot.length} records`)
+              }
             }
             
             // Rebuild index from the saved records
             // CRITICAL: Process term mapping for records loaded from file to ensure ${field}Ids are available
+            if (this.opts.debugMode) {
+              console.log(`💾 Save: Rebuilding index from ${allData.length} records in allData`)
+            }
             for (let i = 0; i < allData.length; i++) {
               let record = allData[i]
+              
+              if (this.opts.debugMode && i < 3) {
+                console.log(`💾 Save: Rebuilding index record[${i}]:`, { id: String(record.id), price: record.price, app_id: record.app_id, currency: record.currency })
+              }
               
               // CRITICAL FIX: Ensure records have ${field}Ids for term mapping fields
               // Records from writeBuffer already have ${field}Ids from processTermMapping
@@ -1587,6 +1712,9 @@ class Database extends EventEmitter {
               }
               
               await this.indexManager.add(record, i)
+            }
+            if (this.opts.debugMode) {
+              console.log(`💾 Save: Index rebuilt with ${allData.length} records`)
             }
           }
         }
@@ -1675,11 +1803,20 @@ class Database extends EventEmitter {
               this.termManager.decrementTermCount(termId)
             }
           } else if (oldRecord[field] && Array.isArray(oldRecord[field])) {
-            // Use terms to decrement (fallback for backward compatibility)
-            for (const term of oldRecord[field]) {
-              const termId = this.termManager.termToId.get(term)
-              if (termId) {
+            // Check if field contains term IDs (numbers) or terms (strings)
+            const firstValue = oldRecord[field][0]
+            if (typeof firstValue === 'number') {
+              // Field contains term IDs (from find with restoreTerms: false)
+              for (const termId of oldRecord[field]) {
                 this.termManager.decrementTermCount(termId)
+              }
+            } else if (typeof firstValue === 'string') {
+              // Field contains terms (strings) - convert to term IDs
+              for (const term of oldRecord[field]) {
+                const termId = this.termManager.termToId.get(term)
+                if (termId) {
+                  this.termManager.decrementTermCount(termId)
+                }
               }
             }
           }
@@ -1933,6 +2070,7 @@ class Database extends EventEmitter {
       }
       
       // Apply schema enforcement - convert to array format and back to enforce schema
+      // This will discard any fields not in the schema
       const schemaEnforcedRecord = this.applySchemaEnforcement(record)
       
       // Don't store in this.data - only use writeBuffer and index
@@ -2462,11 +2600,20 @@ class Database extends EventEmitter {
         
         const updated = { ...record, ...updateData }
         
+        // DEBUG: Log the update operation details
+        if (this.opts.debugMode) {
+          console.log(`🔄 UPDATE: Original record ID: ${record.id}, type: ${typeof record.id}`)
+          console.log(`🔄 UPDATE: Updated record ID: ${updated.id}, type: ${typeof updated.id}`)
+          console.log(`🔄 UPDATE: Update data keys:`, Object.keys(updateData))
+          console.log(`🔄 UPDATE: Updated record keys:`, Object.keys(updated))
+        }
+        
         // Process term mapping for update
         const termMappingStart = Date.now()
         this.processTermMapping(updated, true, record)
         if (this.opts.debugMode) {
           console.log(`🔄 UPDATE: Term mapping completed in ${Date.now() - termMappingStart}ms`)
+          console.log(`🔄 UPDATE: After term mapping - ID: ${updated.id}, type: ${typeof updated.id}`)
         }
         
         // CRITICAL FIX: Remove old terms from index before adding new ones
@@ -2477,9 +2624,11 @@ class Database extends EventEmitter {
           }
         }
         
-        // Update record in writeBuffer or add to writeBuffer if not present
+        // CRITICAL FIX: Update record in writeBuffer or add to writeBuffer if not present
+        // For records in the file, we need to ensure they are properly marked for replacement
         const index = this.writeBuffer.findIndex(r => r.id === record.id)
         let lineNumber = null
+        
         if (index !== -1) {
           // Record is already in writeBuffer, update it
           this.writeBuffer[index] = updated
@@ -2489,11 +2638,12 @@ class Database extends EventEmitter {
           }
         } else {
           // Record is in file, add updated version to writeBuffer
-          // This will ensure the updated record is saved and replaces the file version
+          // CRITICAL FIX: Ensure the old record in file will be replaced by checking if it exists in offsets
+          // The save() method will handle replacement via _streamExistingRecords which checks updatedRecordsMap
           this.writeBuffer.push(updated)
           lineNumber = this._getAbsoluteLineNumber(this.writeBuffer.length - 1)
           if (this.opts.debugMode) {
-            console.log(`🔄 UPDATE: Added new record to writeBuffer at index ${lineNumber}`)
+            console.log(`🔄 UPDATE: Added updated record to writeBuffer (will replace file record ${record.id})`)
           }
         }
         
@@ -2628,16 +2778,7 @@ class Database extends EventEmitter {
       return
     }
 
-    // Try to get schema from options first
-    if (this.opts.schema && Array.isArray(this.opts.schema)) {
-      this.serializer.initializeSchema(this.opts.schema)
-      if (this.opts.debugMode) {
-        console.log(`🔍 Schema initialized from options: ${this.opts.schema.join(', ')} [${this.instanceId}]`)
-      }
-      return
-    }
-
-    // Try to initialize from fields configuration (new format)
+    // Initialize from fields configuration (mandatory)
     if (this.opts.fields && typeof this.opts.fields === 'object') {
       const fieldNames = Object.keys(this.opts.fields)
       if (fieldNames.length > 0) {
@@ -2649,7 +2790,7 @@ class Database extends EventEmitter {
       }
     }
 
-    // Try to auto-detect schema from existing data
+    // Try to auto-detect schema from existing data (fallback for migration scenarios)
     if (this.data && this.data.length > 0) {
       this.serializer.initializeSchema(this.data, true) // autoDetect = true
       if (this.opts.debugMode) {
@@ -2657,10 +2798,6 @@ class Database extends EventEmitter {
       }
       return
     }
-
-    // CRITICAL FIX: Don't initialize schema from indexes
-    // This was causing data loss because only indexed fields were preserved
-    // Let schema be auto-detected from actual data instead
 
     if (this.opts.debugMode) {
       console.log(`🔍 No schema initialization possible - will auto-detect on first insert [${this.instanceId}]`)
@@ -3499,24 +3636,83 @@ class Database extends EventEmitter {
     const lineNumbers = limitedEntries.map(([lineNumber]) => lineNumber)
     const scoresByLineNumber = new Map(limitedEntries)
     
-    // Use getRanges and fileHandler to read records
-    const ranges = this.getRanges(lineNumbers)
-    const groupedRanges = await this.fileHandler.groupedRanges(ranges)
+    const persistedCount = Array.isArray(this.offsets) ? this.offsets.length : 0
     
-    const fs = await import('fs')
-    const fd = await fs.promises.open(this.fileHandler.file, 'r')
+    // Separate lineNumbers into file records and writeBuffer records
+    const fileLineNumbers = []
+    const writeBufferLineNumbers = []
+    
+    for (const lineNumber of lineNumbers) {
+      if (lineNumber >= persistedCount) {
+        // This lineNumber points to writeBuffer
+        writeBufferLineNumbers.push(lineNumber)
+      } else {
+        // This lineNumber points to file
+        fileLineNumbers.push(lineNumber)
+      }
+    }
     
     const results = []
     
-    try {
-      for (const groupedRange of groupedRanges) {
-        for await (const row of this.fileHandler.readGroupedRange(groupedRange, fd)) {
-          try {
-            const record = this.serializer.deserialize(row.line)
-            
-            // Get line number from the row
-            const lineNumber = row._ || 0
-            
+    // Read records from file
+    if (fileLineNumbers.length > 0) {
+      const ranges = this.getRanges(fileLineNumbers)
+      if (ranges.length > 0) {
+        // Create a map from start offset to lineNumber for accurate mapping
+        const startToLineNumber = new Map()
+        for (const range of ranges) {
+          if (range.index !== undefined) {
+            startToLineNumber.set(range.start, range.index)
+          }
+        }
+        
+        const groupedRanges = await this.fileHandler.groupedRanges(ranges)
+        
+        const fs = await import('fs')
+        const fd = await fs.promises.open(this.fileHandler.file, 'r')
+        
+        try {
+          for (const groupedRange of groupedRanges) {
+            for await (const row of this.fileHandler.readGroupedRange(groupedRange, fd)) {
+              try {
+                const record = this.serializer.deserialize(row.line)
+                
+                // Get line number from the row, fallback to start offset mapping
+                let lineNumber = row._ !== null && row._ !== undefined ? row._ : (startToLineNumber.get(row.start) ?? 0)
+                
+                // Restore term IDs to terms
+                const recordWithTerms = this.restoreTermIdsAfterDeserialization(record)
+                
+                // Add line number
+                recordWithTerms._ = lineNumber
+                
+                // Add score if includeScore is true (default is true)
+                if (opts.includeScore !== false) {
+                  recordWithTerms.score = scoresByLineNumber.get(lineNumber) || 0
+                }
+                
+                results.push(recordWithTerms)
+              } catch (error) {
+                // Skip invalid lines
+                if (this.opts.debugMode) {
+                  console.error('Error deserializing record in score():', error)
+                }
+              }
+            }
+          }
+        } finally {
+          await fd.close()
+        }
+      }
+    }
+    
+    // Read records from writeBuffer
+    if (writeBufferLineNumbers.length > 0 && this.writeBuffer) {
+      for (const lineNumber of writeBufferLineNumbers) {
+        const writeBufferIndex = lineNumber - persistedCount
+        if (writeBufferIndex >= 0 && writeBufferIndex < this.writeBuffer.length) {
+          const record = this.writeBuffer[writeBufferIndex]
+          if (record) {
             // Restore term IDs to terms
             const recordWithTerms = this.restoreTermIdsAfterDeserialization(record)
             
@@ -3529,16 +3725,9 @@ class Database extends EventEmitter {
             }
             
             results.push(recordWithTerms)
-          } catch (error) {
-            // Skip invalid lines
-            if (this.opts.debugMode) {
-              console.error('Error deserializing record in score():', error)
-            }
           }
         }
       }
-    } finally {
-      await fd.close()
     }
     
     // Re-sort results to maintain score order (since reads might be out of order)
@@ -3880,9 +4069,11 @@ class Database extends EventEmitter {
         for (let i = 0; i < lines.length && i < this.offsets.length; i++) {
           try {
             const record = this.serializer.deserialize(lines[i])
-            if (record && !deletedIdsSnapshot.has(record.id)) {
+            if (record && !deletedIdsSnapshot.has(String(record.id))) {
               // Check if this record is not being updated in writeBuffer
-              const updatedRecord = writeBufferSnapshot.find(r => r.id === record.id)
+              // CRITICAL FIX: Normalize IDs to strings for consistent comparison
+              const normalizedRecordId = String(record.id)
+              const updatedRecord = writeBufferSnapshot.find(r => r && r.id && String(r.id) === normalizedRecordId)
               if (!updatedRecord) {
                 existingRecords.push(record)
               }
@@ -3926,10 +4117,24 @@ class Database extends EventEmitter {
     // existingRecords.length = this.offsets.length
     
     // Create a map of updated records for quick lookup
+    // CRITICAL FIX: Normalize IDs to strings for consistent comparison
     const updatedRecordsMap = new Map()
-    writeBufferSnapshot.forEach(record => {
-      updatedRecordsMap.set(record.id, record)
+    writeBufferSnapshot.forEach((record, index) => {
+      if (record && record.id !== undefined && record.id !== null) {
+        // Normalize ID to string for consistent comparison
+        const normalizedId = String(record.id)
+        updatedRecordsMap.set(normalizedId, record)
+        if (this.opts.debugMode) {
+          console.log(`💾 Save: Added to updatedRecordsMap: ID=${normalizedId} (original: ${record.id}, type: ${typeof record.id}), index=${index}`)
+        }
+      } else if (this.opts.debugMode) {
+        console.log(`⚠️ Save: Skipped record in writeBufferSnapshot[${index}] - missing or invalid ID:`, record ? { id: record.id, keys: Object.keys(record) } : 'null')
+      }
     })
+    
+    if (this.opts.debugMode) {
+      console.log(`💾 Save: updatedRecordsMap size: ${updatedRecordsMap.size}, keys:`, Array.from(updatedRecordsMap.keys()))
+    }
     
     // OPTIMIZATION: Cache file stats to avoid repeated stat() calls
     let fileSize = 0
@@ -4096,7 +4301,8 @@ class Database extends EventEmitter {
             if (recordId !== undefined && recordId !== null) {
               recordId = String(recordId)
               // Check if this record needs full parsing (updated or deleted)
-              needsFullParse = updatedRecordsMap.has(recordId) || deletedIdsSnapshot.has(recordId)
+              // CRITICAL FIX: Normalize ID to string for consistent comparison
+              needsFullParse = updatedRecordsMap.has(recordId) || deletedIdsSnapshot.has(String(recordId))
             } else {
               needsFullParse = true
             }
@@ -4111,7 +4317,8 @@ class Database extends EventEmitter {
         const idMatch = trimmedLine.match(/"id"\s*:\s*"([^"]+)"|"id"\s*:\s*(\d+)/)
         if (idMatch) {
           recordId = idMatch[1] || idMatch[2]
-          needsFullParse = updatedRecordsMap.has(recordId) || deletedIdsSnapshot.has(recordId)
+          // CRITICAL FIX: Normalize ID to string for consistent comparison
+          needsFullParse = updatedRecordsMap.has(String(recordId)) || deletedIdsSnapshot.has(String(recordId))
         } else {
           needsFullParse = true
         }
@@ -4136,11 +4343,22 @@ class Database extends EventEmitter {
         // Use record directly (no need to restore term IDs)
         const recordWithIds = record
         
-        if (updatedRecordsMap.has(recordWithIds.id)) {
+        // CRITICAL FIX: Normalize ID to string for consistent comparison
+        const normalizedId = String(recordWithIds.id)
+        if (this.opts.debugMode) {
+          console.log(`💾 Save: Checking record ID=${normalizedId} (original: ${recordWithIds.id}, type: ${typeof recordWithIds.id}) in updatedRecordsMap`)
+          console.log(`💾 Save: updatedRecordsMap.has(${normalizedId}): ${updatedRecordsMap.has(normalizedId)}`)
+          if (!updatedRecordsMap.has(normalizedId)) {
+            console.log(`💾 Save: Record ${normalizedId} NOT found in updatedRecordsMap. Available keys:`, Array.from(updatedRecordsMap.keys()))
+          }
+        }
+        if (updatedRecordsMap.has(normalizedId)) {
           // Replace with updated version
-          const updatedRecord = updatedRecordsMap.get(recordWithIds.id)
+          const updatedRecord = updatedRecordsMap.get(normalizedId)
           if (this.opts.debugMode) {
-            console.log(`💾 Save: Updated record ${recordWithIds.id} (${recordWithIds.name || 'Unnamed'})`)
+            console.log(`💾 Save: ✅ REPLACING record ${recordWithIds.id} with updated version`)
+            console.log(`💾 Save: Old record:`, { id: recordWithIds.id, price: recordWithIds.price, app_id: recordWithIds.app_id, currency: recordWithIds.currency })
+            console.log(`💾 Save: New record:`, { id: updatedRecord.id, price: updatedRecord.price, app_id: updatedRecord.app_id, currency: updatedRecord.currency })
           }
           return { 
             type: 'updated', 
@@ -4148,7 +4366,7 @@ class Database extends EventEmitter {
             id: recordWithIds.id,
             needsParse: false
           }
-        } else if (!deletedIdsSnapshot.has(recordWithIds.id)) {
+        } else if (!deletedIdsSnapshot.has(String(recordWithIds.id))) {
           // Keep existing record if not deleted
           if (this.opts.debugMode) {
             console.log(`💾 Save: Kept record ${recordWithIds.id} (${recordWithIds.name || 'Unnamed'})`)

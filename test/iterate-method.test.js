@@ -18,9 +18,10 @@ describe('Database.iterate() Method', () => {
     if (fs.existsSync(testIdxFile)) fs.unlinkSync(testIdxFile)
     
     db = new Database(testFile, {
+      fields: { id: 'number', name: 'string', category: 'string', price: 'number' },
       debugMode: false,
       termMapping: true,
-      indexedFields: ['category', 'name', 'price']
+      indexes: { category: 'string', name: 'string', price: 'number' }
     })
     await db.init()
   })

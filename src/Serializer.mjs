@@ -64,7 +64,26 @@ export default class Serializer {
     if (!this.opts.enableArraySerialization) {
       return arr
     }
-    return this.schemaManager.arrayToObject(arr)
+    const obj = this.schemaManager.arrayToObject(arr)
+    
+    // CRITICAL FIX: Always preserve 'id' field if it exists in the original array
+    // The 'id' field may not be in the schema but must be preserved
+    // Check if array has more elements than schema fields - the extra element(s) might be the ID
+    if (!obj.id && Array.isArray(arr) && this.schemaManager.isInitialized) {
+      const schemaLength = this.schemaManager.schema ? this.schemaManager.schema.length : 0
+      if (arr.length > schemaLength) {
+        // Check if any extra element looks like an ID (string)
+        for (let i = schemaLength; i < arr.length; i++) {
+          const potentialId = arr[i]
+          if (potentialId !== undefined && potentialId !== null && typeof potentialId === 'string' && potentialId.length > 0) {
+            obj.id = potentialId
+            break
+          }
+        }
+      }
+    }
+    
+    return obj
   }
 
   /**

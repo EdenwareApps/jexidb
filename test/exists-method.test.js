@@ -29,6 +29,13 @@ describe('exists() Method', () => {
       debugMode: false,
       termMapping: true,
       termMappingFields: ['nameTerms', 'tags'],
+      fields: {
+        name: 'string',
+        nameTerms: 'array:string',
+        tags: 'array:string',
+        group: 'string',
+        rating: 'number'
+      },
       indexes: {
         nameTerms: 'array:string',
         tags: 'array:string',

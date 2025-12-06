@@ -25,6 +25,12 @@ describe('Indexed query fallback when index data missing', () => {
 
   test('should fall back to streaming when indexed field data is missing', async () => {
     const db = new Database(testDbPath, {
+      fields: {
+        id: 'string',
+        channel: 'string',
+        start: 'number',
+        end: 'number'
+      },
       indexes: {
         channel: 'string',
         start: 'number',
@@ -68,6 +74,12 @@ describe('Indexed query fallback when index data missing', () => {
 
     const reopenedDb = new Database(testDbPath, {
       create: false,
+      fields: {
+        id: 'string',
+        channel: 'string',
+        start: 'number',
+        end: 'number'
+      },
       indexes: {
         channel: 'string',
         start: 'number',

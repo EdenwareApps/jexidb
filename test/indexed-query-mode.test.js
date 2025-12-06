@@ -8,6 +8,7 @@ describe('Indexed Query Mode Control', () => {
   beforeEach(async () => {
     testDbPath = `test-indexed-mode-${Date.now()}-${Math.random()}.jdb`
     db = new Database(testDbPath, {
+      fields: { name: 'string', age: 'number', title: 'string' },
       indexes: { name: 'string', age: 'number' },
       indexedQueryMode: 'permissive',
       debugMode: false
@@ -86,6 +87,7 @@ describe('Indexed Query Mode Control', () => {
       }
       testDbPath = `test-indexed-mode-strict-${Date.now()}-${Math.random()}.jdb`
       db = new Database(testDbPath, {
+        fields: { name: 'string', age: 'number', title: 'string' },
         indexes: { name: 'string', age: 'number' },
         indexedQueryMode: 'strict',
         debugMode: false
@@ -158,6 +160,7 @@ describe('Indexed Query Mode Control', () => {
       }
       testDbPath = `test-indexed-mode-logical-${Date.now()}-${Math.random()}.jdb`
       db = new Database(testDbPath, {
+        fields: { name: 'string', age: 'number', title: 'string' },
         indexes: { name: 'string', age: 'number' },
         indexedQueryMode: 'strict',
         debugMode: false
@@ -237,6 +240,7 @@ describe('Indexed Query Mode Control', () => {
       }
       testDbPath = `test-indexed-mode-default-${Date.now()}-${Math.random()}.jdb`
       db = new Database(testDbPath, {
+        fields: { name: 'string', age: 'number', title: 'string' },
         indexes: { name: 'string', age: 'number' }
       })
       await db.init()
@@ -267,6 +271,7 @@ describe('Indexed Query Mode Control', () => {
       }
       testDbPath = `test-indexed-mode-errors-${Date.now()}-${Math.random()}.jdb`
       db = new Database(testDbPath, {
+        fields: { name: 'string', age: 'number', title: 'string' },
         indexes: { name: 'string', age: 'number' },
         indexedQueryMode: 'strict',
         debugMode: false
@@ -293,6 +298,7 @@ describe('Indexed Query Mode Control', () => {
     test('should list all available indexed fields in error message', async () => {
       const moreIndexesPath = `test-more-indexes-${Date.now()}-${Math.random()}.jdb`
       const dbWithMoreIndexes = new Database(moreIndexesPath, {
+        fields: { name: 'string', age: 'number', email: 'string', salary: 'number', title: 'string' },
         indexes: { name: 'string', age: 'number', email: 'string', salary: 'number' },
         indexedQueryMode: 'strict',
         debugMode: false
@@ -321,6 +327,7 @@ describe('Indexed Query Mode Control', () => {
       }
       testDbPath = `test-indexed-mode-edges-${Date.now()}-${Math.random()}.jdb`
       db = new Database(testDbPath, {
+        fields: { name: 'string', age: 'number', title: 'string' },
         indexes: { name: 'string', age: 'number' },
         indexedQueryMode: 'strict',
         debugMode: false

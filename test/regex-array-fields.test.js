@@ -23,6 +23,7 @@ describe('RegExp Queries on Array Fields', () => {
       const dbPath = path.join(testDir, 'regex-array-fields.jdb')
       
       db = new Database(dbPath, {
+        fields: { name: 'string', nameTerms: 'array:string', tags: 'array:string' },
         clear: true,
         create: true,
         debugMode: false
@@ -70,6 +71,7 @@ describe('RegExp Queries on Array Fields', () => {
       const dbPath = path.join(testDir, 'regex-multi-array.jdb')
       
       db = new Database(dbPath, {
+        fields: { name: 'string', nameTerms: 'array:string', tags: 'array:string' },
         clear: true,
         create: true,
         debugMode: false
@@ -106,6 +108,7 @@ describe('RegExp Queries on Array Fields', () => {
       const dbPath = path.join(testDir, 'regex-operator-array.jdb')
       
       db = new Database(dbPath, {
+        fields: { name: 'string', nameTerms: 'array:string', tags: 'array:string' },
         clear: true,
         create: true,
         debugMode: false

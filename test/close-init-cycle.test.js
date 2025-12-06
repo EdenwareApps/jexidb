@@ -18,6 +18,7 @@ describe('Close → Init Cycle', () => {
     if (fs.existsSync(testFile.replace('.jdb', '.idx.jdb'))) fs.unlinkSync(testFile.replace('.jdb', '.idx.jdb'))
     
     db = new Database(testFile, {
+      fields: { name: 'string', value: 'number', data: 'string' },
       create: true,
       debugMode: false
     })

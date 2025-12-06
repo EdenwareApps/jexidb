@@ -29,6 +29,11 @@ describe('Score Method Tests', () => {
     
     // Create and initialize database
     db = new Database(testDbPath, {
+      fields: {
+        "terms": "array:string",
+        "id": "number",
+        "title": "string"
+      },
       indexes: {
         'terms': 'array:string'
       }

@@ -27,6 +27,7 @@ describe('Index File Persistence', () => {
   test('should generate .idx files with actual index data after database destruction', async () => {
     // Create database with indexes
     const db = new Database(testDbPath, {
+      fields: { id: 'number', name: 'string', category: 'string', tags: 'array' },
       indexes: { name: 'string', category: 'string', tags: 'array' },
       debugMode: false
     })
@@ -121,6 +122,7 @@ describe('Index File Persistence', () => {
 
     // Create a new database instance with the same path to verify indexes are loaded
     const db2 = new Database(testDbPath, {
+      fields: { id: 'number', name: 'string', category: 'string', tags: 'array' },
       indexes: { name: 'string', category: 'string', tags: 'array' },
       debugMode: false
     })
@@ -142,6 +144,7 @@ describe('Index File Persistence', () => {
 
   test('should handle empty database with indexes', async () => {
     const db = new Database(testDbPath, {
+      fields: { id: 'number', field1: 'string', field2: 'string' },
       indexes: { field1: 'string', field2: 'string' },
       debugMode: false
     })
@@ -157,6 +160,7 @@ describe('Index File Persistence', () => {
 
     // Verify we can still recreate the database and it works correctly
     const db2 = new Database(testDbPath, {
+      fields: { id: 'number', field1: 'string', field2: 'string' },
       indexes: { field1: 'string', field2: 'string' },
       debugMode: false
     })
@@ -175,6 +179,7 @@ describe('Index File Persistence', () => {
 
   test('should persist complex index structures', async () => {
     const db = new Database(testDbPath, {
+      fields: { id: 'number', simpleField: 'string', arrayField: 'array', nestedField: 'object' },
       indexes: { simpleField: 'string', arrayField: 'array', nestedField: 'object' },
       debugMode: false
     })
@@ -210,6 +215,7 @@ describe('Index File Persistence', () => {
 
     // Verify we can recreate and use the database
     const db2 = new Database(testDbPath, {
+      fields: { id: 'number', simpleField: 'string', arrayField: 'array', nestedField: 'object' },
       indexes: { simpleField: 'string', arrayField: 'array', nestedField: 'object' },
       debugMode: false
     })
@@ -225,6 +231,7 @@ describe('Index File Persistence', () => {
 
   test('should maintain index consistency after multiple operations', async () => {
     const db = new Database(testDbPath, {
+      fields: { id: 'number', status: 'string', priority: 'string' },
       indexes: { status: 'string', priority: 'string' },
       debugMode: false
     })
@@ -279,6 +286,7 @@ describe('Index File Persistence', () => {
 
     // Recreate database and verify consistency
     const db2 = new Database(testDbPath, {
+      fields: { id: 'number', status: 'string', priority: 'string' },
       indexes: { status: 'string', priority: 'string' },
       debugMode: false
     })
@@ -307,6 +315,7 @@ describe('Index File Persistence', () => {
   test('should NOT overwrite valid index with empty data when closing empty database', async () => {
     // Create database with indexes and data
     const db1 = new Database(testDbPath, {
+      fields: { id: 'number', name: 'string', value: 'number' },
       indexes: { name: 'string', value: 'number' },
       debugMode: false
     })
@@ -333,6 +342,7 @@ describe('Index File Persistence', () => {
     // This should trigger a rebuild, but we'll simulate closing with empty index
     const db2 = new Database(testDbPath, {
       create: false,
+      fields: { id: 'number', name: 'string', value: 'number' },
       indexes: { name: 'string', value: 'number' },
       debugMode: false
     })
@@ -365,6 +375,7 @@ describe('Index File Persistence', () => {
   test('should throw error when index is corrupted and allowIndexRebuild is false (default)', async () => {
     // Create database with indexes and data
     const db1 = new Database(testDbPath, {
+      fields: { id: 'number', name: 'string', value: 'number' },
       indexes: { name: 'string', value: 'number' },
       debugMode: false
     })
@@ -396,6 +407,7 @@ describe('Index File Persistence', () => {
     // Try to open database - allowIndexRebuild defaults to false, will throw error
     const db2 = new Database(testDbPath, {
       create: false,
+      fields: { id: 'number', name: 'string', value: 'number' },
       indexes: { name: 'string', value: 'number' },
       // allowIndexRebuild defaults to false - will throw error
       debugMode: false
@@ -408,6 +420,7 @@ describe('Index File Persistence', () => {
   test('should throw error when index is missing and allowIndexRebuild is false (default)', async () => {
     // Create database with indexes and data
     const db1 = new Database(testDbPath, {
+      fields: { id: 'number', name: 'string', value: 'number' },
       indexes: { name: 'string', value: 'number' },
       debugMode: false
     })
@@ -428,6 +441,7 @@ describe('Index File Persistence', () => {
     // Try to open database - allowIndexRebuild defaults to false, will throw error
     const db2 = new Database(testDbPath, {
       create: false,
+      fields: { id: 'number', name: 'string', value: 'number' },
       indexes: { name: 'string', value: 'number' },
       // allowIndexRebuild defaults to false - will throw error
       debugMode: false
@@ -440,6 +454,7 @@ describe('Index File Persistence', () => {
   test('should rebuild automatically when allowIndexRebuild is explicitly true', async () => {
     // Create database with indexes and data
     const db1 = new Database(testDbPath, {
+      fields: { id: 'number', name: 'string', value: 'number' },
       indexes: { name: 'string', value: 'number' },
       debugMode: false
     })
@@ -469,6 +484,7 @@ describe('Index File Persistence', () => {
     // Open database with allowIndexRebuild explicitly set to true
     const db2 = new Database(testDbPath, {
       create: false,
+      fields: { id: 'number', name: 'string', value: 'number' },
       indexes: { name: 'string', value: 'number' },
       allowIndexRebuild: true, // Explicitly enable rebuild
       debugMode: false
