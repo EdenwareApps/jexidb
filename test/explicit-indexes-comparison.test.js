@@ -61,8 +61,8 @@ describe('Explicit indexes with comparison operators', () => {
     await seedDb.save()
     await seedDb.close()
 
-    const reopenedDb = new Database(testDbPath, {fields: {"channel":"string","end":"string"},
-      
+    const reopenedDb = new Database(testDbPath, {
+      fields: { id: 'string', channel: 'string', end: 'number', start: 'number', terms: 'array:string' },
       create: false,
       indexes: ['channel', 'end'],
       debugMode: false

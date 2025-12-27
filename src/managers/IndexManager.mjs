@@ -1022,11 +1022,11 @@ export default class IndexManager {
         continue;
       }
 
-      if (typeof criteriaValue === 'object' && !Array.isArray(criteriaValue)) {
+      if (typeof criteriaValue === 'object' && !Array.isArray(criteriaValue) && criteriaValue !== null) {
         const fieldIndex = data[field];
-        
+
         // Handle $in operator for array queries
-        if (criteriaValue.$in !== undefined) {
+        if (criteriaValue.$in !== undefined && criteriaValue.$in !== null) {
           const inValues = Array.isArray(criteriaValue.$in) ? criteriaValue.$in : [criteriaValue.$in];
           
           // PERFORMANCE: Cache term mapping field check once
@@ -1969,6 +1969,14 @@ export default class IndexManager {
       return
     }
     
+    // Restore totalLines from saved data
+    if (index.totalLines !== undefined) {
+      this.totalLines = index.totalLines
+      if (this.opts.debugMode) {
+        console.log(`🔍 IndexManager.load: Restored totalLines=${this.totalLines}`)
+      }
+    }
+
     this.index = processedIndex
   }
 
@@ -2008,7 +2016,10 @@ export default class IndexManager {
    * This resolves the issue where Sets appear as empty objects in JSON.stringify
    */
   toJSON() {
-    const serializable = { data: {} }
+    const serializable = {
+      data: {},
+      totalLines: this.totalLines
+    }
     
     // Check if this is a term mapping field for conversion
     const isTermMappingField = (field) => {

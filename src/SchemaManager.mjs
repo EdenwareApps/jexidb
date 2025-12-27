@@ -163,38 +163,10 @@ export default class SchemaManager {
     const obj = {}
     const idIndex = this.schema.indexOf('id')
     
-    // CRITICAL FIX: Handle schema migration where 'id' was first field in old schema
-    // but is not in current schema. Check if first element looks like an ID.
-    // Only do this if:
-    // 1. 'id' is not in current schema
-    // 2. Array has significantly more elements than current schema (2+ extra elements)
-    //    This suggests the old schema had more fields, and 'id' was likely the first
-    // 3. First element is a very short string (max 20 chars) that looks like a generated ID
-    //    (typically alphanumeric, often starting with letters like 'mit...' or similar patterns)
-    // 4. First field in current schema is not 'id' (to avoid false positives)
-    // 5. First element is not an array (to avoid false positives with array fields)
+    // DISABLED: Schema migration detection was causing field mapping corruption
+    // The logic was incorrectly assuming ID was in first position when it's appended at the end
+    // This caused fields to be shifted incorrectly during object-to-array-to-object conversion
     let arrayOffset = 0
-    if (idIndex === -1 && arr.length >= this.schema.length + 2 && this.schema.length > 0) {
-      // Only apply if array has at least 2 extra elements (suggests old schema had more fields)
-      const firstElement = arr[0]
-      const firstFieldName = this.schema[0]
-      
-      // Only apply shift if:
-      // - First field is not 'id'
-      // - First element is a very short string (max 20 chars) that looks like a generated ID
-      // - First element is not an array (to avoid false positives)
-      // - Array has at least 2 extra elements (strong indicator of schema migration)
-      if (firstFieldName !== 'id' && 
-          typeof firstElement === 'string' && 
-          !Array.isArray(firstElement) &&
-          firstElement.length > 0 && 
-          firstElement.length <= 20 && // Very conservative: max 20 chars (typical ID length)
-          /^[a-zA-Z0-9_-]+$/.test(firstElement)) {
-        // First element is likely the ID from old schema
-        obj.id = firstElement
-        arrayOffset = 1
-      }
-    }
     
     // Map array values to object properties
     // Only include fields that are in the schema

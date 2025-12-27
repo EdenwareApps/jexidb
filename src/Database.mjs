@@ -770,10 +770,19 @@ class Database extends EventEmitter {
       }
       
       // Manual save is now the default behavior
-      
+
+      // CRITICAL FIX: Ensure IndexManager totalLines is consistent with offsets
+      // This prevents data integrity issues when database is initialized without existing data
+      if (this.indexManager && this.offsets) {
+        this.indexManager.setTotalLines(this.offsets.length)
+        if (this.opts.debugMode) {
+          console.log(`🔧 Initialized index totalLines to ${this.offsets.length}`)
+        }
+      }
+
       this.initialized = true
       this.emit('initialized')
-      
+
       if (this.opts.debugMode) {
         console.log(`✅ Database initialized with ${this.writeBuffer.length} records`)
       }
@@ -1606,6 +1615,7 @@ class Database extends EventEmitter {
       
       if (this.opts.debugMode) {
         console.log(`💾 Save: allData.length=${allData.length}, cleanedData.length=${cleanedData.length}`)
+        console.log(`💾 Save: Current offsets.length before recalculation: ${this.offsets.length}`)
         console.log(`💾 Save: All records in allData before serialization:`, allData.map(r => r && r.id ? { id: String(r.id), price: r.price, app_id: r.app_id, currency: r.currency } : 'no-id'))
         console.log(`💾 Save: Sample cleaned record:`, cleanedData[0] ? Object.keys(cleanedData[0]) : 'null')
       }
@@ -1624,6 +1634,8 @@ class Database extends EventEmitter {
         }
       }
       
+      // CRITICAL FIX: Always recalculate offsets from serialized data to ensure consistency
+      // Even if _streamExistingRecords updated offsets, we need to recalculate based on actual serialized data
       this.offsets = []
       let currentOffset = 0
       for (let i = 0; i < lines.length; i++) {
@@ -1632,6 +1644,10 @@ class Database extends EventEmitter {
         // This accounts for UTF-8 encoding differences (e.g., 'ação' vs 'acao')
         const lineWithNewline = lines[i] + '\n'
         currentOffset += Buffer.byteLength(lineWithNewline, 'utf8')
+      }
+      
+      if (this.opts.debugMode) {
+        console.log(`💾 Save: Recalculated offsets.length=${this.offsets.length}, should match lines.length=${lines.length}`)
       }
       
       // CRITICAL FIX: Ensure indexOffset matches actual file size
@@ -1655,11 +1671,15 @@ class Database extends EventEmitter {
       this.shouldSave = false
       this.lastSaveTime = Date.now()
       
-      // Clear writeBuffer and deletedIds after successful save only if we had data to save
-      if (allData.length > 0) {
-        // Rebuild index when records were deleted or updated to maintain consistency
+      // CRITICAL FIX: Always clear deletedIds and rebuild index if there were deletions,
+      // even if allData.length === 0 (all records were deleted)
         const hadDeletedRecords = deletedIdsSnapshot.size > 0
         const hadUpdatedRecords = writeBufferSnapshot.length > 0
+      
+      // Clear writeBuffer and deletedIds after successful save
+      // Also rebuild index if records were deleted or updated, even if allData is empty
+      if (allData.length > 0 || hadDeletedRecords || hadUpdatedRecords) {
+        // Rebuild index when records were deleted or updated to maintain consistency
         if (this.indexManager && this.indexManager.indexedFields && this.indexManager.indexedFields.length > 0) {
           if (hadDeletedRecords || hadUpdatedRecords) {
             // Clear the index and rebuild it from the saved records
@@ -1713,8 +1733,20 @@ class Database extends EventEmitter {
               
               await this.indexManager.add(record, i)
             }
+
+            // VALIDATION: Ensure index consistency after rebuild
+            // Check that all indexed records have valid line numbers
+            const indexedRecordCount = this.indexManager.getIndexedRecordCount?.() || allData.length
+            if (indexedRecordCount !== this.offsets.length) {
+              console.warn(`⚠️ Index inconsistency detected: indexed ${indexedRecordCount} records but offsets has ${this.offsets.length} entries`)
+              // Force consistency by setting totalLines to match offsets
+              this.indexManager.setTotalLines(this.offsets.length)
+            } else {
+              this.indexManager.setTotalLines(this.offsets.length)
+            }
+
             if (this.opts.debugMode) {
-              console.log(`💾 Save: Index rebuilt with ${allData.length} records`)
+              console.log(`💾 Save: Index rebuilt with ${allData.length} records, totalLines set to ${this.offsets.length}`)
             }
           }
         }
@@ -1735,6 +1767,22 @@ class Database extends EventEmitter {
         })
         
         // Remove only the deleted IDs that were in the snapshot
+        for (const deletedId of deletedIdsSnapshot) {
+          this.deletedIds.delete(deletedId)
+        }
+      } else if (hadDeletedRecords) {
+        // CRITICAL FIX: Even if allData is empty, clear deletedIds and rebuild index
+        // when records were deleted to ensure consistency
+        if (this.indexManager && this.indexManager.indexedFields && this.indexManager.indexedFields.length > 0) {
+          // Clear the index since all records were deleted
+          this.indexManager.clear()
+          this.indexManager.setTotalLines(0)
+          if (this.opts.debugMode) {
+            console.log(`🧹 Cleared index after removing all ${deletedIdsSnapshot.size} deleted records`)
+          }
+        }
+        
+        // Clear deletedIds even when allData is empty
         for (const deletedId of deletedIdsSnapshot) {
           this.deletedIds.delete(deletedId)
         }
@@ -2257,6 +2305,43 @@ class Database extends EventEmitter {
     }
     
     try {
+      // INTEGRITY CHECK: Validate data consistency before querying
+      // Check if index and offsets are synchronized
+      if (this.indexManager && this.offsets && this.offsets.length > 0) {
+        const indexTotalLines = this.indexManager.totalLines || 0
+        const offsetsLength = this.offsets.length
+
+        if (indexTotalLines !== offsetsLength) {
+          console.warn(`⚠️ Data integrity issue detected: index.totalLines=${indexTotalLines}, offsets.length=${offsetsLength}`)
+          // Auto-correct by updating index totalLines to match offsets
+          this.indexManager.setTotalLines(offsetsLength)
+          if (this.opts.debugMode) {
+            console.log(`🔧 Auto-corrected index totalLines to ${offsetsLength}`)
+          }
+
+          // CRITICAL FIX: Also save the corrected index to prevent persistence of inconsistency
+          // This ensures the .idx.jdb file contains the correct totalLines value
+          try {
+            await this._saveIndexDataToFile()
+            if (this.opts.debugMode) {
+              console.log(`💾 Saved corrected index data to prevent future inconsistencies`)
+            }
+          } catch (error) {
+            if (this.opts.debugMode) {
+              console.warn(`⚠️ Failed to save corrected index: ${error.message}`)
+            }
+          }
+
+          // Verify the fix worked
+          const newIndexTotalLines = this.indexManager.totalLines || 0
+          if (newIndexTotalLines === offsetsLength) {
+            console.log(`✅ Data integrity successfully corrected: index.totalLines=${newIndexTotalLines}, offsets.length=${offsetsLength}`)
+          } else {
+            console.error(`❌ Data integrity correction failed: index.totalLines=${newIndexTotalLines}, offsets.length=${offsetsLength}`)
+          }
+        }
+      }
+
       // Validate indexed query mode if enabled
       if (this.opts.indexedQueryMode === 'strict') {
         this._validateIndexedQuery(criteria, options)
@@ -2279,36 +2364,25 @@ class Database extends EventEmitter {
       
       
       // Combine results, removing duplicates (writeBuffer takes precedence)
-      // OPTIMIZATION: Use parallel processing for better performance when writeBuffer has many records
+      // OPTIMIZATION: Unified efficient approach with consistent precedence rules
       let allResults
-      if (writeBufferResults.length > 50) {
-        // Parallel approach for large writeBuffer
-        const [fileResultsSet, writeBufferSet] = await Promise.all([
-          Promise.resolve(new Set(fileResultsWithTerms.map(r => r.id))),
-          Promise.resolve(new Set(writeBufferResultsWithTerms.map(r => r.id)))
-        ])
-        
-        // Merge efficiently: keep file results not in writeBuffer, then add all writeBuffer results
-        const filteredFileResults = await Promise.resolve(
-          fileResultsWithTerms.filter(r => !writeBufferSet.has(r.id))
-        )
-        allResults = [...filteredFileResults, ...writeBufferResultsWithTerms]
-      } else {
-        // Sequential approach for small writeBuffer (original logic)
-        allResults = [...fileResultsWithTerms]
-        
-        // Replace file records with writeBuffer records and add new writeBuffer records
-        for (const record of writeBufferResultsWithTerms) {
-          const existingIndex = allResults.findIndex(r => r.id === record.id)
-          if (existingIndex !== -1) {
-            // Replace existing record with writeBuffer version
-            allResults[existingIndex] = record
-          } else {
-            // Add new record from writeBuffer
-            allResults.push(record)
-          }
+
+      // Create efficient lookup map for writeBuffer records
+      const writeBufferMap = new Map()
+      writeBufferResultsWithTerms.forEach(record => {
+        if (record && record.id) {
+          writeBufferMap.set(record.id, record)
         }
-      }
+      })
+        
+      // Filter file results to exclude any records that exist in writeBuffer
+      // This ensures writeBuffer always takes precedence
+      const filteredFileResults = fileResultsWithTerms.filter(record =>
+        record && record.id && !writeBufferMap.has(record.id)
+      )
+
+      // Combine results: file results (filtered) + all writeBuffer results
+        allResults = [...filteredFileResults, ...writeBufferResultsWithTerms]
       
       // Remove records that are marked as deleted
       const finalResults = allResults.filter(record => !this.deletedIds.has(record.id))
@@ -2566,19 +2640,6 @@ class Database extends EventEmitter {
         
         // CRITICAL FIX: Validate state before update operation
         this.validateState()
-        
-        // CRITICAL FIX: If there's data to save, call save() to persist it
-        // Only save if there are actual records in writeBuffer
-        if (this.shouldSave && this.writeBuffer.length > 0) {
-          if (this.opts.debugMode) {
-            console.log(`🔄 UPDATE: Calling save() before update - writeBuffer.length=${this.writeBuffer.length}`)
-          }
-          const saveStart = Date.now()
-          await this.save(false) // Use save(false) since we're already in queue
-          if (this.opts.debugMode) {
-            console.log(`🔄 UPDATE: Save completed in ${Date.now() - saveStart}ms`)
-          }
-        }
       
       if (this.opts.debugMode) {
         console.log(`🔄 UPDATE: Starting find() - writeBuffer=${this.writeBuffer.length}`)
@@ -2591,7 +2652,12 @@ class Database extends EventEmitter {
       }
       
       const updatedRecords = []
-      
+
+      if (this.opts.debugMode) {
+        console.log(`🔄 UPDATE: About to process ${records.length} records`)
+        console.log(`🔄 UPDATE: Records:`, records.map(r => ({ id: r.id, value: r.value })))
+      }
+
       for (const record of records) {
         const recordStart = Date.now()
         if (this.opts.debugMode) {
@@ -2628,13 +2694,20 @@ class Database extends EventEmitter {
         // For records in the file, we need to ensure they are properly marked for replacement
         const index = this.writeBuffer.findIndex(r => r.id === record.id)
         let lineNumber = null
-        
+
+        if (this.opts.debugMode) {
+          console.log(`🔄 UPDATE: writeBuffer.findIndex for ${record.id} returned ${index}`)
+          console.log(`🔄 UPDATE: writeBuffer length: ${this.writeBuffer.length}`)
+          console.log(`🔄 UPDATE: writeBuffer IDs:`, this.writeBuffer.map(r => r.id))
+        }
+
         if (index !== -1) {
           // Record is already in writeBuffer, update it
           this.writeBuffer[index] = updated
           lineNumber = this._getAbsoluteLineNumber(index)
           if (this.opts.debugMode) {
             console.log(`🔄 UPDATE: Updated existing writeBuffer record at index ${index}`)
+            console.log(`🔄 UPDATE: writeBuffer now has ${this.writeBuffer.length} records`)
           }
         } else {
           // Record is in file, add updated version to writeBuffer
@@ -2644,6 +2717,7 @@ class Database extends EventEmitter {
           lineNumber = this._getAbsoluteLineNumber(this.writeBuffer.length - 1)
           if (this.opts.debugMode) {
             console.log(`🔄 UPDATE: Added updated record to writeBuffer (will replace file record ${record.id})`)
+            console.log(`🔄 UPDATE: writeBuffer now has ${this.writeBuffer.length} records`)
           }
         }
         
@@ -2679,13 +2753,32 @@ class Database extends EventEmitter {
    */
   async delete(criteria) {
     this._validateInitialization('delete')
-    
+
     return this.operationQueue.enqueue(async () => {
       this.isInsideOperationQueue = true
       try {
         // CRITICAL FIX: Validate state before delete operation
         this.validateState()
-      
+
+        // 🔧 NEW: Validate indexed query mode for delete operations
+        if (this.opts.indexedQueryMode === 'strict') {
+          this._validateIndexedQuery(criteria, { operation: 'delete' })
+        }
+
+        // ⚠️ NEW: Warn about non-indexed fields in permissive mode
+        if (this.opts.indexedQueryMode !== 'strict') {
+          const indexedFields = Object.keys(this.opts.indexes || {})
+          const queryFields = this._extractQueryFields(criteria)
+          const nonIndexedFields = queryFields.filter(field => !indexedFields.includes(field))
+
+          if (nonIndexedFields.length > 0) {
+            if (this.opts.debugMode) {
+              console.warn(`⚠️ Delete operation using non-indexed fields: ${nonIndexedFields.join(', ')}`)
+              console.warn(`   This may be slow or fail silently. Consider indexing these fields.`)
+            }
+          }
+        }
+
       const records = await this.find(criteria)
       const deletedIds = []
       
@@ -4289,14 +4382,30 @@ class Database extends EventEmitter {
         try {
           const arrayData = JSON.parse(trimmedLine)
           if (Array.isArray(arrayData) && arrayData.length > 0) {
-            // For arrays without explicit ID, use the first element as a fallback
-            // or try to find the ID field if it exists
+            // CRITICAL FIX: Use schema to find ID position, not hardcoded position
+            // The schema defines the order of fields in the array
+            if (this.serializer && this.serializer.schemaManager && this.serializer.schemaManager.isInitialized) {
+              const schema = this.serializer.schemaManager.getSchema()
+              const idIndex = schema.indexOf('id')
+              if (idIndex !== -1 && arrayData.length > idIndex) {
+                // ID is at the position defined by schema
+                recordId = arrayData[idIndex]
+              } else if (arrayData.length > schema.length) {
+                // ID might be appended after schema fields (for backward compatibility)
+                recordId = arrayData[schema.length]
+              } else {
+                // Fallback: use first element
+                recordId = arrayData[0]
+              }
+            } else {
+              // No schema available, try common positions
             if (arrayData.length > 2) {
-              // ID is typically at position 2 in array format [age, city, id, name]
+                // Try position 2 (common in older formats)
               recordId = arrayData[2]
             } else {
-              // For arrays without ID field, use first element as fallback
+                // Fallback: use first element
               recordId = arrayData[0]
+              }
             }
             if (recordId !== undefined && recordId !== null) {
               recordId = String(recordId)
@@ -4369,7 +4478,7 @@ class Database extends EventEmitter {
         } else if (!deletedIdsSnapshot.has(String(recordWithIds.id))) {
           // Keep existing record if not deleted
           if (this.opts.debugMode) {
-            console.log(`💾 Save: Kept record ${recordWithIds.id} (${recordWithIds.name || 'Unnamed'})`)
+            console.log(`💾 Save: Kept record ${recordWithIds.id} (${recordWithIds.name || 'Unnamed'}) - not in deletedIdsSnapshot`)
           }
           return { 
             type: 'kept', 
@@ -4380,7 +4489,9 @@ class Database extends EventEmitter {
         } else {
           // Skip deleted record
           if (this.opts.debugMode) {
-            console.log(`💾 Save: Skipped record ${recordWithIds.id} (${recordWithIds.name || 'Unnamed'}) - deleted`)
+            console.log(`💾 Save: Skipped record ${recordWithIds.id} (${recordWithIds.name || 'Unnamed'}) - deleted (found in deletedIdsSnapshot)`)
+            console.log(`💾 Save: deletedIdsSnapshot contains:`, Array.from(deletedIdsSnapshot))
+            console.log(`💾 Save: Record ID check: String(${recordWithIds.id}) = "${String(recordWithIds.id)}", has() = ${deletedIdsSnapshot.has(String(recordWithIds.id))}`)
           }
           return { 
             type: 'deleted', 
@@ -4426,6 +4537,54 @@ class Database extends EventEmitter {
       
       switch (result.type) {
         case 'unchanged':
+          // CRITICAL FIX: Verify that unchanged records are not deleted
+          // Extract ID from the line to check against deletedIdsSnapshot
+          let unchangedRecordId = null
+          try {
+            if (result.line.startsWith('[') && result.line.endsWith(']')) {
+              const arrayData = JSON.parse(result.line)
+              if (Array.isArray(arrayData) && arrayData.length > 0) {
+                // CRITICAL FIX: Use schema to find ID position, not hardcoded position
+                if (this.serializer && this.serializer.schemaManager && this.serializer.schemaManager.isInitialized) {
+                  const schema = this.serializer.schemaManager.getSchema()
+                  const idIndex = schema.indexOf('id')
+                  if (idIndex !== -1 && arrayData.length > idIndex) {
+                    unchangedRecordId = String(arrayData[idIndex])
+                  } else if (arrayData.length > schema.length) {
+                    unchangedRecordId = String(arrayData[schema.length])
+                  } else {
+                    unchangedRecordId = String(arrayData[0])
+                  }
+                } else {
+                  // No schema, try common positions
+                  if (arrayData.length > 2) {
+                    unchangedRecordId = String(arrayData[2])
+                  } else {
+                    unchangedRecordId = String(arrayData[0])
+                  }
+                }
+              }
+            } else {
+              const obj = JSON.parse(result.line)
+              unchangedRecordId = obj.id ? String(obj.id) : null
+            }
+          } catch (e) {
+            // If we can't parse, skip this record to be safe
+            if (this.opts.debugMode) {
+              console.log(`💾 Save: Could not parse unchanged record to check deletion: ${e.message}`)
+            }
+            continue
+          }
+          
+          // Skip if this record is deleted
+          if (unchangedRecordId && deletedIdsSnapshot.has(unchangedRecordId)) {
+            if (this.opts.debugMode) {
+              console.log(`💾 Save: Skipping unchanged record ${unchangedRecordId} - deleted`)
+            }
+            deletedOffsets.add(offset)
+            break
+          }
+          
           // Collect unchanged lines for batch processing
           unchangedLines.push(result.line)
           keptRecords.push({ offset, type: 'unchanged', line: result.line })

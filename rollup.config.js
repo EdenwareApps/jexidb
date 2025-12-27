@@ -26,9 +26,5 @@ export default {
     'fs',
     'readline',
     'path',
-    '@valentech/sializer',
-    'fast-deep-equal',
-    'fast-json-stringify',
-    'msgpack',
   ]
 };

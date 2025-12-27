@@ -1215,7 +1215,7 @@ export class QueryManager {
         return false;
       }
       
-      if (typeof condition === 'object' && !Array.isArray(condition)) {
+      if (typeof condition === 'object' && !Array.isArray(condition) && condition !== null) {
         const operators = Object.keys(condition).map(op => normalizeOperator(op));
         if (this.opts.debugMode) {
           console.log(`🔍 Field '${field}' has operators:`, operators)
@@ -1532,8 +1532,8 @@ export class QueryManager {
       
       if (termMappingFields.includes(field)) {
         // For term mapping fields, simple equality or $in queries work well
-        if (typeof condition === 'string' || 
-            (typeof condition === 'object' && condition.$in && Array.isArray(condition.$in))) {
+        if (typeof condition === 'string' ||
+            (typeof condition === 'object' && condition !== null && condition.$in && Array.isArray(condition.$in))) {
           return true;
         }
       }
