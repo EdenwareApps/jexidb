@@ -1,7 +1,5 @@
 'use strict';
 
-Object.defineProperty(exports, '__esModule', { value: true });
-
 var events = require('events');
 var asyncMutex = require('async-mutex');
 var fs = require('fs');
@@ -2662,12 +2660,15 @@ class Serializer {
    * Advanced serialization with optimized JSON.stringify and buffer pooling
    */
   serializeAdvanced(data, addLinebreak) {
+    // CRITICAL FIX: Sanitize data to remove problematic characters before serialization
+    const sanitizedData = this.sanitizeDataForJSON(data);
+
     // Validate encoding before serialization
-    this.validateEncodingBeforeSerialization(data);
+    this.validateEncodingBeforeSerialization(sanitizedData);
 
     // Use optimized JSON.stringify without buffer pooling
     // NOTE: Buffer pool removed - using direct Buffer creation for simplicity and reliability
-    const json = this.optimizedStringify(data);
+    const json = this.optimizedStringify(sanitizedData);
 
     // CRITICAL FIX: Normalize encoding before creating buffer
     const normalizedJson = this.normalizeEncoding(json);
@@ -2765,6 +2766,44 @@ class Serializer {
   /**
    * Validate encoding before serialization
    */
+  /**
+   * Sanitize data to remove problematic characters that break JSON parsing
+   * CRITICAL FIX: Prevents "Expected ',' or ']'" and "Unterminated string" errors
+   * by removing control characters that cannot be safely represented in JSON
+   */
+  sanitizeDataForJSON(data) {
+    const sanitizeString = str => {
+      if (typeof str !== 'string') return str;
+      return str
+      // Remove control characters that break JSON parsing (but keep \n, \r, \t as they can be escaped)
+      // Remove: NUL, SOH, STX, ETX, EOT, ENQ, ACK, BEL, VT, FF, SO, SI, DLE, DC1-DC4, NAK, SYN, ETB, CAN, EM, SUB, ESC, FS, GS, RS, US, DEL, C1 controls
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '')
+      // Limit string length to prevent performance issues
+      .substring(0, 10000);
+    };
+    const sanitizeArray = arr => {
+      if (!Array.isArray(arr)) return arr;
+      return arr.map(item => this.sanitizeDataForJSON(item)).filter(item => item !== null && item !== undefined && item !== '');
+    };
+    if (typeof data === 'string') {
+      return sanitizeString(data);
+    }
+    if (Array.isArray(data)) {
+      return sanitizeArray(data);
+    }
+    if (data && typeof data === 'object') {
+      const sanitized = {};
+      for (const [key, value] of Object.entries(data)) {
+        const sanitizedValue = this.sanitizeDataForJSON(value);
+        // Only include non-null, non-undefined values
+        if (sanitizedValue !== null && sanitizedValue !== undefined) {
+          sanitized[key] = sanitizedValue;
+        }
+      }
+      return sanitized;
+    }
+    return data;
+  }
   validateEncodingBeforeSerialization(data) {
     const issues = [];
     const checkString = (str, path = '') => {
@@ -2859,12 +2898,15 @@ class Serializer {
    * Standard serialization (fallback)
    */
   serializeStandard(data, addLinebreak) {
+    // CRITICAL FIX: Sanitize data to remove problematic characters before serialization
+    const sanitizedData = this.sanitizeDataForJSON(data);
+
     // Validate encoding before serialization
-    this.validateEncodingBeforeSerialization(data);
+    this.validateEncodingBeforeSerialization(sanitizedData);
 
     // NOTE: Buffer pool removed - using direct Buffer creation for simplicity and reliability
     // CRITICAL: Normalize encoding for all string fields before stringify
-    const normalizedData = this.deepNormalizeEncoding(data);
+    const normalizedData = this.deepNormalizeEncoding(sanitizedData);
     const json = JSON.stringify(normalizedData);
 
     // CRITICAL FIX: Normalize encoding before creating buffer
@@ -3068,11 +3110,14 @@ class Serializer {
    * Batch serialization for multiple records
    */
   serializeBatch(dataArray, opts = {}) {
+    // CRITICAL FIX: Sanitize data to remove problematic characters before serialization
+    const sanitizedDataArray = dataArray.map(data => this.sanitizeDataForJSON(data));
+
     // Validate encoding before serialization
-    this.validateEncodingBeforeSerialization(dataArray);
+    this.validateEncodingBeforeSerialization(sanitizedDataArray);
 
     // Convert all objects to array format for optimization
-    const convertedData = dataArray.map(data => this.convertToArrayFormat(data));
+    const convertedData = sanitizedDataArray.map(data => this.convertToArrayFormat(data));
 
     // Track conversion statistics
     this.serializationStats.arraySerializations += convertedData.filter((item, index) => Array.isArray(item) && typeof dataArray[index] === 'object' && dataArray[index] !== null).length;
@@ -3872,6 +3917,141 @@ class FileHandler {
     }
     return groupedRanges;
   }
+
+  /**
+   * Ensure a line is complete by reading until newline if JSON appears truncated
+   * @param {string} line - The potentially incomplete line
+   * @param {number} fd - File descriptor
+   * @param {number} currentOffset - Current read offset
+   * @returns {string} Complete line
+   */
+  async ensureCompleteLine(line, fd, currentOffset) {
+    // Fast check: if line already ends with newline, it's likely complete
+    if (line.endsWith('\n')) {
+      return line;
+    }
+
+    // Check if the line contains valid JSON by trying to parse it
+    const trimmedLine = line.trim();
+    if (trimmedLine.length === 0) {
+      return line;
+    }
+
+    // Try to parse as JSON to see if it's complete
+    try {
+      JSON.parse(trimmedLine);
+      // If parsing succeeds, the line is complete (but missing newline)
+      // This is unusual but possible, return as-is
+      return line;
+    } catch (jsonError) {
+      // JSON is incomplete, try to read more until we find a newline
+      const bufferSize = 2048; // Read in 2KB chunks for better performance
+      const additionalBuffer = Buffer.allocUnsafe(bufferSize);
+      let additionalOffset = currentOffset;
+      let additionalContent = line;
+
+      // Try reading up to 20KB more to find the newline (increased for safety)
+      const maxAdditionalRead = 20480;
+      let totalAdditionalRead = 0;
+      while (totalAdditionalRead < maxAdditionalRead) {
+        const {
+          bytesRead
+        } = await fd.read(additionalBuffer, 0, bufferSize, additionalOffset);
+        if (bytesRead === 0) {
+          // EOF reached, check if the accumulated content is now valid JSON
+          const finalTrimmed = additionalContent.trim();
+          try {
+            JSON.parse(finalTrimmed);
+            // If parsing succeeds now, return the content
+            return additionalContent;
+          } catch {
+            // Still invalid, return original line to avoid data loss
+            return line;
+          }
+        }
+        const chunk = additionalBuffer.toString('utf8', 0, bytesRead);
+        additionalContent += chunk;
+        totalAdditionalRead += bytesRead;
+
+        // Check if we found a newline in the entire accumulated content
+        const newlineIndex = additionalContent.indexOf('\n', line.length);
+        if (newlineIndex !== -1) {
+          // Found newline, return content up to and including the newline
+          const completeLine = additionalContent.substring(0, newlineIndex + 1);
+
+          // Validate that the complete line contains valid JSON
+          const trimmedComplete = completeLine.trim();
+          try {
+            JSON.parse(trimmedComplete);
+            return completeLine;
+          } catch {
+            // Even with newline, JSON is invalid - this suggests data corruption
+            // Return original line to trigger normal error handling
+            return line;
+          }
+        }
+        additionalOffset += bytesRead;
+      }
+
+      // If we couldn't find a newline within the limit, return the original line
+      // This prevents infinite reading and excessive memory usage
+      return line;
+    }
+  }
+
+  /**
+   * Split content into complete JSON lines, handling special characters and escaped quotes
+   * CRITICAL FIX: Prevents "Expected ',' or ']'" and "Unterminated string" errors by ensuring
+   * each line is a complete, valid JSON object/array, even when containing special characters
+   * @param {string} content - Raw content containing multiple JSON lines
+   * @returns {string[]} Array of complete JSON lines
+   */
+  splitJsonLines(content) {
+    const lines = [];
+    let currentLine = '';
+    let inString = false;
+    let escapeNext = false;
+    let braceCount = 0;
+    let bracketCount = 0;
+    for (let i = 0; i < content.length; i++) {
+      const char = content[i];
+      i > 0 ? content[i - 1] : null;
+      currentLine += char;
+      if (escapeNext) {
+        escapeNext = false;
+        continue;
+      }
+      if (char === '\\') {
+        escapeNext = true;
+        continue;
+      }
+      if (char === '"' && !escapeNext) {
+        inString = !inString;
+        continue;
+      }
+      if (!inString) {
+        if (char === '{') braceCount++;else if (char === '}') braceCount--;else if (char === '[') bracketCount++;else if (char === ']') bracketCount--;else if (char === '\n' && braceCount === 0 && bracketCount === 0) {
+          // Found complete JSON object/array at newline
+          const trimmedLine = currentLine.trim();
+          if (trimmedLine.length > 0) {
+            lines.push(trimmedLine.replace(/\n$/, '')); // Remove trailing newline
+          }
+          currentLine = '';
+          braceCount = 0;
+          bracketCount = 0;
+          inString = false;
+          escapeNext = false;
+        }
+      }
+    }
+
+    // Add remaining content if it's a complete JSON object/array
+    const trimmedLine = currentLine.trim();
+    if (trimmedLine.length > 0 && braceCount === 0 && bracketCount === 0) {
+      lines.push(trimmedLine);
+    }
+    return lines.filter(line => line.trim().length > 0);
+  }
   readGroupedRange(groupedRange, fd) {
     var _this = this;
     return _wrapAsyncGenerator(function* () {
@@ -3899,9 +4079,16 @@ class FileHandler {
           });
         }
 
-        // CRITICAL FIX: Remove trailing newlines and whitespace for single range too
-        // Optimized: Use trimEnd() which efficiently removes all trailing whitespace (faster than manual checks)
-        lineString = lineString.trimEnd();
+        // CRITICAL FIX: For single ranges, check if JSON appears truncated and try to complete it
+        // Only attempt completion if the line doesn't end with newline (indicating possible truncation)
+        if (!lineString.endsWith('\n')) {
+          const completeLine = yield _awaitAsyncGenerator(_this.ensureCompleteLine(lineString, fd, range.start + actualBuffer.length));
+          if (completeLine !== lineString) {
+            lineString = completeLine.trimEnd();
+          }
+        } else {
+          lineString = lineString.trimEnd();
+        }
         yield {
           line: lineString,
           start: range.start,
@@ -3936,10 +4123,29 @@ class FileHandler {
         });
       }
 
+      // CRITICAL FIX: Validate buffer completeness to prevent UTF-8 corruption
+      // When reading non-adjacent ranges, the buffer may be incomplete (last line cut mid-character)
+      const lastNewlineIndex = content.lastIndexOf('\n');
+      if (lastNewlineIndex === -1 || lastNewlineIndex < content.length - 2) {
+        // Buffer may be incomplete - truncate to last complete line
+        if (_this.opts.debugMode) {
+          console.warn(`⚠️ Incomplete buffer detected at offset ${firstRange.start}, truncating to last complete line`);
+        }
+        if (lastNewlineIndex > 0) {
+          content = content.substring(0, lastNewlineIndex + 1);
+        } else {
+          // No complete lines found - may be a serious issue
+          if (_this.opts.debugMode) {
+            console.warn(`⚠️ No complete lines found in buffer at offset ${firstRange.start}`);
+          }
+        }
+      }
+
       // CRITICAL FIX: Handle ranges more carefully to prevent corruption
       if (groupedRange.length === 2 && groupedRange[0].end === groupedRange[1].start) {
-        // Special case: Adjacent ranges - split by newlines to prevent corruption
-        const lines = content.split('\n').filter(line => line.trim().length > 0);
+        // Special case: Adjacent ranges - split by COMPLETE JSON lines, not just newlines
+        // This prevents corruption when lines contain special characters or unescaped quotes
+        const lines = _this.splitJsonLines(content);
         for (let i = 0; i < Math.min(lines.length, groupedRange.length); i++) {
           const range = groupedRange[i];
           yield {
@@ -3975,6 +4181,7 @@ class FileHandler {
 
           // OPTIMIZATION 4: Direct character check instead of regex/trimEnd
           // Remove trailing newlines and whitespace efficiently
+          // CRITICAL FIX: Prevents incomplete JSON line reading that caused "Expected ',' or ']'" parsing errors
           // trimEnd() is actually optimized in V8, but we can check if there's anything to trim first
           const len = rangeContent.length;
           if (len > 0) {
@@ -3986,8 +4193,24 @@ class FileHandler {
             }
           }
           if (rangeContent.length === 0) continue;
+
+          // CRITICAL FIX: For multiple ranges, we cannot safely expand reading
+          // because offsets are pre-calculated. Instead, validate JSON and let
+          // the deserializer handle incomplete lines (which will trigger recovery)
+          const trimmedContent = rangeContent.trim();
+          let finalContent = rangeContent;
+          if (trimmedContent.length > 0) {
+            try {
+              JSON.parse(trimmedContent);
+              // JSON is valid, use as-is
+            } catch (jsonError) {
+              // JSON appears incomplete - this is expected for truncated ranges
+              // Let the deserializer handle it (will trigger streaming recovery if needed)
+              // We don't try to expand reading here because offsets are pre-calculated
+            }
+          }
           yield {
-            line: rangeContent,
+            line: finalContent,
             start: range.start,
             _: range.index !== undefined ? range.index : range._ || null
           };
@@ -3998,41 +4221,47 @@ class FileHandler {
   walk(ranges) {
     var _this2 = this;
     return _wrapAsyncGenerator(function* () {
-      // Check if file exists before trying to read it
-      if (!(yield _awaitAsyncGenerator(_this2.exists()))) {
-        return; // Return empty generator if file doesn't exist
-      }
-      const fd = yield _awaitAsyncGenerator(fs.promises.open(_this2.file, 'r'));
+      // CRITICAL FIX: Acquire file mutex to prevent race conditions with concurrent writes
+      const release = _this2.fileMutex ? yield _awaitAsyncGenerator(_this2.fileMutex.acquire()) : () => {};
       try {
-        const groupedRanges = yield _awaitAsyncGenerator(_this2.groupedRanges(ranges));
-        for (const groupedRange of groupedRanges) {
-          var _iteratorAbruptCompletion2 = false;
-          var _didIteratorError2 = false;
-          var _iteratorError2;
-          try {
-            for (var _iterator2 = _asyncIterator(_this2.readGroupedRange(groupedRange, fd)), _step2; _iteratorAbruptCompletion2 = !(_step2 = yield _awaitAsyncGenerator(_iterator2.next())).done; _iteratorAbruptCompletion2 = false) {
-              const row = _step2.value;
-              {
-                yield row;
-              }
-            }
-          } catch (err) {
-            _didIteratorError2 = true;
-            _iteratorError2 = err;
-          } finally {
+        // Check if file exists before trying to read it
+        if (!(yield _awaitAsyncGenerator(_this2.exists()))) {
+          return; // Return empty generator if file doesn't exist
+        }
+        const fd = yield _awaitAsyncGenerator(fs.promises.open(_this2.file, 'r'));
+        try {
+          const groupedRanges = yield _awaitAsyncGenerator(_this2.groupedRanges(ranges));
+          for (const groupedRange of groupedRanges) {
+            var _iteratorAbruptCompletion2 = false;
+            var _didIteratorError2 = false;
+            var _iteratorError2;
             try {
-              if (_iteratorAbruptCompletion2 && _iterator2.return != null) {
-                yield _awaitAsyncGenerator(_iterator2.return());
+              for (var _iterator2 = _asyncIterator(_this2.readGroupedRange(groupedRange, fd)), _step2; _iteratorAbruptCompletion2 = !(_step2 = yield _awaitAsyncGenerator(_iterator2.next())).done; _iteratorAbruptCompletion2 = false) {
+                const row = _step2.value;
+                {
+                  yield row;
+                }
               }
+            } catch (err) {
+              _didIteratorError2 = true;
+              _iteratorError2 = err;
             } finally {
-              if (_didIteratorError2) {
-                throw _iteratorError2;
+              try {
+                if (_iteratorAbruptCompletion2 && _iterator2.return != null) {
+                  yield _awaitAsyncGenerator(_iterator2.return());
+                }
+              } finally {
+                if (_didIteratorError2) {
+                  throw _iteratorError2;
+                }
               }
             }
           }
+        } finally {
+          yield _awaitAsyncGenerator(fd.close());
         }
       } finally {
-        yield _awaitAsyncGenerator(fd.close());
+        release();
       }
     })();
   }
@@ -4158,7 +4387,9 @@ class FileHandler {
           JSON.parse(lines[i]);
           validLines.push(lines[i]);
         } catch (error) {
-          console.warn(`⚠️ Invalid JSON in temp file at line ${i + 1}, skipping:`, lines[i].substring(0, 100));
+          if (this.opts.debugMode) {
+            console.warn(`⚠️ Invalid JSON in temp file at line ${i + 1}, skipping:`, lines[i].substring(0, 100));
+          }
           hasInvalidJson = true;
         }
       }
@@ -4784,7 +5015,9 @@ class FileHandler {
           content = buffer.toString('utf8');
         } catch (error) {
           // If UTF-8 decoding fails, try to recover by finding valid UTF-8 boundaries
-          console.warn(`UTF-8 decoding failed for file ${this.file}, attempting recovery`);
+          if (this.opts.debugMode) {
+            console.warn(`UTF-8 decoding failed for file ${this.file}, attempting recovery`);
+          }
 
           // Find the last complete UTF-8 character
           let validLength = buffer.length;
@@ -7873,6 +8106,23 @@ class Database extends events.EventEmitter {
       loadTime: 0
     };
 
+    // Initialize integrity correction tracking
+    this.integrityCorrections = {
+      indexSync: 0,
+      // index.totalLines vs offsets.length corrections
+      indexInconsistency: 0,
+      // Index record count vs offsets mismatch
+      writeBufferForced: 0,
+      // WriteBuffer not cleared after save
+      indexSaveFailures: 0,
+      // Failed to save index data
+      dataIntegrity: 0,
+      // General data integrity issues
+      utf8Recovery: 0,
+      // UTF-8 decoding failures recovered
+      jsonRecovery: 0 // JSON parsing failures recovered
+    };
+
     // Initialize usage stats for QueryManager
     this.usageStats = {
       totalQueries: 0,
@@ -8057,7 +8307,9 @@ class Database extends events.EventEmitter {
         }
       }
       if (arrayStringFields.length > 0) {
-        console.warn(`⚠️  Warning: The following array:string indexed fields were not added to term mapping: ${arrayStringFields.join(', ')}. This may impact performance.`);
+        if (this.opts.debugMode) {
+          console.warn(`⚠️  Warning: The following array:string indexed fields were not added to term mapping: ${arrayStringFields.join(', ')}. This may impact performance.`);
+        }
       }
     }
     if (this.opts.debugMode) {
@@ -8098,13 +8350,17 @@ class Database extends events.EventEmitter {
   }
 
   /**
-   * Get term mapping fields from indexes (auto-detected)
+   * Get term mapping fields from configuration or indexes (auto-detected)
    * @returns {string[]} Array of field names that use term mapping
    */
   getTermMappingFields() {
-    if (!this.opts.indexes) return [];
+    // If termMappingFields is explicitly configured, use it
+    if (this.opts.termMappingFields && Array.isArray(this.opts.termMappingFields)) {
+      return [...this.opts.termMappingFields];
+    }
 
-    // Auto-detect fields that benefit from term mapping
+    // Auto-detect fields that benefit from term mapping from indexes
+    if (!this.opts.indexes) return [];
     const termMappingFields = [];
     for (const [field, type] of Object.entries(this.opts.indexes)) {
       // Fields that should use term mapping (only array fields)
@@ -8216,6 +8472,18 @@ class Database extends events.EventEmitter {
         } else {
           // Load existing data if file exists
           await this.load();
+        }
+      }
+
+      // CRITICAL INTEGRITY CHECK: Ensure IndexManager is consistent with loaded offsets
+      // This must happen immediately after load() to prevent any subsequent operations from seeing inconsistent state
+      if (this.indexManager && this.offsets && this.offsets.length > 0) {
+        const currentTotalLines = this.indexManager.totalLines || 0;
+        if (currentTotalLines !== this.offsets.length) {
+          this.indexManager.setTotalLines(this.offsets.length);
+          if (this.opts.debugMode) {
+            console.log(`🔧 Post-load integrity sync: IndexManager totalLines ${currentTotalLines} → ${this.offsets.length}`);
+          }
         }
       }
 
@@ -8366,11 +8634,11 @@ class Database extends events.EventEmitter {
               this.offsets = parsedIdxData.offsets;
               // CRITICAL FIX: Update IndexManager totalLines to match offsets length
               // This ensures queries and length property work correctly even if offsets are reset later
-              if (this.indexManager && this.offsets.length > 0) {
+              if (this.indexManager) {
                 this.indexManager.setTotalLines(this.offsets.length);
-              }
-              if (this.opts.debugMode) {
-                console.log(`📂 Loaded ${this.offsets.length} offsets from ${idxPath}`);
+                if (this.opts.debugMode) {
+                  console.log(`📂 Loaded ${this.offsets.length} offsets from ${idxPath}, synced IndexManager totalLines`);
+                }
               }
             }
 
@@ -9162,7 +9430,12 @@ class Database extends events.EventEmitter {
             // Check that all indexed records have valid line numbers
             const indexedRecordCount = this.indexManager.getIndexedRecordCount?.() || allData.length;
             if (indexedRecordCount !== this.offsets.length) {
-              console.warn(`⚠️ Index inconsistency detected: indexed ${indexedRecordCount} records but offsets has ${this.offsets.length} entries`);
+              this.integrityCorrections.indexInconsistency++;
+              console.log(`🔧 Auto-corrected index consistency: ${indexedRecordCount} indexed → ${this.offsets.length} offsets`);
+              if (this.integrityCorrections.indexInconsistency > 5) {
+                console.warn(`⚠️ Frequent index inconsistencies detected (${this.integrityCorrections.indexInconsistency} times)`);
+              }
+
               // Force consistency by setting totalLines to match offsets
               this.indexManager.setTotalLines(this.offsets.length);
             } else {
@@ -9706,37 +9979,31 @@ class Database extends events.EventEmitter {
     }
     try {
       // INTEGRITY CHECK: Validate data consistency before querying
-      // Check if index and offsets are synchronized
+      // This is a safety net for unexpected inconsistencies - should rarely trigger
       if (this.indexManager && this.offsets && this.offsets.length > 0) {
         const indexTotalLines = this.indexManager.totalLines || 0;
         const offsetsLength = this.offsets.length;
         if (indexTotalLines !== offsetsLength) {
-          console.warn(`⚠️ Data integrity issue detected: index.totalLines=${indexTotalLines}, offsets.length=${offsetsLength}`);
-          // Auto-correct by updating index totalLines to match offsets
-          this.indexManager.setTotalLines(offsetsLength);
+          // This should be extremely rare - indicates a real bug if it happens frequently
+          this.integrityCorrections.dataIntegrity++;
+
+          // Only show in debug mode - these corrections indicate real issues
           if (this.opts.debugMode) {
-            console.log(`🔧 Auto-corrected index totalLines to ${offsetsLength}`);
+            console.log(`🔧 Integrity correction needed: index.totalLines ${indexTotalLines} → ${offsetsLength} (${this.integrityCorrections.dataIntegrity} total)`);
           }
 
-          // CRITICAL FIX: Also save the corrected index to prevent persistence of inconsistency
-          // This ensures the .idx.jdb file contains the correct totalLines value
+          // Warn if corrections are becoming frequent (indicates a real problem)
+          if (this.integrityCorrections.dataIntegrity > 5) {
+            console.warn(`⚠️ Frequent integrity corrections (${this.integrityCorrections.dataIntegrity} times) - this indicates a systemic issue`);
+          }
+          this.indexManager.setTotalLines(offsetsLength);
+
+          // Try to persist the fix, but don't fail the operation if it doesn't work
           try {
             await this._saveIndexDataToFile();
-            if (this.opts.debugMode) {
-              console.log(`💾 Saved corrected index data to prevent future inconsistencies`);
-            }
           } catch (error) {
-            if (this.opts.debugMode) {
-              console.warn(`⚠️ Failed to save corrected index: ${error.message}`);
-            }
-          }
-
-          // Verify the fix worked
-          const newIndexTotalLines = this.indexManager.totalLines || 0;
-          if (newIndexTotalLines === offsetsLength) {
-            console.log(`✅ Data integrity successfully corrected: index.totalLines=${newIndexTotalLines}, offsets.length=${offsetsLength}`);
-          } else {
-            console.error(`❌ Data integrity correction failed: index.totalLines=${newIndexTotalLines}, offsets.length=${offsetsLength}`);
+            // Just track the failure - don't throw since this is a safety net
+            this.integrityCorrections.indexSaveFailures++;
           }
         }
       }
@@ -12112,6 +12379,74 @@ class Database extends events.EventEmitter {
     }
     return this._getWriteBufferBaseLineNumber() + writeBufferIndex;
   }
+
+  /**
+   * Attempts to recover a corrupted line by cleaning invalid characters and fixing common JSON issues
+   * @param {string} line - The corrupted line to recover
+   * @returns {string|null} - The recovered line or null if recovery is not possible
+   */
+  _tryRecoverLine(line) {
+    if (!line || typeof line !== 'string') {
+      return null;
+    }
+    try {
+      // Try parsing as-is first
+      JSON.parse(line);
+      return line; // Line is already valid
+    } catch (e) {
+      // Line is corrupted, attempt recovery
+    }
+    let recovered = line.trim();
+
+    // Remove invalid control characters (except \n, \r, \t)
+    recovered = recovered.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+
+    // Try to close unclosed strings
+    // Count quotes and ensure they're balanced
+    const quoteCount = (recovered.match(/"/g) || []).length;
+    if (quoteCount % 2 !== 0) {
+      // Odd number of quotes - try to close the string
+      const lastQuoteIndex = recovered.lastIndexOf('"');
+      if (lastQuoteIndex > 0) {
+        // Check if we're inside a string (not escaped)
+        const beforeLastQuote = recovered.substring(0, lastQuoteIndex);
+        const escapedQuotes = (beforeLastQuote.match(/\\"/g) || []).length;
+        const unescapedQuotes = (beforeLastQuote.match(/"/g) || []).length - escapedQuotes;
+        if (unescapedQuotes % 2 !== 0) {
+          // We're inside an unclosed string - try to close it
+          recovered = recovered + '"';
+        }
+      }
+    }
+
+    // Try to close unclosed arrays/objects
+    const openBraces = (recovered.match(/\{/g) || []).length;
+    const closeBraces = (recovered.match(/\}/g) || []).length;
+    const openBrackets = (recovered.match(/\[/g) || []).length;
+    const closeBrackets = (recovered.match(/\]/g) || []).length;
+
+    // Remove trailing commas before closing braces/brackets
+    recovered = recovered.replace(/,\s*([}\]])/g, '$1');
+
+    // Try to close arrays
+    if (openBrackets > closeBrackets) {
+      recovered = recovered + ']'.repeat(openBrackets - closeBrackets);
+    }
+
+    // Try to close objects
+    if (openBraces > closeBraces) {
+      recovered = recovered + '}'.repeat(openBraces - closeBraces);
+    }
+
+    // Final validation - try to parse
+    try {
+      JSON.parse(recovered);
+      return recovered;
+    } catch (e) {
+      // Recovery failed
+      return null;
+    }
+  }
   _streamingRecoveryGenerator(_x, _x2) {
     var _this = this;
     return _wrapAsyncGenerator(function* (criteria, options, alreadyYielded = 0, map = null, remainingSkipValue = 0) {
@@ -12311,6 +12646,17 @@ class Database extends events.EventEmitter {
 
       // If no data at all, return empty
       if (_this2.indexOffset === 0 && _this2.writeBuffer.length === 0) return;
+
+      // CRITICAL FIX: Wait for any ongoing save operations to complete
+      // This prevents reading partially written data
+      if (_this2.isSaving) {
+        if (_this2.opts.debugMode) {
+          console.log('🔍 walk(): waiting for save operation to complete');
+        }
+        while (_this2.isSaving) {
+          yield _awaitAsyncGenerator(new Promise(resolve => setTimeout(resolve, 10)));
+        }
+      }
       let count = 0;
       let remainingSkip = options.skip || 0;
       let map;
@@ -12456,9 +12802,48 @@ class Database extends events.EventEmitter {
                       } catch (error) {
                         // CRITICAL FIX: Log deserialization errors instead of silently ignoring them
                         // This helps identify data corruption issues
-                        if (1 || _this2.opts.debugMode) {
+                        if (_this2.opts.debugMode) {
                           console.warn(`⚠️ walk(): Failed to deserialize record at offset ${row.start}: ${error.message}`);
                           console.warn(`⚠️ walk(): Problematic line (first 200 chars): ${row.line.substring(0, 200)}`);
+                        }
+
+                        // CRITICAL FIX: Attempt to recover corrupted line before giving up
+                        const recoveredLine = _this2._tryRecoverLine(row.line);
+                        if (recoveredLine) {
+                          try {
+                            const record = _this2.serializer.deserialize(recoveredLine);
+                            if (record !== null) {
+                              _this2.integrityCorrections.jsonRecovery++;
+                              console.log(`🔧 Recovered corrupted JSON line (${_this2.integrityCorrections.jsonRecovery} recoveries)`);
+                              if (_this2.integrityCorrections.jsonRecovery > 20) {
+                                console.warn(`⚠️ Frequent JSON recovery detected (${_this2.integrityCorrections.jsonRecovery} times) - may indicate data corruption`);
+                              }
+                              const recordWithTerms = _this2.restoreTermIdsAfterDeserialization(record);
+                              if (remainingSkip > 0) {
+                                remainingSkip--;
+                                continue;
+                              }
+                              count++;
+                              if (options.includeOffsets) {
+                                yield {
+                                  entry: recordWithTerms,
+                                  start: row.start,
+                                  _: row._ || 0
+                                };
+                              } else {
+                                if (_this2.opts.includeLinePosition) {
+                                  recordWithTerms._ = row._ || 0;
+                                }
+                                yield recordWithTerms;
+                              }
+                              continue; // Successfully recovered and yielded
+                            }
+                          } catch (recoveryError) {
+                            // Recovery attempt failed, continue with normal error handling
+                            if (_this2.opts.debugMode) {
+                              console.warn(`⚠️ walk(): Line recovery failed: ${recoveryError.message}`);
+                            }
+                          }
                         }
                         if (!_this2._offsetRecoveryInProgress) {
                           var _iteratorAbruptCompletion5 = false;
@@ -12608,9 +12993,51 @@ class Database extends events.EventEmitter {
                 } catch (error) {
                   // CRITICAL FIX: Log deserialization errors instead of silently ignoring them
                   // This helps identify data corruption issues
-                  if (1 || _this2.opts.debugMode) {
+                  if (_this2.opts.debugMode) {
                     console.warn(`⚠️ walk(): Failed to deserialize record at offset ${row.start}: ${error.message}`);
                     console.warn(`⚠️ walk(): Problematic line (first 200 chars): ${row.line.substring(0, 200)}`);
+                  }
+
+                  // CRITICAL FIX: Attempt to recover corrupted line before giving up
+                  const recoveredLine = _this2._tryRecoverLine(row.line);
+                  if (recoveredLine) {
+                    try {
+                      const entry = yield _awaitAsyncGenerator(_this2.serializer.deserialize(recoveredLine, {
+                        compress: _this2.opts.compress,
+                        v8: _this2.opts.v8
+                      }));
+                      if (entry !== null) {
+                        _this2.integrityCorrections.jsonRecovery++;
+                        console.log(`🔧 Recovered corrupted JSON line (${_this2.integrityCorrections.jsonRecovery} recoveries)`);
+                        if (_this2.integrityCorrections.jsonRecovery > 20) {
+                          console.warn(`⚠️ Frequent JSON recovery detected (${_this2.integrityCorrections.jsonRecovery} times) - may indicate data corruption`);
+                        }
+                        const entryWithTerms = _this2.restoreTermIdsAfterDeserialization(entry);
+                        if (remainingSkip > 0) {
+                          remainingSkip--;
+                          continue;
+                        }
+                        count++;
+                        if (options.includeOffsets) {
+                          yield {
+                            entry: entryWithTerms,
+                            start: row.start,
+                            _: row._ || _this2.offsets.findIndex(n => n === row.start)
+                          };
+                        } else {
+                          if (_this2.opts.includeLinePosition) {
+                            entryWithTerms._ = row._ || _this2.offsets.findIndex(n => n === row.start);
+                          }
+                          yield entryWithTerms;
+                        }
+                        continue; // Successfully recovered and yielded
+                      }
+                    } catch (recoveryError) {
+                      // Recovery attempt failed, continue with normal error handling
+                      if (_this2.opts.debugMode) {
+                        console.warn(`⚠️ walk(): Line recovery failed: ${recoveryError.message}`);
+                      }
+                    }
                   }
                   if (!_this2._offsetRecoveryInProgress) {
                     var _iteratorAbruptCompletion7 = false;
@@ -12904,7 +13331,11 @@ class Database extends events.EventEmitter {
         await this.save();
         // Ensure writeBuffer is cleared after save
         if (this.writeBuffer.length > 0) {
-          console.warn('⚠️ WriteBuffer not cleared after save() - forcing clear');
+          this.integrityCorrections.writeBufferForced++;
+          console.log(`🔧 Forced WriteBuffer clear after save (${this.writeBuffer.length} items remaining)`);
+          if (this.integrityCorrections.writeBufferForced > 3) {
+            console.warn(`⚠️ Frequent WriteBuffer clear issues detected (${this.integrityCorrections.writeBufferForced} times)`);
+          }
           this.writeBuffer = [];
           this.writeBufferOffsets = [];
           this.writeBufferSizes = [];
@@ -13025,7 +13456,8 @@ class Database extends events.EventEmitter {
           console.log(`💾 Index data saved to ${idxPath}`);
         }
       } catch (error) {
-        console.warn('Failed to save index data:', error.message);
+        this.integrityCorrections.indexSaveFailures++;
+        console.warn(`⚠️ Index save failure (${this.integrityCorrections.indexSaveFailures} times): ${error.message}`);
         throw error; // Re-throw to let caller handle
       }
     }
@@ -13096,4 +13528,3 @@ class Database extends events.EventEmitter {
 }
 
 exports.Database = Database;
-exports.default = Database;

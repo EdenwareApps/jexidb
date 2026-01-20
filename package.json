@@ -1,6 +1,6 @@
 {
   "name": "jexidb",
-  "version": "2.1.4",
+  "version": "2.1.5",
   "type": "module",
   "description": "JexiDB is a pure JS NPM library for managing data on disk efficiently, without the need for a server.",
   "main": "./dist/Database.cjs",
@@ -22,6 +22,9 @@
   },
   "author": "EdenwareApps",
   "license": "MIT",
+  "engines": {
+    "node": ">=16.0.0"
+  },
   "devDependencies": {
     "@babel/cli": "^7.25.6",
     "@babel/core": "^7.25.2",

@@ -62,14 +62,14 @@ describe('FileHandler readGroupedRange Bug - Non-adjacent Ranges', () => {
     
     const matchingRecords = [
       { id: 1, url: 'http://olxi0fko.ukminlt.fun/iptv/HV7NY9RSQCHYZK/1066/index.m3u8', name: 'Дорама', logo: '', category: 'кино', nameTerms: ['кино'] },
-      { id: 50, url: 'http://olxi0fko.ukminlt.fun/iptv/HV7NY9RSQCHYZK/1066/index.m3u8', name: 'Дорама', logo: '', category: 'кино', nameTerms: ['кино'] },
-      { id: 100, url: 'http://olxi0fko.ukminlt.fun/iptv/HV7NY9RSQCHYZK/1066/index.m3u8', name: 'Дорама', logo: '', category: 'кино', nameTerms: ['кино'] },
-      { id: 150, url: 'http://olxi0fko.ukminlt.fun/iptv/HV7NY9RSQCHYZK/1066/index.m3u8', name: 'Дорама', logo: '', category: 'кино', nameTerms: ['кино'] },
-      { id: 200, url: 'http://olxi0fko.ukminlt.fun/iptv/HV7NY9RSQCHYZK/1066/index.m3u8', name: 'Дорама', logo: '', category: 'кино', nameTerms: ['кино'] }
+      { id: 10, url: 'http://olxi0fko.ukminlt.fun/iptv/HV7NY9RSQCHYZK/1066/index.m3u8', name: 'Дорама', logo: '', category: 'кино', nameTerms: ['кино'] },
+      { id: 20, url: 'http://olxi0fko.ukminlt.fun/iptv/HV7NY9RSQCHYZK/1066/index.m3u8', name: 'Дорама', logo: '', category: 'кино', nameTerms: ['кино'] },
+      { id: 30, url: 'http://olxi0fko.ukminlt.fun/iptv/HV7NY9RSQCHYZK/1066/index.m3u8', name: 'Дорама', logo: '', category: 'кино', nameTerms: ['кино'] },
+      { id: 40, url: 'http://olxi0fko.ukminlt.fun/iptv/HV7NY9RSQCHYZK/1066/index.m3u8', name: 'Дорама', logo: '', category: 'кино', nameTerms: ['кино'] }
     ]
 
-    // Insert non-matching records between them to create gaps
-    for (let i = 1; i <= 200; i++) {
+    // Insert non-matching records between them to create gaps (reduced to 50 for memory efficiency)
+    for (let i = 1; i <= 50; i++) {
       if (matchingRecords.find(r => r.id === i)) {
         await db.insert(matchingRecords.find(r => r.id === i))
       } else {

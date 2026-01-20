@@ -11,7 +11,7 @@ export default {
   ],
   verbose: true,
   testTimeout: 10000,
-  maxWorkers: '50%', // Allow parallel test execution for better performance
+  maxWorkers: 1, // Run tests sequentially to prevent memory issues
   detectOpenHandles: true, // Detect open handles to identify resource leaks
   transform: {
     '^.+\\.mjs$': 'babel-jest',

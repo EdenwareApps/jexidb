@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
-import Database from '../src/Database.mjs';
+import { Database } from '../src/Database.mjs';
 import fs from 'fs';
 import path from 'path';
 

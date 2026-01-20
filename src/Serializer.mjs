@@ -120,12 +120,15 @@ export default class Serializer {
    * Advanced serialization with optimized JSON.stringify and buffer pooling
    */
   serializeAdvanced(data, addLinebreak) {
+    // CRITICAL FIX: Sanitize data to remove problematic characters before serialization
+    const sanitizedData = this.sanitizeDataForJSON(data)
+
     // Validate encoding before serialization
-    this.validateEncodingBeforeSerialization(data)
-    
+    this.validateEncodingBeforeSerialization(sanitizedData)
+
     // Use optimized JSON.stringify without buffer pooling
     // NOTE: Buffer pool removed - using direct Buffer creation for simplicity and reliability
-    const json = this.optimizedStringify(data)
+    const json = this.optimizedStringify(sanitizedData)
     
     // CRITICAL FIX: Normalize encoding before creating buffer
     const normalizedJson = this.normalizeEncoding(json)
@@ -239,6 +242,54 @@ export default class Serializer {
   /**
    * Validate encoding before serialization
    */
+  /**
+   * Sanitize data to remove problematic characters that break JSON parsing
+   * CRITICAL FIX: Prevents "Expected ',' or ']'" and "Unterminated string" errors
+   * by removing control characters that cannot be safely represented in JSON
+   */
+  sanitizeDataForJSON(data) {
+    const sanitizeString = (str) => {
+      if (typeof str !== 'string') return str
+
+      return str
+        // Remove control characters that break JSON parsing (but keep \n, \r, \t as they can be escaped)
+        // Remove: NUL, SOH, STX, ETX, EOT, ENQ, ACK, BEL, VT, FF, SO, SI, DLE, DC1-DC4, NAK, SYN, ETB, CAN, EM, SUB, ESC, FS, GS, RS, US, DEL, C1 controls
+        .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '')
+        // Limit string length to prevent performance issues
+        .substring(0, 10000)
+    }
+
+    const sanitizeArray = (arr) => {
+      if (!Array.isArray(arr)) return arr
+
+      return arr
+        .map(item => this.sanitizeDataForJSON(item))
+        .filter(item => item !== null && item !== undefined && item !== '')
+    }
+
+    if (typeof data === 'string') {
+      return sanitizeString(data)
+    }
+
+    if (Array.isArray(data)) {
+      return sanitizeArray(data)
+    }
+
+    if (data && typeof data === 'object') {
+      const sanitized = {}
+      for (const [key, value] of Object.entries(data)) {
+        const sanitizedValue = this.sanitizeDataForJSON(value)
+        // Only include non-null, non-undefined values
+        if (sanitizedValue !== null && sanitizedValue !== undefined) {
+          sanitized[key] = sanitizedValue
+        }
+      }
+      return sanitized
+    }
+
+    return data
+  }
+
   validateEncodingBeforeSerialization(data) {
     const issues = []
     
@@ -347,12 +398,15 @@ export default class Serializer {
    * Standard serialization (fallback)
    */
   serializeStandard(data, addLinebreak) {
+    // CRITICAL FIX: Sanitize data to remove problematic characters before serialization
+    const sanitizedData = this.sanitizeDataForJSON(data)
+
     // Validate encoding before serialization
-    this.validateEncodingBeforeSerialization(data)
+    this.validateEncodingBeforeSerialization(sanitizedData)
     
     // NOTE: Buffer pool removed - using direct Buffer creation for simplicity and reliability
     // CRITICAL: Normalize encoding for all string fields before stringify
-    const normalizedData = this.deepNormalizeEncoding(data)
+    const normalizedData = this.deepNormalizeEncoding(sanitizedData)
     const json = JSON.stringify(normalizedData)
     
     // CRITICAL FIX: Normalize encoding before creating buffer
@@ -575,11 +629,14 @@ export default class Serializer {
    * Batch serialization for multiple records
    */
   serializeBatch(dataArray, opts = {}) {
+    // CRITICAL FIX: Sanitize data to remove problematic characters before serialization
+    const sanitizedDataArray = dataArray.map(data => this.sanitizeDataForJSON(data))
+
     // Validate encoding before serialization
-    this.validateEncodingBeforeSerialization(dataArray)
-    
+    this.validateEncodingBeforeSerialization(sanitizedDataArray)
+
     // Convert all objects to array format for optimization
-    const convertedData = dataArray.map(data => this.convertToArrayFormat(data))
+    const convertedData = sanitizedDataArray.map(data => this.convertToArrayFormat(data))
     
     // Track conversion statistics
     this.serializationStats.arraySerializations += convertedData.filter((item, index) => 

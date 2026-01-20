@@ -7,7 +7,7 @@ export default {
   output: {
     file: 'dist/Database.cjs',
     format: 'cjs',
-    exports: 'auto',
+    exports: 'named',
   },
   plugins: [
     nodeResolve({

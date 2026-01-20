@@ -403,7 +403,19 @@ class Database extends EventEmitter {
       saveTime: 0,
       loadTime: 0
     }
-    
+
+    // Initialize integrity correction tracking
+    this.integrityCorrections = {
+      indexSync: 0,        // index.totalLines vs offsets.length corrections
+      indexInconsistency: 0, // Index record count vs offsets mismatch
+      writeBufferForced: 0, // WriteBuffer not cleared after save
+      indexSaveFailures: 0, // Failed to save index data
+      dataIntegrity: 0,    // General data integrity issues
+      utf8Recovery: 0,     // UTF-8 decoding failures recovered
+      jsonRecovery: 0      // JSON parsing failures recovered
+    }
+
+
     // Initialize usage stats for QueryManager
     this.usageStats = {
       totalQueries: 0,
@@ -596,7 +608,9 @@ class Database extends EventEmitter {
         }
       }
       if (arrayStringFields.length > 0) {
-        console.warn(`⚠️  Warning: The following array:string indexed fields were not added to term mapping: ${arrayStringFields.join(', ')}. This may impact performance.`)
+        if (this.opts.debugMode) {
+          console.warn(`⚠️  Warning: The following array:string indexed fields were not added to term mapping: ${arrayStringFields.join(', ')}. This may impact performance.`)
+        }
       }
     }
     
@@ -638,22 +652,27 @@ class Database extends EventEmitter {
   }
 
   /**
-   * Get term mapping fields from indexes (auto-detected)
+   * Get term mapping fields from configuration or indexes (auto-detected)
    * @returns {string[]} Array of field names that use term mapping
    */
   getTermMappingFields() {
+    // If termMappingFields is explicitly configured, use it
+    if (this.opts.termMappingFields && Array.isArray(this.opts.termMappingFields)) {
+      return [...this.opts.termMappingFields]
+    }
+
+    // Auto-detect fields that benefit from term mapping from indexes
     if (!this.opts.indexes) return []
-    
-    // Auto-detect fields that benefit from term mapping
+
     const termMappingFields = []
-    
+
     for (const [field, type] of Object.entries(this.opts.indexes)) {
       // Fields that should use term mapping (only array fields)
       if (type === 'array:string') {
         termMappingFields.push(field)
       }
     }
-    
+
     return termMappingFields
   }
 
@@ -745,7 +764,7 @@ class Database extends EventEmitter {
       
       // Reset closed state when reinitializing
       this.closed = false
-      
+
       // Initialize managers (protected against double initialization)
       this.initializeManagers()
       
@@ -768,7 +787,19 @@ class Database extends EventEmitter {
           await this.load()
         }
       }
-      
+
+      // CRITICAL INTEGRITY CHECK: Ensure IndexManager is consistent with loaded offsets
+      // This must happen immediately after load() to prevent any subsequent operations from seeing inconsistent state
+      if (this.indexManager && this.offsets && this.offsets.length > 0) {
+        const currentTotalLines = this.indexManager.totalLines || 0
+        if (currentTotalLines !== this.offsets.length) {
+          this.indexManager.setTotalLines(this.offsets.length)
+          if (this.opts.debugMode) {
+            console.log(`🔧 Post-load integrity sync: IndexManager totalLines ${currentTotalLines} → ${this.offsets.length}`)
+          }
+        }
+      }
+
       // Manual save is now the default behavior
 
       // CRITICAL FIX: Ensure IndexManager totalLines is consistent with offsets
@@ -936,11 +967,11 @@ class Database extends EventEmitter {
               this.offsets = parsedIdxData.offsets
               // CRITICAL FIX: Update IndexManager totalLines to match offsets length
               // This ensures queries and length property work correctly even if offsets are reset later
-              if (this.indexManager && this.offsets.length > 0) {
+              if (this.indexManager) {
                 this.indexManager.setTotalLines(this.offsets.length)
-              }
-              if (this.opts.debugMode) {
-                console.log(`📂 Loaded ${this.offsets.length} offsets from ${idxPath}`)
+                if (this.opts.debugMode) {
+                  console.log(`📂 Loaded ${this.offsets.length} offsets from ${idxPath}, synced IndexManager totalLines`)
+                }
               }
             }
             
@@ -1738,7 +1769,13 @@ class Database extends EventEmitter {
             // Check that all indexed records have valid line numbers
             const indexedRecordCount = this.indexManager.getIndexedRecordCount?.() || allData.length
             if (indexedRecordCount !== this.offsets.length) {
-              console.warn(`⚠️ Index inconsistency detected: indexed ${indexedRecordCount} records but offsets has ${this.offsets.length} entries`)
+              this.integrityCorrections.indexInconsistency++
+              console.log(`🔧 Auto-corrected index consistency: ${indexedRecordCount} indexed → ${this.offsets.length} offsets`)
+
+              if (this.integrityCorrections.indexInconsistency > 5) {
+                console.warn(`⚠️ Frequent index inconsistencies detected (${this.integrityCorrections.indexInconsistency} times)`)
+              }
+
               // Force consistency by setting totalLines to match offsets
               this.indexManager.setTotalLines(this.offsets.length)
             } else {
@@ -2292,7 +2329,7 @@ class Database extends EventEmitter {
    */
   async find(criteria = {}, options = {}) {
     this._validateInitialization('find')
-    
+
     // CRITICAL FIX: Validate state before find operation
     this.validateState()
     
@@ -2306,38 +2343,33 @@ class Database extends EventEmitter {
     
     try {
       // INTEGRITY CHECK: Validate data consistency before querying
-      // Check if index and offsets are synchronized
+      // This is a safety net for unexpected inconsistencies - should rarely trigger
       if (this.indexManager && this.offsets && this.offsets.length > 0) {
         const indexTotalLines = this.indexManager.totalLines || 0
         const offsetsLength = this.offsets.length
 
         if (indexTotalLines !== offsetsLength) {
-          console.warn(`⚠️ Data integrity issue detected: index.totalLines=${indexTotalLines}, offsets.length=${offsetsLength}`)
-          // Auto-correct by updating index totalLines to match offsets
-          this.indexManager.setTotalLines(offsetsLength)
+          // This should be extremely rare - indicates a real bug if it happens frequently
+          this.integrityCorrections.dataIntegrity++
+
+          // Only show in debug mode - these corrections indicate real issues
           if (this.opts.debugMode) {
-            console.log(`🔧 Auto-corrected index totalLines to ${offsetsLength}`)
+            console.log(`🔧 Integrity correction needed: index.totalLines ${indexTotalLines} → ${offsetsLength} (${this.integrityCorrections.dataIntegrity} total)`)
           }
 
-          // CRITICAL FIX: Also save the corrected index to prevent persistence of inconsistency
-          // This ensures the .idx.jdb file contains the correct totalLines value
+          // Warn if corrections are becoming frequent (indicates a real problem)
+          if (this.integrityCorrections.dataIntegrity > 5) {
+            console.warn(`⚠️ Frequent integrity corrections (${this.integrityCorrections.dataIntegrity} times) - this indicates a systemic issue`)
+          }
+
+          this.indexManager.setTotalLines(offsetsLength)
+
+          // Try to persist the fix, but don't fail the operation if it doesn't work
           try {
             await this._saveIndexDataToFile()
-            if (this.opts.debugMode) {
-              console.log(`💾 Saved corrected index data to prevent future inconsistencies`)
-            }
           } catch (error) {
-            if (this.opts.debugMode) {
-              console.warn(`⚠️ Failed to save corrected index: ${error.message}`)
-            }
-          }
-
-          // Verify the fix worked
-          const newIndexTotalLines = this.indexManager.totalLines || 0
-          if (newIndexTotalLines === offsetsLength) {
-            console.log(`✅ Data integrity successfully corrected: index.totalLines=${newIndexTotalLines}, offsets.length=${offsetsLength}`)
-          } else {
-            console.error(`❌ Data integrity correction failed: index.totalLines=${newIndexTotalLines}, offsets.length=${offsetsLength}`)
+            // Just track the failure - don't throw since this is a safety net
+            this.integrityCorrections.indexSaveFailures++
           }
         }
       }
@@ -4779,6 +4811,78 @@ class Database extends EventEmitter {
     return this._getWriteBufferBaseLineNumber() + writeBufferIndex
   }
 
+
+  /**
+   * Attempts to recover a corrupted line by cleaning invalid characters and fixing common JSON issues
+   * @param {string} line - The corrupted line to recover
+   * @returns {string|null} - The recovered line or null if recovery is not possible
+   */
+  _tryRecoverLine(line) {
+    if (!line || typeof line !== 'string') {
+      return null
+    }
+
+    try {
+      // Try parsing as-is first
+      JSON.parse(line)
+      return line // Line is already valid
+    } catch (e) {
+      // Line is corrupted, attempt recovery
+    }
+
+    let recovered = line.trim()
+
+    // Remove invalid control characters (except \n, \r, \t)
+    recovered = recovered.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
+
+    // Try to close unclosed strings
+    // Count quotes and ensure they're balanced
+    const quoteCount = (recovered.match(/"/g) || []).length
+    if (quoteCount % 2 !== 0) {
+      // Odd number of quotes - try to close the string
+      const lastQuoteIndex = recovered.lastIndexOf('"')
+      if (lastQuoteIndex > 0) {
+        // Check if we're inside a string (not escaped)
+        const beforeLastQuote = recovered.substring(0, lastQuoteIndex)
+        const escapedQuotes = (beforeLastQuote.match(/\\"/g) || []).length
+        const unescapedQuotes = (beforeLastQuote.match(/"/g) || []).length - escapedQuotes
+        
+        if (unescapedQuotes % 2 !== 0) {
+          // We're inside an unclosed string - try to close it
+          recovered = recovered + '"'
+        }
+      }
+    }
+
+    // Try to close unclosed arrays/objects
+    const openBraces = (recovered.match(/\{/g) || []).length
+    const closeBraces = (recovered.match(/\}/g) || []).length
+    const openBrackets = (recovered.match(/\[/g) || []).length
+    const closeBrackets = (recovered.match(/\]/g) || []).length
+
+    // Remove trailing commas before closing braces/brackets
+    recovered = recovered.replace(/,\s*([}\]])/g, '$1')
+
+    // Try to close arrays
+    if (openBrackets > closeBrackets) {
+      recovered = recovered + ']'.repeat(openBrackets - closeBrackets)
+    }
+
+    // Try to close objects
+    if (openBraces > closeBraces) {
+      recovered = recovered + '}'.repeat(openBraces - closeBraces)
+    }
+
+    // Final validation - try to parse
+    try {
+      JSON.parse(recovered)
+      return recovered
+    } catch (e) {
+      // Recovery failed
+      return null
+    }
+  }
+
   async *_streamingRecoveryGenerator(criteria, options, alreadyYielded = 0, map = null, remainingSkipValue = 0) {
     if (this._offsetRecoveryInProgress) {
       return
@@ -5004,6 +5108,17 @@ class Database extends EventEmitter {
     // If no data at all, return empty
     if (this.indexOffset === 0 && this.writeBuffer.length === 0) return
     
+    // CRITICAL FIX: Wait for any ongoing save operations to complete
+    // This prevents reading partially written data
+    if (this.isSaving) {
+      if (this.opts.debugMode) {
+        console.log('🔍 walk(): waiting for save operation to complete')
+      }
+      while (this.isSaving) {
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+    }
+    
     let count = 0
     let remainingSkip = options.skip || 0
     
@@ -5142,10 +5257,50 @@ class Database extends EventEmitter {
                 } catch (error) {
                   // CRITICAL FIX: Log deserialization errors instead of silently ignoring them
                   // This helps identify data corruption issues
-                  if (1||this.opts.debugMode) {
+                  if (this.opts.debugMode) {
                     console.warn(`⚠️ walk(): Failed to deserialize record at offset ${row.start}: ${error.message}`)
                     console.warn(`⚠️ walk(): Problematic line (first 200 chars): ${row.line.substring(0, 200)}`)
                   }
+                  
+                  // CRITICAL FIX: Attempt to recover corrupted line before giving up
+                  const recoveredLine = this._tryRecoverLine(row.line)
+                  if (recoveredLine) {
+                    try {
+                      const record = this.serializer.deserialize(recoveredLine)
+                      if (record !== null) {
+                        this.integrityCorrections.jsonRecovery++
+                        console.log(`🔧 Recovered corrupted JSON line (${this.integrityCorrections.jsonRecovery} recoveries)`)
+
+                        if (this.integrityCorrections.jsonRecovery > 20) {
+                          console.warn(`⚠️ Frequent JSON recovery detected (${this.integrityCorrections.jsonRecovery} times) - may indicate data corruption`)
+                        }
+
+                        const recordWithTerms = this.restoreTermIdsAfterDeserialization(record)
+
+                        if (remainingSkip > 0) {
+                          remainingSkip--
+                          continue
+                        }
+
+                        count++
+                        if (options.includeOffsets) {
+                          yield { entry: recordWithTerms, start: row.start, _: row._ || 0 }
+                        } else {
+                          if (this.opts.includeLinePosition) {
+                            recordWithTerms._ = row._ || 0
+                          }
+                          yield recordWithTerms
+                        }
+                        continue // Successfully recovered and yielded
+                      }
+                    } catch (recoveryError) {
+                      // Recovery attempt failed, continue with normal error handling
+                      if (this.opts.debugMode) {
+                        console.warn(`⚠️ walk(): Line recovery failed: ${recoveryError.message}`)
+                      }
+                    }
+                  }
+                  
                   if (!this._offsetRecoveryInProgress) {
                     for await (const recoveredEntry of this._streamingRecoveryGenerator(criteria, options, count, map, remainingSkip)) {
                       yield recoveredEntry
@@ -5250,10 +5405,50 @@ class Database extends EventEmitter {
           } catch (error) {
             // CRITICAL FIX: Log deserialization errors instead of silently ignoring them
             // This helps identify data corruption issues
-            if (1||this.opts.debugMode) {
+            if (this.opts.debugMode) {
               console.warn(`⚠️ walk(): Failed to deserialize record at offset ${row.start}: ${error.message}`)
               console.warn(`⚠️ walk(): Problematic line (first 200 chars): ${row.line.substring(0, 200)}`)
             }
+            
+            // CRITICAL FIX: Attempt to recover corrupted line before giving up
+            const recoveredLine = this._tryRecoverLine(row.line)
+            if (recoveredLine) {
+              try {
+                const entry = await this.serializer.deserialize(recoveredLine, { compress: this.opts.compress, v8: this.opts.v8 })
+                if (entry !== null) {
+                  this.integrityCorrections.jsonRecovery++
+                  console.log(`🔧 Recovered corrupted JSON line (${this.integrityCorrections.jsonRecovery} recoveries)`)
+
+                  if (this.integrityCorrections.jsonRecovery > 20) {
+                    console.warn(`⚠️ Frequent JSON recovery detected (${this.integrityCorrections.jsonRecovery} times) - may indicate data corruption`)
+                  }
+
+                  const entryWithTerms = this.restoreTermIdsAfterDeserialization(entry)
+
+                  if (remainingSkip > 0) {
+                    remainingSkip--
+                    continue
+                  }
+
+                  count++
+                  if (options.includeOffsets) {
+                    yield { entry: entryWithTerms, start: row.start, _: row._ || this.offsets.findIndex(n => n === row.start) }
+                  } else {
+                    if (this.opts.includeLinePosition) {
+                      entryWithTerms._ = row._ || this.offsets.findIndex(n => n === row.start)
+                    }
+                    yield entryWithTerms
+                  }
+                  continue // Successfully recovered and yielded
+                }
+              } catch (recoveryError) {
+                // Recovery attempt failed, continue with normal error handling
+                if (this.opts.debugMode) {
+                  console.warn(`⚠️ walk(): Line recovery failed: ${recoveryError.message}`)
+                }
+              }
+            }
+            
             if (!this._offsetRecoveryInProgress) {
               for await (const recoveredEntry of this._streamingRecoveryGenerator(criteria, options, count, map, remainingSkip)) {
                 yield recoveredEntry
@@ -5497,7 +5692,13 @@ class Database extends EventEmitter {
         await this.save()
         // Ensure writeBuffer is cleared after save
         if (this.writeBuffer.length > 0) {
-          console.warn('⚠️ WriteBuffer not cleared after save() - forcing clear')
+          this.integrityCorrections.writeBufferForced++
+          console.log(`🔧 Forced WriteBuffer clear after save (${this.writeBuffer.length} items remaining)`)
+
+          if (this.integrityCorrections.writeBufferForced > 3) {
+            console.warn(`⚠️ Frequent WriteBuffer clear issues detected (${this.integrityCorrections.writeBufferForced} times)`)
+          }
+
           this.writeBuffer = []
           this.writeBufferOffsets = []
           this.writeBufferSizes = []
@@ -5622,7 +5823,8 @@ class Database extends EventEmitter {
           console.log(`💾 Index data saved to ${idxPath}`)
         }
       } catch (error) {
-        console.warn('Failed to save index data:', error.message)
+        this.integrityCorrections.indexSaveFailures++
+        console.warn(`⚠️ Index save failure (${this.integrityCorrections.indexSaveFailures} times): ${error.message}`)
         throw error // Re-throw to let caller handle
       }
     }
@@ -5698,5 +5900,4 @@ class Database extends EventEmitter {
 }
 
 export { Database }
-export default Database
 

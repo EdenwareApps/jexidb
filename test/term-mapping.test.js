@@ -517,4 +517,87 @@ describe('Term Mapping Tests', () => {
       expect(loadTime).to.be.lessThan(1000) // OPTIMIZED: Load should be very fast
     })
   })
+
+  describe('termMappingFields Configuration', () => {
+    it('should respect termMappingFields configuration and not apply term mapping to excluded fields', async () => {
+      const testDbPath = path.join(process.cwd(), 'test-term-mapping-fields.jdb')
+
+      try {
+        // Clean up any existing test file
+        if (fs.existsSync(testDbPath)) {
+          fs.unlinkSync(testDbPath)
+        }
+
+        // Create database with termMappingFields specifying only some array:string fields
+        db = new Database(testDbPath, {
+          fields: {
+            name: 'string',
+            groups: 'array:string',        // Should NOT use term mapping (not in termMappingFields)
+            nameTerms: 'array:string',     // Should use term mapping (in termMappingFields)
+            groupTerms: 'array:string',    // Should use term mapping (in termMappingFields)
+          },
+          indexes: {
+            groups: 'array:string',        // Indexed but not in termMappingFields
+            nameTerms: 'array:string',     // Indexed and in termMappingFields
+            groupTerms: 'array:string',    // Indexed and in termMappingFields
+          },
+          termMapping: true,
+          termMappingFields: ['nameTerms', 'groupTerms'], // Only these should use term mapping
+          debugMode: false
+        })
+        await db.initialize()
+
+        // Verify that termMappingFields was set correctly
+        expect(db.termManager.termMappingFields).to.deep.equal(['nameTerms', 'groupTerms'])
+
+        // Insert test data
+        const testData = {
+          name: 'Test Record',
+          groups: ['Group A', 'Group B'],      // Should remain as strings
+          nameTerms: ['test', 'record'],       // Should become indices
+          groupTerms: ['group', 'a', 'b']      // Should become indices
+        }
+
+        await db.insert(testData)
+        await db.save()
+
+        // Read data back
+        const results = await db.find({})
+        const readData = results[0]
+
+        // Verify that groups field remained as strings
+        expect(readData.groups).to.deep.equal(['Group A', 'Group B'])
+        expect(readData.groups.every(item => typeof item === 'string')).to.be.true
+
+        // Verify that nameTerms and groupTerms were converted to indices
+        expect(Array.isArray(readData.nameTerms)).to.be.true
+        expect(readData.nameTerms.every(item => typeof item === 'number')).to.be.true
+        expect(readData.nameTerms.length).to.equal(2)
+
+        expect(Array.isArray(readData.groupTerms)).to.be.true
+        expect(readData.groupTerms.every(item => typeof item === 'number')).to.be.true
+        expect(readData.groupTerms.length).to.equal(3)
+
+        // Verify that the term manager has mappings for the mapped fields
+        expect(db.termManager.hasTerm('test')).to.be.true
+        expect(db.termManager.hasTerm('record')).to.be.true
+        expect(db.termManager.hasTerm('group')).to.be.true
+        expect(db.termManager.hasTerm('a')).to.be.true
+        expect(db.termManager.hasTerm('b')).to.be.true
+
+        // Verify that the excluded field values are NOT in the term manager
+        expect(db.termManager.hasTerm('Group A')).to.be.false
+        expect(db.termManager.hasTerm('Group B')).to.be.false
+
+      } finally {
+        // Clean up
+        if (db) {
+          await db.destroy()
+        }
+        if (fs.existsSync(testDbPath)) {
+          fs.unlinkSync(testDbPath)
+        }
+      }
+    })
+  })
 })

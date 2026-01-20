@@ -232,37 +232,192 @@ export default class FileHandler {
     return groupedRanges
   }
 
+  /**
+   * Ensure a line is complete by reading until newline if JSON appears truncated
+   * @param {string} line - The potentially incomplete line
+   * @param {number} fd - File descriptor
+   * @param {number} currentOffset - Current read offset
+   * @returns {string} Complete line
+   */
+  async ensureCompleteLine(line, fd, currentOffset) {
+    // Fast check: if line already ends with newline, it's likely complete
+    if (line.endsWith('\n')) {
+      return line
+    }
+
+    // Check if the line contains valid JSON by trying to parse it
+    const trimmedLine = line.trim()
+    if (trimmedLine.length === 0) {
+      return line
+    }
+
+    // Try to parse as JSON to see if it's complete
+    try {
+      JSON.parse(trimmedLine)
+      // If parsing succeeds, the line is complete (but missing newline)
+      // This is unusual but possible, return as-is
+      return line
+    } catch (jsonError) {
+      // JSON is incomplete, try to read more until we find a newline
+      const bufferSize = 2048 // Read in 2KB chunks for better performance
+      const additionalBuffer = Buffer.allocUnsafe(bufferSize)
+      let additionalOffset = currentOffset
+      let additionalContent = line
+
+      // Try reading up to 20KB more to find the newline (increased for safety)
+      const maxAdditionalRead = 20480
+      let totalAdditionalRead = 0
+
+      while (totalAdditionalRead < maxAdditionalRead) {
+        const { bytesRead } = await fd.read(additionalBuffer, 0, bufferSize, additionalOffset)
+
+        if (bytesRead === 0) {
+          // EOF reached, check if the accumulated content is now valid JSON
+          const finalTrimmed = additionalContent.trim()
+          try {
+            JSON.parse(finalTrimmed)
+            // If parsing succeeds now, return the content
+            return additionalContent
+          } catch {
+            // Still invalid, return original line to avoid data loss
+            return line
+          }
+        }
+
+        const chunk = additionalBuffer.toString('utf8', 0, bytesRead)
+        additionalContent += chunk
+        totalAdditionalRead += bytesRead
+
+        // Check if we found a newline in the entire accumulated content
+        const newlineIndex = additionalContent.indexOf('\n', line.length)
+        if (newlineIndex !== -1) {
+          // Found newline, return content up to and including the newline
+          const completeLine = additionalContent.substring(0, newlineIndex + 1)
+
+          // Validate that the complete line contains valid JSON
+          const trimmedComplete = completeLine.trim()
+          try {
+            JSON.parse(trimmedComplete)
+            return completeLine
+          } catch {
+            // Even with newline, JSON is invalid - this suggests data corruption
+            // Return original line to trigger normal error handling
+            return line
+          }
+        }
+
+        additionalOffset += bytesRead
+      }
+
+      // If we couldn't find a newline within the limit, return the original line
+      // This prevents infinite reading and excessive memory usage
+      return line
+    }
+  }
+
+  /**
+   * Split content into complete JSON lines, handling special characters and escaped quotes
+   * CRITICAL FIX: Prevents "Expected ',' or ']'" and "Unterminated string" errors by ensuring
+   * each line is a complete, valid JSON object/array, even when containing special characters
+   * @param {string} content - Raw content containing multiple JSON lines
+   * @returns {string[]} Array of complete JSON lines
+   */
+  splitJsonLines(content) {
+    const lines = []
+    let currentLine = ''
+    let inString = false
+    let escapeNext = false
+    let braceCount = 0
+    let bracketCount = 0
+
+    for (let i = 0; i < content.length; i++) {
+      const char = content[i]
+      const prevChar = i > 0 ? content[i - 1] : null
+
+      currentLine += char
+
+      if (escapeNext) {
+        escapeNext = false
+        continue
+      }
+
+      if (char === '\\') {
+        escapeNext = true
+        continue
+      }
+
+      if (char === '"' && !escapeNext) {
+        inString = !inString
+        continue
+      }
+
+      if (!inString) {
+        if (char === '{') braceCount++
+        else if (char === '}') braceCount--
+        else if (char === '[') bracketCount++
+        else if (char === ']') bracketCount--
+        else if (char === '\n' && braceCount === 0 && bracketCount === 0) {
+          // Found complete JSON object/array at newline
+          const trimmedLine = currentLine.trim()
+          if (trimmedLine.length > 0) {
+            lines.push(trimmedLine.replace(/\n$/, '')) // Remove trailing newline
+          }
+          currentLine = ''
+          braceCount = 0
+          bracketCount = 0
+          inString = false
+          escapeNext = false
+        }
+      }
+    }
+
+    // Add remaining content if it's a complete JSON object/array
+    const trimmedLine = currentLine.trim()
+    if (trimmedLine.length > 0 && braceCount === 0 && bracketCount === 0) {
+      lines.push(trimmedLine)
+    }
+
+    return lines.filter(line => line.trim().length > 0)
+  }
+
   async *readGroupedRange(groupedRange, fd) {
     if (groupedRange.length === 0) return
-    
+
     // OPTIMIZATION: For single range, use direct approach
     if (groupedRange.length === 1) {
       const range = groupedRange[0]
       const bufferSize = range.end - range.start
-      
+
       if (bufferSize <= 0 || bufferSize > this.maxBufferSize) {
         throw new Error(`Invalid buffer size: ${bufferSize}. Start: ${range.start}, End: ${range.end}. Max allowed: ${this.maxBufferSize}`)
       }
-      
+
       const buffer = Buffer.allocUnsafe(bufferSize)
       const { bytesRead } = await fd.read(buffer, 0, bufferSize, range.start)
       const actualBuffer = bytesRead < bufferSize ? buffer.subarray(0, bytesRead) : buffer
-      
+
       if (actualBuffer.length === 0) return
-      
+
       let lineString
       try {
         lineString = actualBuffer.toString('utf8')
       } catch (error) {
         lineString = actualBuffer.toString('utf8', { replacement: '?' })
       }
-      
-      // CRITICAL FIX: Remove trailing newlines and whitespace for single range too
-      // Optimized: Use trimEnd() which efficiently removes all trailing whitespace (faster than manual checks)
-      lineString = lineString.trimEnd()
-      
-      yield { 
-        line: lineString, 
+
+      // CRITICAL FIX: For single ranges, check if JSON appears truncated and try to complete it
+      // Only attempt completion if the line doesn't end with newline (indicating possible truncation)
+      if (!lineString.endsWith('\n')) {
+        const completeLine = await this.ensureCompleteLine(lineString, fd, range.start + actualBuffer.length)
+        if (completeLine !== lineString) {
+          lineString = completeLine.trimEnd()
+        }
+      } else {
+        lineString = lineString.trimEnd()
+      }
+
+      yield {
+        line: lineString,
         start: range.start,
         _: range.index !== undefined ? range.index : (range._ || null)
       }
@@ -293,15 +448,34 @@ export default class FileHandler {
       content = actualBuffer.toString('utf8', { replacement: '?' })
     }
     
+    // CRITICAL FIX: Validate buffer completeness to prevent UTF-8 corruption
+    // When reading non-adjacent ranges, the buffer may be incomplete (last line cut mid-character)
+    const lastNewlineIndex = content.lastIndexOf('\n')
+    if (lastNewlineIndex === -1 || lastNewlineIndex < content.length - 2) {
+      // Buffer may be incomplete - truncate to last complete line
+      if (this.opts.debugMode) {
+        console.warn(`⚠️ Incomplete buffer detected at offset ${firstRange.start}, truncating to last complete line`)
+      }
+      if (lastNewlineIndex > 0) {
+        content = content.substring(0, lastNewlineIndex + 1)
+      } else {
+        // No complete lines found - may be a serious issue
+        if (this.opts.debugMode) {
+          console.warn(`⚠️ No complete lines found in buffer at offset ${firstRange.start}`)
+        }
+      }
+    }
+    
     // CRITICAL FIX: Handle ranges more carefully to prevent corruption
     if (groupedRange.length === 2 && groupedRange[0].end === groupedRange[1].start) {
-      // Special case: Adjacent ranges - split by newlines to prevent corruption
-      const lines = content.split('\n').filter(line => line.trim().length > 0)
-      
+      // Special case: Adjacent ranges - split by COMPLETE JSON lines, not just newlines
+      // This prevents corruption when lines contain special characters or unescaped quotes
+      const lines = this.splitJsonLines(content)
+
       for (let i = 0; i < Math.min(lines.length, groupedRange.length); i++) {
         const range = groupedRange[i]
-        yield { 
-          line: lines[i], 
+        yield {
+          line: lines[i],
           start: range.start,
           _: range.index !== undefined ? range.index : (range._ || null)
         }
@@ -333,6 +507,7 @@ export default class FileHandler {
         
         // OPTIMIZATION 4: Direct character check instead of regex/trimEnd
         // Remove trailing newlines and whitespace efficiently
+        // CRITICAL FIX: Prevents incomplete JSON line reading that caused "Expected ',' or ']'" parsing errors
         // trimEnd() is actually optimized in V8, but we can check if there's anything to trim first
         const len = rangeContent.length
         if (len > 0) {
@@ -345,9 +520,26 @@ export default class FileHandler {
         }
         
         if (rangeContent.length === 0) continue
-        
-        yield { 
-          line: rangeContent, 
+
+        // CRITICAL FIX: For multiple ranges, we cannot safely expand reading
+        // because offsets are pre-calculated. Instead, validate JSON and let
+        // the deserializer handle incomplete lines (which will trigger recovery)
+        const trimmedContent = rangeContent.trim()
+        let finalContent = rangeContent
+
+        if (trimmedContent.length > 0) {
+          try {
+            JSON.parse(trimmedContent)
+            // JSON is valid, use as-is
+          } catch (jsonError) {
+            // JSON appears incomplete - this is expected for truncated ranges
+            // Let the deserializer handle it (will trigger streaming recovery if needed)
+            // We don't try to expand reading here because offsets are pre-calculated
+          }
+        }
+
+        yield {
+          line: finalContent,
           start: range.start,
           _: range.index !== undefined ? range.index : (range._ || null)
         }
@@ -356,21 +548,27 @@ export default class FileHandler {
   }
 
   async *walk(ranges) {
-    // Check if file exists before trying to read it
-    if (!await this.exists()) {
-      return // Return empty generator if file doesn't exist
-    }
-    
-    const fd = await fs.promises.open(this.file, 'r')
+    // CRITICAL FIX: Acquire file mutex to prevent race conditions with concurrent writes
+    const release = this.fileMutex ? await this.fileMutex.acquire() : () => {}
     try {
-      const groupedRanges = await this.groupedRanges(ranges)
-      for(const groupedRange of groupedRanges) {
-        for await (const row of this.readGroupedRange(groupedRange, fd)) {
-          yield row
+      // Check if file exists before trying to read it
+      if (!await this.exists()) {
+        return // Return empty generator if file doesn't exist
+      }
+      
+      const fd = await fs.promises.open(this.file, 'r')
+      try {
+        const groupedRanges = await this.groupedRanges(ranges)
+        for(const groupedRange of groupedRanges) {
+          for await (const row of this.readGroupedRange(groupedRange, fd)) {
+            yield row
+          }
         }
+      } finally {
+        await fd.close()
       }
     } finally {
-      await fd.close()
+      release()
     }
   }
 
@@ -504,7 +702,9 @@ export default class FileHandler {
           JSON.parse(lines[i]);
           validLines.push(lines[i]);
         } catch (error) {
-          console.warn(`⚠️ Invalid JSON in temp file at line ${i + 1}, skipping:`, lines[i].substring(0, 100));
+          if (this.opts.debugMode) {
+            console.warn(`⚠️ Invalid JSON in temp file at line ${i + 1}, skipping:`, lines[i].substring(0, 100));
+          }
           hasInvalidJson = true;
         }
       }
@@ -1094,7 +1294,9 @@ export default class FileHandler {
           content = buffer.toString('utf8')
         } catch (error) {
           // If UTF-8 decoding fails, try to recover by finding valid UTF-8 boundaries
-          console.warn(`UTF-8 decoding failed for file ${this.file}, attempting recovery`)
+          if (this.opts.debugMode) {
+            console.warn(`UTF-8 decoding failed for file ${this.file}, attempting recovery`)
+          }
           
           // Find the last complete UTF-8 character
           let validLength = buffer.length

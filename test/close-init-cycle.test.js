@@ -5,7 +5,7 @@
  * This addresses the bug where databases couldn't be reopened after closing
  */
 
-import Database from '../src/Database.mjs'
+import { Database } from '../src/Database.mjs'
 import fs from 'fs'
 
 describe('Close → Init Cycle', () => {
@@ -167,10 +167,18 @@ describe('Close → Init Cycle', () => {
 
     it('should not allow init() on destroyed database', async () => {
       await db.init()
-      
-      // Skip this test due to writeBuffer bug in destroy()
-      // TODO: Fix writeBuffer bug and re-enable this test
-      console.log('⚠️ Skipping destroyed database test due to writeBuffer bug')
+
+      // Insert some data to ensure writeBuffer has content
+      await db.insert({ name: 'test', value: 123 })
+
+      // Ensure save() completes properly
+      await db.save()
+
+      // Now destroy should work without writeBuffer bug
+      await db.destroy()
+
+      // After destroy, init() should fail
+      await expect(db.init()).rejects.toThrow('Cannot initialize destroyed database. Use a new instance instead.')
     })
   })
 

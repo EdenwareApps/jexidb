@@ -1,4 +1,4 @@
-const Database = require('../dist/Database.cjs').default || require('../Database.cjs');
+const { Database } = require('../dist/Database.cjs');
 const fs = require('fs');
 const path = require('path');
 

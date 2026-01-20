@@ -33,7 +33,7 @@ If you're new to JexiDB, start with these resources:
 
 ## 🔍 What's New
 
-### Recent Features
+### Key Features
 - **Term Mapping**: Reduce database size by up to 77% for repetitive data
 - **Bulk Operations**: High-performance `iterate()` method for large datasets
 - **Advanced Querying**: Support for complex queries with logical operators

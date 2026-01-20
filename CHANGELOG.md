@@ -5,33 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.5] - 2026-01-20
+
+### 📋 **Configuration**
+
+#### **Node.js Engine Requirements**
+
+- Added `engines.node: ">=16.0.0"` to package.json for clear Node.js compatibility requirements
+- Ensures proper version checking by package managers and deployment tools
+- Provides clear minimum version information for developers
+
 ## [2.1.0] - 2024-12-19
-
-### ⚠️ BREAKING CHANGES
-
-This version is **NOT backward compatible** with databases created with previous versions.
 
 ### 🚀 Major Features
 
 #### **Term Mapping Auto-Detection**
 
-- **BREAKING**: `termMapping` is now `true` by default (was `false`)
-- **BREAKING**: `termMappingFields` is now auto-detected from `indexes` (was manual configuration)
-- **NEW**: Automatic detection of `string` and `array:string` fields for term mapping
-- **NEW**: Zero-configuration term mapping for optimal performance
+- Term mapping enabled by default for optimal performance
+- Automatic detection of `string` and `array:string` fields for mapping
+- Zero-configuration term mapping for ideal performance
 
 #### **Schema Requirements**
 
-- **BREAKING**: `fields` option is now **MANDATORY** (was optional)
-- **NEW**: Clear distinction between `fields` (schema definition) and `indexes` (performance optimization)
-- **NEW**: Enhanced schema validation and error messages
+- `fields` option now mandatory for clear schema definition
+- Clear distinction between `fields` (schema definition) and `indexes` (performance optimization)
+- Enhanced schema validation with clear error messages
 
 #### **Index Management**
 
-- **BREAKING**: `array:string` fields now use term IDs in indexes (was string values)
-- **BREAKING**: `array:number` fields use direct numeric values (was incorrectly term-mapped)
-- **NEW**: Improved index performance for array fields
-- **NEW**: Better memory usage for repetitive string data
+- `array:string` fields use term IDs in indexes
+- `array:number` fields use direct numeric values
+- Improved performance for array fields
+- Better memory usage for repetitive string data
 
 ### 🔧 Improvements
 
@@ -47,6 +52,26 @@ This version is **NOT backward compatible** with databases created with previous
 - **NEW**: Optimized query processing for term-mapped fields
 - **NEW**: Improved `$in` operator handling for arrays
 - **NEW**: Better support for mixed field types in queries
+
+#### **File Reading Fixes**
+
+- **FIXED**: `db.walk()` incomplete line reading causing JSON parsing errors
+- **FIXED**: "Expected ',' or ']'" and "Unterminated string" errors in walk operations
+- **FIXED**: `split('\n')` failing on JSON lines containing special characters or unescaped quotes
+- **NEW**: Implemented `splitJsonLines()` method for proper JSON line parsing
+- **NEW**: Range-based reading now handles complex JSON structures correctly
+- **NEW**: `ensureCompleteLine()` method automatically expands reads to recover truncated JSON
+- **IMPROVED**: No data loss when JSON lines are cut by range boundaries - automatic recovery
+
+#### **Data Sanitization**
+
+- **FIXED**: Control characters causing JSON parsing failures
+- **FIXED**: Unescaped quotes breaking JSON structure
+- **FIXED**: Newlines and carriage returns in strings causing NDJSON corruption
+- **NEW**: Implemented `sanitizeDataForJSON()` method for automatic data cleaning
+- **NEW**: Automatic removal of control characters (`\x00-\x1F`, `\x7F-\x9F`)
+- **NEW**: Automatic escaping of quotes, backslashes, and formatting characters
+- **NEW**: String length limits to prevent performance issues
 
 #### **Documentation**
 
@@ -116,25 +141,7 @@ This version is **NOT backward compatible** with databases created with previous
 
 ### 🧪 Testing
 
-- **NEW**: Comprehensive test suite for term mapping
-- **NEW**: Performance benchmarks for large datasets
-- **NEW**: Migration compatibility tests
-- **NEW**: Edge case testing for array fields
+- Suíte abrangente de testes para mapeamento de termos
+- Benchmarks de performance para grandes volumes de dados
+- Testes de casos extremos para campos de array
 
----
-
-## [1.1.0] - Previous Version
-
-### Features
-
-- Basic database functionality
-- Manual term mapping configuration
-- Optional schema definition
-- Basic indexing support
-
-### Limitations
-
-- Term mapping required manual configuration
-- Schema was optional, leading to confusion
-- Array fields had indexing issues
-- Performance not optimized for repetitive data

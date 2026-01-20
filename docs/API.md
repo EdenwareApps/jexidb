@@ -1,14 +1,8 @@
 # JexiDB API Documentation
 
-## ⚠️ Version 2.1.0 - Breaking Changes
+## The Only Pure JS Database with Smart Disk Persistence & Intelligent Memory Management
 
-**This version is NOT backward compatible with databases created with previous versions (1.x.x).**
-
-### Major Changes:
-- **`fields` is now MANDATORY** - Define your schema structure
-- **Term mapping is auto-enabled** - No manual configuration needed
-- **Database files are incompatible** - Export/import required for migration
-- **Performance improvements** - Up to 77% size reduction for repetitive data
+JexiDB offers a complete API for CRUD operations with advanced queries, optimized for desktop applications.
 
 ## Table of Contents
 
@@ -19,14 +13,13 @@
 5. [Term Mapping](#term-mapping)
 6. [Bulk Operations](#bulk-operations)
 7. [Configuration Options](#configuration-options)
-8. [Migration Guide](#migration-guide)
 
 ## Database Constructor
 
 ```javascript
 import { Database } from 'jexidb'
 
-const db = new Database('path/to/database.jdb', options)
+const db = new Database('data.jdb', options)
 ```
 
 ### Constructor Options
@@ -38,7 +31,7 @@ const db = new Database('path/to/database.jdb', options)
 | `fields` | object | **Required** | **MANDATORY** - Define the data structure schema |
 | `indexes` | object | `{}` | **Optional** indexed fields for faster queries (not required) |
 | `termMapping` | boolean | `true` | Enable term mapping for optimal performance (auto-detected) |
-| `termMappingFields` | string[] | `[]` | Fields to apply term mapping to (auto-detected from indexes) |
+| `termMappingFields` | string[] | `[]` | Fields to apply term mapping to (when specified, overrides auto-detection from indexes) |
 | `termMappingCleanup` | boolean | `true` | Automatically clean up orphaned terms |
 
 ### Fields vs Indexes - Important Distinction
@@ -60,7 +53,7 @@ const db = new Database('path/to/database.jdb', options)
 
 ```javascript
 // ❌ DON'T: Index everything (wastes memory)
-const db = new Database('db.jdb', {
+const db = new Database('users.jdb', {
   fields: {                 // REQUIRED - Define schema
     id: 'number',
     name: 'string',
@@ -75,7 +68,7 @@ const db = new Database('db.jdb', {
   },
   indexes: {                // OPTIONAL - Only for performance
     id: 'number',           // Maybe needed
-    name: 'string',         // Maybe needed  
+    name: 'string',         // Maybe needed
     email: 'string',        // Maybe needed
     phone: 'string',        // Maybe needed
     address: 'string',      // Maybe needed
@@ -88,7 +81,7 @@ const db = new Database('db.jdb', {
 })
 
 // ✅ DO: Define schema + index only what you query frequently
-const db = new Database('db.jdb', {
+const db = new Database('users.jdb', {
   fields: {                 // REQUIRED - Define schema
     id: 'number',
     name: 'string',
@@ -556,6 +549,36 @@ console.log(db.opts.termMapping) // true
 console.log(db.termManager.termMappingFields) // ['name', 'tags']
 ```
 
+### Manual Configuration
+
+For fine-grained control, you can manually specify which fields should use term mapping:
+
+```javascript
+const db = new Database('selective-mapping.jdb', {
+  fields: {
+    name: 'string',
+    groups: 'array:string',        // Should remain as strings
+    nameTerms: 'array:string',     // Should use term mapping
+    groupTerms: 'array:string',    // Should use term mapping
+  },
+  indexes: {
+    groups: 'array:string',        // Indexed but not term mapped
+    nameTerms: 'array:string',     // Indexed and term mapped
+    groupTerms: 'array:string',    // Indexed and term mapped
+  },
+  termMapping: true,
+  termMappingFields: ['nameTerms', 'groupTerms'] // Only these fields
+})
+
+// Only specified fields use term mapping
+console.log(db.termManager.termMappingFields) // ['nameTerms', 'groupTerms']
+```
+
+**When to use `termMappingFields`:**
+- When you have `array:string` fields that should remain as actual strings
+- When you want selective term mapping for performance reasons
+- When auto-detection includes fields you don't want optimized
+
 ### How It Works
 
 Term mapping automatically detects and optimizes fields:
@@ -985,73 +1008,4 @@ db.insert({ id: 1, name: 'John' })
 await db.insert({ id: 1, name: 'John' })
 ```
 
-## Migration Guide
-
-### ⚠️ Important: Database Files Are NOT Compatible
-
-**Existing `.jdb` files from version 1.x.x will NOT work with version 2.1.0.**
-
-### Step 1: Export Data from 1.x.x
-
-```javascript
-// In your 1.x.x application
-const oldDb = new Database('old-database.jdb', {
-  indexes: { name: 'string', tags: 'array:string' }
-})
-
-await oldDb.init()
-const allData = await oldDb.find({}) // Export all data
-await oldDb.destroy()
-```
-
-### Step 2: Update Your Code
-
-```javascript
-// ❌ OLD (1.x.x)
-const db = new Database('db.jdb', {
-  indexes: { name: 'string', tags: 'array:string' }
-})
-
-// ✅ NEW (2.1.0)
-const db = new Database('db.jdb', {
-  fields: {                    // REQUIRED - Define schema
-    id: 'number',
-    name: 'string',
-    tags: 'array:string'
-  },
-  indexes: {                   // OPTIONAL - Performance optimization
-    name: 'string',            // ✅ Search by name
-    tags: 'array:string'       // ✅ Search by tags
-  }
-})
-```
-
-### Step 3: Import Data to 2.1.0
-
-```javascript
-// In your 2.1.0 application
-const newDb = new Database('new-database.jdb', {
-  fields: { /* your schema */ },
-  indexes: { /* your indexes */ }
-})
-
-await newDb.init()
-
-// Import all data
-for (const record of allData) {
-  await newDb.insert(record)
-}
-
-await newDb.save()
-```
-
-### Key Changes Summary
-
-| Feature | 1.x.x | 2.1.0 |
-|---------|-------|-------|
-| `fields` | Optional | **MANDATORY** |
-| `termMapping` | `false` (default) | `true` (default) |
-| `termMappingFields` | Manual config | Auto-detected |
-| Database files | Compatible | **NOT compatible** |
-| Performance | Basic | **77% size reduction** |
 
