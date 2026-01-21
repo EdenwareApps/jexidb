@@ -432,6 +432,76 @@ try {
 }
 ```
 
+### `coverage(fieldName, groups, filterCriteria, options)`
+
+Calculate coverage percentage for grouped include/exclude term sets with optional filtering.
+
+```javascript
+// Basic usage - calculate coverage across all records
+const coverage = await db.coverage('nameTerms', [
+  { terms: ['sbt'], excludes: [] },
+  { terms: ['rede', 'brasil'], excludes: ['norte'] },
+  { terms: ['tv', 'sancouper'], excludes: [] },
+  { terms: ['band'] }
+])
+
+// With filtering - calculate coverage only for specific records
+const liveCoverage = await db.coverage('nameTerms', [
+  { terms: ['sbt'], excludes: [] },
+  { terms: ['rede', 'brasil'], excludes: ['norte'] }
+], { mediaType: 'live' })
+
+// Filter with multiple values (OR logic)
+const multiCoverage = await db.coverage('nameTerms', [
+  { terms: ['show'] }
+], { mediaType: ['live', 'premium'] })
+
+// Multiple filter criteria (AND logic)
+const complexCoverage = await db.coverage('nameTerms', [
+  { terms: ['drama'] }
+], { genre: 'drama', mediaType: 'vod' })
+```
+
+**Parameters:**
+
+- `fieldName` (string, required): Name of the indexed field to analyze
+- `groups` (Array<object>, required): Array of coverage groups with `{ terms, excludes }`
+- `filterCriteria` (object, optional): Filter criteria using **only indexed fields**
+- `options` (object, optional): Additional options
+
+**Filter Criteria:**
+
+```javascript
+{
+  mediaType: 'live',           // Single value
+  genre: ['drama', 'comedy'],  // Array for OR matching
+  status: 'active'             // Multiple criteria = AND logic
+}
+```
+
+**Requirements:**
+
+- Coverage field must be indexed (`string` or `array:string`)
+- Filter fields must be indexed for performance
+- Returns `0` if no records match the filter
+
+**Performance Notes:**
+
+- ⚡ **Zero I/O for filtering** - Uses indexes only
+- ⚡ **Extremely fast** - No record reading required
+- ⚡ **Optimal for large datasets** - Scales with index size
+- ⚡ **AND logic** for multiple criteria, **OR logic** for array values
+
+**Error Handling:**
+
+```javascript
+try {
+  const coverage = await db.coverage('tags', groups, { nonIndexedField: 'value' })
+} catch (error) {
+  // Error: Filter field "nonIndexedField" must be indexed for coverage() performance
+}
+```
+
 ### Query Operators
 
 | Operator | Description | Example |

@@ -319,6 +319,17 @@ const withTags = await db.find({
   tags: 'javascript',              // Contains 'javascript'
   tags: { '$all': ['js', 'node'] }  // Contains all values
 });
+
+// Coverage analysis with filtering
+const liveCoverage = await db.coverage('tags', [
+  { terms: ['javascript'], excludes: [] },
+  { terms: ['react', 'vue'], excludes: ['angular'] }
+], { mediaType: 'live' })  // Only analyze live content
+
+// Multi-value filtering (OR logic)
+const multiTypeCoverage = await db.coverage('tags', [
+  { terms: ['tutorial'] }
+], { mediaType: ['live', 'vod'] })  // Live OR VOD content
 ```
 
 ## Testes
