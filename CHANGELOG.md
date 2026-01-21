@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.1.5] - 2026-01-20
 
+### 🚀 **New Features**
+
+#### **Coverage Method Filtering**
+
+- Added optional `filterCriteria` parameter to `coverage()` method for performance-optimized filtering
+- Filter criteria must use **only indexed fields** for maximum performance
+- Supports single values and arrays for OR matching (e.g., `{mediaType: ['live', 'vod']}`)
+- Multiple criteria are combined with AND logic
+- Zero additional I/O - filtering works directly with indexes
+- Maintains backward compatibility (parameter is optional)
+
 ### 📋 **Configuration**
 
 #### **Node.js Engine Requirements**

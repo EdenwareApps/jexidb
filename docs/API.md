@@ -360,6 +360,78 @@ try {
 }
 ```
 
+### `coverage(fieldName, groups, filterCriteria, options)`
+
+Calculate coverage percentage for grouped include/exclude term sets with optional filtering.
+
+```javascript
+// Basic coverage calculation
+const coverage = await db.coverage('tags', [
+  { terms: ['javascript'], excludes: [] },
+  { terms: ['python'], excludes: [] },
+  { terms: ['php'], excludes: ['legacy'] }
+])
+
+// With filtering (indexed fields only for performance)
+const coverage = await db.coverage('tags', [
+  { terms: ['javascript'] }
+], { mediaType: 'live' })
+
+// Array values for OR matching
+const coverage = await db.coverage('tags', [
+  { terms: ['web'] }
+], { mediaType: ['live', 'vod'] })
+
+// Multiple criteria (AND logic)
+const coverage = await db.coverage('tags', [
+  { terms: ['javascript'] }
+], { mediaType: 'live', status: 'active' })
+```
+
+**Parameters:**
+
+- `fieldName` (string, required): Name of the indexed `array:string` or `string` field
+- `groups` (Array<object>, required): Array of coverage groups with `{ terms, excludes }`
+- `filterCriteria` (object, optional): Filter criteria using only indexed fields
+- `options` (object, optional): Additional options
+
+**Filter Criteria Examples:**
+
+```javascript
+// Single value
+{ mediaType: 'live' }
+
+// Array for OR matching
+{ mediaType: ['live', 'vod'] }
+
+// Multiple criteria (AND)
+{ mediaType: 'live', status: 'active' }
+```
+
+**Requirements:**
+
+- Field must be indexed as `array:string` or `string` type
+- Filter criteria must use **only indexed fields** (throws error otherwise)
+- Coverage is calculated only for records matching the filter criteria
+
+**Performance Notes:**
+
+- ⚡ **Zero additional I/O** - filtering works directly with indexes
+- ⚡ **Index-only operations** - no record reading required
+- ⚡ **Optimal performance** - suitable for real-time coverage calculations
+- ⚡ **Memory efficient** - works with line number sets only
+
+**Error Handling:**
+
+```javascript
+try {
+  const coverage = await db.coverage('tags', groups, { nonIndexedField: 'value' })
+} catch (error) {
+  // Error: Filter field "nonIndexedField" must be indexed for coverage() performance
+  // Error: filterCriteria must be an object, not an array
+}
+```
+
 ### Query Operators
 
 | Operator | Description | Example |
