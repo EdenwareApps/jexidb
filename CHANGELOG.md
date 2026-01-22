@@ -18,6 +18,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Zero additional I/O - filtering works directly with indexes
 - Maintains backward compatibility (parameter is optional)
 
+### 🐛 **Bug Fixes**
+
+#### **exists() Method Consistency**
+
+- **Fixed critical bug** where `exists()` returned `false` but `find()` found records with same criteria
+- Added support for full query criteria in `exists()` method (e.g., `{ field: { '!=': 'value' } }`)
+- **Automatic operator detection** - complex operators now use `find()` internally for consistency
+- **Performance optimization** - simple indexed queries still use ultra-fast index intersection
+- **Backward compatibility** maintained for legacy syntax
+
 ### 📋 **Configuration**
 
 #### **Node.js Engine Requirements**
