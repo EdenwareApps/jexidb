@@ -11095,25 +11095,110 @@ class Database extends events.EventEmitter {
   }
 
   /**
-   * Check if any records exist for given field and terms (index-only, ultra-fast)
-   * Delegates to IndexManager.exists() for maximum performance
-   * 
-   * @param {string} fieldName - Indexed field name
-   * @param {string|Array<string>} terms - Single term or array of terms
+   * Check if any records exist matching the given criteria (ultra-fast when using indexed fields)
+   *
+   * @param {string|object} fieldName - Indexed field name (legacy) OR query criteria object (new)
+   * @param {string|Array<string>} terms - Single term or array of terms (when using legacy syntax)
    * @param {Object} options - Options: { $all: true/false, caseInsensitive: true/false, excludes: Array<string> }
    * @returns {Promise<boolean>} - True if at least one match exists
-   * 
+   *
    * @example
-   * // Check if channel exists
-   * const exists = await db.exists('nameTerms', ['a', 'e'], { $all: true });
-   * 
+   * // Legacy syntax - ultra-fast index-only check
+   * const exists = await db.exists('nameTerms', 'tv');
+   * const existsAll = await db.exists('nameTerms', ['tv', 'globo'], { $all: true });
+   *
    * @example
-   * // Check if 'tv' exists but not 'globo'
-   * const exists = await db.exists('nameTerms', 'tv', { excludes: ['globo'] });
+   * // New syntax - full query criteria support
+   * const exists = await db.exists({ mediaType: 'live', status: 'active' });
+   * const existsOr = await db.exists({ mediaType: ['live', 'vod'] });
    */
-  async exists(fieldName, terms, options = {}) {
+  async exists(fieldNameOrCriteria, terms, options = {}) {
     this._validateInitialization('exists');
-    return this.indexManager.exists(fieldName, terms, options);
+
+    // Detect syntax: new criteria object vs legacy field/terms
+    if (typeof fieldNameOrCriteria === 'object' && fieldNameOrCriteria !== null && !Array.isArray(fieldNameOrCriteria)) {
+      // New syntax: exists(criteria)
+      const criteria = fieldNameOrCriteria;
+      return this._existsWithCriteria(criteria);
+    } else if (typeof fieldNameOrCriteria === 'string' || fieldNameOrCriteria === null || Array.isArray(fieldNameOrCriteria)) {
+      // Legacy syntax: exists(fieldName, terms, options)
+      // Also handle invalid inputs (null, array) for backward compatibility
+      const fieldName = fieldNameOrCriteria;
+      return this.indexManager.exists(fieldName, terms, options);
+    } else {
+      // Invalid input type
+      throw new Error('First parameter must be a string (fieldName) or object (criteria)');
+    }
+  }
+
+  /**
+   * Check if any records exist using full query criteria
+   * Uses index intersection when possible for maximum performance
+   * @private
+   * @param {object} criteria - Query criteria object
+   * @returns {Promise<boolean>} - True if at least one match exists
+   */
+  /**
+   * Check if criteria contains complex operators that require full query evaluation
+   * @private
+   * @param {object} criteria - Query criteria
+   * @returns {boolean} - True if criteria has complex operators
+   */
+  _hasComplexOperators(criteria) {
+    for (const [field, value] of Object.entries(criteria)) {
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        // Check if it's an operator object (has operator keys)
+        const hasOperators = Object.keys(value).some(key => key.startsWith('$') ||
+        // MongoDB-style operators ($in, $ne, etc.)
+        ['>', '>=', '<', '<=', '!=', '!==', '===', '=='].includes(key) // Comparison operators
+        );
+        if (hasOperators) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+  async _existsWithCriteria(criteria) {
+    if (criteria === null || criteria === undefined || typeof criteria !== 'object' || Array.isArray(criteria)) {
+      throw new Error('Criteria must be a non-null object');
+    }
+
+    // Check if criteria is empty (should match all records)
+    const criteriaFields = Object.keys(criteria);
+    if (criteriaFields.length === 0) {
+      // Empty criteria matches all records - check if any exist
+      try {
+        const result = await this.find({}, {
+          limit: 1
+        });
+        return result.length > 0;
+      } catch (error) {
+        return false;
+      }
+    }
+
+    // Check if criteria contains complex operators (requires full query evaluation)
+    const hasComplexOperators = this._hasComplexOperators(criteria);
+
+    // Check if all fields in criteria are indexed (for optimal performance)
+    const allFieldsIndexed = criteriaFields.every(field => this.opts.indexes && this.opts.indexes[field]);
+    if (allFieldsIndexed && !hasComplexOperators) {
+      // Ultra-fast path: use index intersection for simple criteria
+      const filteredLines = this._intersectIndexedCriteria(criteria);
+      return filteredLines.size > 0;
+    } else {
+      // Fallback: use find() with limit 1 (handles complex operators and non-indexed fields)
+      try {
+        const result = await this.find(criteria, {
+          limit: 1
+        });
+        return result.length > 0;
+      } catch (error) {
+        // If find() fails, no records exist
+        return false;
+      }
+    }
   }
 
   /**
