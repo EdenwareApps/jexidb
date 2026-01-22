@@ -3536,6 +3536,28 @@ class Database extends EventEmitter {
    * @param {object} criteria - Query criteria object
    * @returns {Promise<boolean>} - True if at least one match exists
    */
+  /**
+   * Check if criteria contains complex operators that require full query evaluation
+   * @private
+   * @param {object} criteria - Query criteria
+   * @returns {boolean} - True if criteria has complex operators
+   */
+  _hasComplexOperators(criteria) {
+    for (const [field, value] of Object.entries(criteria)) {
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        // Check if it's an operator object (has operator keys)
+        const hasOperators = Object.keys(value).some(key =>
+          key.startsWith('$') || // MongoDB-style operators ($in, $ne, etc.)
+          ['>', '>=', '<', '<=', '!=', '!==', '===', '=='].includes(key) // Comparison operators
+        )
+        if (hasOperators) {
+          return true
+        }
+      }
+    }
+    return false
+  }
+
   async _existsWithCriteria(criteria) {
     if (criteria === null || criteria === undefined || typeof criteria !== 'object' || Array.isArray(criteria)) {
       throw new Error('Criteria must be a non-null object')
@@ -3553,17 +3575,20 @@ class Database extends EventEmitter {
       }
     }
 
+    // Check if criteria contains complex operators (requires full query evaluation)
+    const hasComplexOperators = this._hasComplexOperators(criteria)
+
     // Check if all fields in criteria are indexed (for optimal performance)
     const allFieldsIndexed = criteriaFields.every(field =>
       this.opts.indexes && this.opts.indexes[field]
     )
 
-    if (allFieldsIndexed) {
-      // Ultra-fast path: use index intersection
+    if (allFieldsIndexed && !hasComplexOperators) {
+      // Ultra-fast path: use index intersection for simple criteria
       const filteredLines = this._intersectIndexedCriteria(criteria)
       return filteredLines.size > 0
     } else {
-      // Fallback: use find() with limit 1 (slower but works with any criteria)
+      // Fallback: use find() with limit 1 (handles complex operators and non-indexed fields)
       try {
         const result = await this.find(criteria, { limit: 1 })
         return result.length > 0

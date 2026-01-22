@@ -398,6 +398,40 @@ describe('exists() Method', () => {
       expect(existsNonExistent).toBe(false);
     });
 
+    it('should handle complex operators correctly', async () => {
+      // Test that exists() with complex operators works correctly
+      // (the actual behavior depends on data, just ensure no errors)
+
+      // Test criteria with complex operators (should use find() fallback)
+      const complexCriteria = { mediaType: { '!=': 'video' } };
+      const complexExists = await db.exists(complexCriteria);
+      expect(typeof complexExists).toBe('boolean');
+
+      // Test simple criteria (should use index intersection)
+      const simpleExists = await db.exists({ mediaType: 'live' });
+      expect(typeof simpleExists).toBe('boolean');
+
+      // Test mixed criteria
+      const mixedExists = await db.exists({ mediaType: 'live', nameTerms: 'sbt' });
+      expect(typeof mixedExists).toBe('boolean');
+    });
+
+    it('should detect complex operators and use find() path', async () => {
+      // Test various complex operators
+      const testCases = [
+        { nameTerms: 'sbt', mediaType: { '!=': 'video' } },
+        { rating: { '>': 4.0 } },
+        { group: { '$in': ['Brazil', 'International'] } },
+        { nameTerms: 'tv', rating: { '<=': 4.5 } }
+      ];
+
+      for (const criteria of testCases) {
+        const existsResult = await db.exists(criteria);
+        const findResult = await db.find(criteria, { limit: 1 });
+        expect(existsResult).toBe(findResult.length > 0);
+      }
+    });
+
     it('should validate criteria parameter', async () => {
       // Test valid empty criteria - should work
       const result = await db.exists({});
