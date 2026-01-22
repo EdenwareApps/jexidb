@@ -360,6 +360,78 @@ try {
 }
 ```
 
+### `exists(fieldNameOrCriteria, terms, options)`
+
+Check if any records exist matching the given criteria. Ultra-fast when using indexed fields only.
+
+```javascript
+// Legacy syntax - ultra-fast index-only check
+const exists = await db.exists('nameTerms', 'tv')
+const existsAll = await db.exists('nameTerms', ['tv', 'globo'], { $all: true })
+
+// New syntax - full query criteria support
+const exists = await db.exists({ mediaType: 'live', status: 'active' })
+const existsOr = await db.exists({ mediaType: ['live', 'vod'] })
+const existsComplex = await db.exists({ group: 'Brazil', rating: { '>': 4.0 } })
+```
+
+**Parameters (Legacy Syntax):**
+
+- `fieldName` (string, required): Name of the indexed field
+- `terms` (string|Array<string>, required): Single term or array of terms
+- `options` (object, optional): Options: `{ $all, caseInsensitive, excludes }`
+
+**Parameters (New Criteria Syntax):**
+
+- `criteria` (object, required): Query criteria object (first parameter)
+- `terms` (ignored): Not used in criteria syntax
+- `options` (ignored): Not used in criteria syntax
+
+**Performance Optimization:**
+
+- ⚡ **Index-only**: When all criteria fields are indexed
+- ⚡ **Ultra-fast**: Zero I/O, works with millions of records
+- 🐌 **Fallback**: Uses `find()` for non-indexed criteria (slower but functional)
+
+**Query Criteria Examples:**
+
+```javascript
+// Simple field matching
+await db.exists({ mediaType: 'live' })
+
+// Array values (OR logic)
+await db.exists({ mediaType: ['live', 'vod'] })
+
+// Multiple criteria (AND logic)
+await db.exists({ mediaType: 'live', status: 'active' })
+
+// Complex queries (uses find() internally)
+await db.exists({ rating: { '>': 4.0 }, group: 'Brazil' })
+```
+
+**Legacy Syntax Examples:**
+
+```javascript
+// Basic existence check
+await db.exists('nameTerms', 'tv')
+
+// Check if all terms exist in same record
+await db.exists('nameTerms', ['tv', 'globo'], { $all: true })
+
+// Check with exclusions
+await db.exists('nameTerms', 'tv', { excludes: ['globo'] })
+```
+
+**Error Handling:**
+
+```javascript
+try {
+  const exists = await db.exists({ invalidCriteria: null })
+} catch (error) {
+  // Error: Criteria must be a non-null object
+}
+```
+
 ### `coverage(fieldName, groups, filterCriteria, options)`
 
 Calculate coverage percentage for grouped include/exclude term sets with optional filtering.

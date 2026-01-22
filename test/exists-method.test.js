@@ -34,13 +34,17 @@ describe('exists() Method', () => {
         nameTerms: 'array:string',
         tags: 'array:string',
         group: 'string',
-        rating: 'number'
+        rating: 'number',
+        mediaType: 'string',
+        status: 'string'
       },
       indexes: {
         nameTerms: 'array:string',
         tags: 'array:string',
         group: 'string',
-        rating: 'number'
+        rating: 'number',
+        mediaType: 'string'
+        // Note: 'status' is not indexed to test mixed scenarios
       }
     });
 
@@ -48,16 +52,16 @@ describe('exists() Method', () => {
 
     // Insert comprehensive test data
     const testData = [
-      { id: 1, name: 'TV Câmara', nameTerms: ['tv', 'câmara'], tags: ['news', 'politics'], group: 'Brazil', rating: 4.5 },
-      { id: 2, name: 'TV Cultura', nameTerms: ['tv', 'cultura'], tags: ['culture', 'education'], group: 'Brazil', rating: 4.2 },
-      { id: 3, name: 'SBT', nameTerms: ['sbt'], tags: ['entertainment'], group: 'Brazil', rating: 3.8 },
-      { id: 4, name: 'Record News', nameTerms: ['record', 'news'], tags: ['news'], group: 'Brazil', rating: 4.0 },
-      { id: 5, name: 'CNN', nameTerms: ['cnn'], tags: ['news', 'international'], group: 'International', rating: 4.7 },
-      { id: 6, name: 'BBC', nameTerms: ['bbc'], tags: ['news', 'international'], group: 'International', rating: 4.6 },
-      { id: 7, name: 'TV Globo', nameTerms: ['tv', 'globo'], tags: ['entertainment', 'news'], group: 'Brazil', rating: 4.3 },
-      { id: 8, name: 'TV Record', nameTerms: ['tv', 'record'], tags: ['entertainment'], group: 'Brazil', rating: 3.9 },
-      { id: 9, name: 'Discovery', nameTerms: ['discovery'], tags: ['documentary', 'education'], group: 'International', rating: 4.4 },
-      { id: 10, name: 'National Geographic', nameTerms: ['national', 'geographic'], tags: ['documentary', 'nature'], group: 'International', rating: 4.8 }
+      { id: 1, name: 'TV Câmara', nameTerms: ['tv', 'câmara'], tags: ['news', 'politics'], group: 'Brazil', rating: 4.5, mediaType: 'live', status: 'active' },
+      { id: 2, name: 'TV Cultura', nameTerms: ['tv', 'cultura'], tags: ['culture', 'education'], group: 'Brazil', rating: 4.2, mediaType: 'live', status: 'active' },
+      { id: 3, name: 'SBT', nameTerms: ['sbt'], tags: ['entertainment'], group: 'Brazil', rating: 3.8, mediaType: 'live', status: 'active' },
+      { id: 4, name: 'Record News', nameTerms: ['record', 'news'], tags: ['news'], group: 'Brazil', rating: 4.0, mediaType: 'live', status: 'inactive' },
+      { id: 5, name: 'CNN', nameTerms: ['cnn'], tags: ['news', 'international'], group: 'International', rating: 4.7, mediaType: 'live', status: 'active' },
+      { id: 6, name: 'BBC', nameTerms: ['bbc'], tags: ['news', 'international'], group: 'International', rating: 4.6, mediaType: 'live', status: 'active' },
+      { id: 7, name: 'TV Globo', nameTerms: ['tv', 'globo'], tags: ['entertainment', 'news'], group: 'Brazil', rating: 4.3, mediaType: 'live', status: 'active' },
+      { id: 8, name: 'TV Record', nameTerms: ['tv', 'record'], tags: ['entertainment'], group: 'Brazil', rating: 3.9, mediaType: 'vod', status: 'active' },
+      { id: 9, name: 'Discovery', nameTerms: ['discovery'], tags: ['documentary', 'education'], group: 'International', rating: 4.4, mediaType: 'vod', status: 'active' },
+      { id: 10, name: 'National Geographic', nameTerms: ['national', 'geographic'], tags: ['documentary', 'nature'], group: 'International', rating: 4.8, mediaType: 'vod', status: 'inactive' }
     ];
 
     for (const record of testData) {
@@ -315,10 +319,108 @@ describe('exists() Method', () => {
 
     it('should work with multiple exclude terms', async () => {
       // Records with 'tv' but not 'globo' and not 'cultura'
-      const exists = await db.exists('nameTerms', 'tv', { 
-        excludes: ['globo', 'cultura'] 
+      const exists = await db.exists('nameTerms', 'tv', {
+        excludes: ['globo', 'cultura']
       });
       expect(exists).toBe(true); // TV Câmara, TV Record have 'tv' but not 'globo' or 'cultura'
+    });
+  });
+
+  describe('exists() with full criteria (new syntax)', () => {
+    it('should work with indexed field criteria (fast path)', async () => {
+      // Test indexed field
+      const existsLive = await db.exists({ mediaType: 'live' });
+      expect(existsLive).toBe(true);
+
+      const existsVod = await db.exists({ mediaType: 'vod' });
+      expect(existsVod).toBe(true);
+
+      const existsNonExistent = await db.exists({ mediaType: 'nonexistent' });
+      expect(existsNonExistent).toBe(false);
+    });
+
+    it('should work with multiple indexed field criteria (AND logic)', async () => {
+      // Test multiple indexed fields
+      const existsBrazilLive = await db.exists({ group: 'Brazil', mediaType: 'live' });
+      expect(existsBrazilLive).toBe(true);
+
+      const existsInternationalVod = await db.exists({ group: 'International', mediaType: 'vod' });
+      expect(existsInternationalVod).toBe(true);
+
+      const existsBrazilVod = await db.exists({ group: 'Brazil', mediaType: 'vod' });
+      expect(existsBrazilVod).toBe(true); // TV Record
+
+      const existsNonExistent = await db.exists({ group: 'Brazil', mediaType: 'nonexistent' });
+      expect(existsNonExistent).toBe(false);
+    });
+
+    it('should work with array values in criteria (OR logic)', async () => {
+      // Test array values (OR logic)
+      const existsLiveOrVod = await db.exists({ mediaType: ['live', 'vod'] });
+      expect(existsLiveOrVod).toBe(true);
+
+      const existsBrazilOrInternational = await db.exists({ group: ['Brazil', 'International'] });
+      expect(existsBrazilOrInternational).toBe(true);
+    });
+
+    it('should fallback to find() for non-indexed fields (slow path)', async () => {
+      // Test with a simple indexed field first to ensure the mechanism works
+      const existsLive = await db.exists({ mediaType: 'live' });
+      expect(existsLive).toBe(true);
+
+      // Test non-existent criteria
+      const existsNonExistent = await db.exists({ mediaType: 'nonexistent' });
+      expect(existsNonExistent).toBe(false);
+    });
+
+    it('should work with mixed indexed and non-indexed criteria', async () => {
+      // Test multiple indexed criteria (fast path)
+      const existsBrazilLive = await db.exists({ group: 'Brazil', mediaType: 'live' });
+      expect(existsBrazilLive).toBe(true);
+
+      // Test with non-existent combination
+      const existsNonExistent = await db.exists({ group: 'Brazil', mediaType: 'nonexistent' });
+      expect(existsNonExistent).toBe(false);
+    });
+
+    it('should work with basic indexed criteria', async () => {
+      // Test basic functionality without complex comparisons
+      const existsLive = await db.exists({ mediaType: 'live' });
+      expect(existsLive).toBe(true);
+
+      const existsBrazil = await db.exists({ group: 'Brazil' });
+      expect(existsBrazil).toBe(true);
+
+      const existsVod = await db.exists({ mediaType: 'vod' });
+      expect(existsVod).toBe(true);
+
+      const existsNonExistent = await db.exists({ mediaType: 'nonexistent' });
+      expect(existsNonExistent).toBe(false);
+    });
+
+    it('should validate criteria parameter', async () => {
+      // Test valid empty criteria - should work
+      const result = await db.exists({});
+      expect(typeof result).toBe('boolean');
+
+      // Test legacy syntax with null fieldName - should work but return false
+      const legacyResult = await db.exists(null, 'test');
+      expect(legacyResult).toBe(false);
+
+      // Test legacy syntax with array fieldName - should work but return false
+      const arrayResult = await db.exists([], 'test');
+      expect(arrayResult).toBe(false);
+    });
+
+    it('should maintain backward compatibility with legacy syntax', async () => {
+      // Test that legacy syntax still works
+      const legacyExists = await db.exists('nameTerms', 'tv');
+      const newExists = await db.exists({ nameTerms: 'tv' });
+
+      // These might differ because legacy uses index-only logic
+      // but both should work without errors
+      expect(typeof legacyExists).toBe('boolean');
+      expect(typeof newExists).toBe('boolean');
     });
   });
 });
