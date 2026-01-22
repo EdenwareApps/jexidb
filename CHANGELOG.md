@@ -28,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Performance optimization** - simple indexed queries still use ultra-fast index intersection
 - **Backward compatibility** maintained for legacy syntax
 
+#### **Strict Mode Operator Support**
+
+- Added `$exists` operator support in `indexedQueryMode: 'strict'`
+- Fixed compatibility issues with complex query criteria in strict mode
+- Ensures all valid query operators work consistently across query methods
+
 ### 📋 **Configuration**
 
 #### **Node.js Engine Requirements**

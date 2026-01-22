@@ -1470,7 +1470,7 @@ export class QueryManager {
       if (typeof condition === 'object' && !Array.isArray(condition)) {
         const operators = Object.keys(condition);
         for (const op of operators) {
-          if (!['$in', '$nin', '$contains', '$all', '>', '>=', '<', '<=', '!=', 'contains', 'regex'].includes(op)) {
+          if (!['$in', '$nin', '$contains', '$all', '$exists', '>', '>=', '<', '<=', '!=', 'contains', 'regex'].includes(op)) {
             throw new Error(`Operator '${op}' is not supported in strict mode for field '${field}'.`);
           }
         }
