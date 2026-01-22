@@ -2656,94 +2656,7 @@ class Database extends EventEmitter {
     return Array.from(fields)
   }
 
-  /**
-   * Intersect line numbers from multiple indexed field criteria for filtering
-   * @private
-   * @param {object} criteria - Filter criteria with indexed fields only
-   * @returns {Set<number>} Set of line numbers that match all criteria
-   */
-  _intersectIndexedCriteria(criteria) {
-    let resultLines = null
 
-    for (const [field, value] of Object.entries(criteria)) {
-      const fieldIndex = this.indexManager?.index?.data?.[field]
-      if (!fieldIndex) continue
-
-      // Get line numbers for this field value
-      const fieldLines = this._getLinesForIndexedFieldValue(field, value)
-
-      if (resultLines === null) {
-        // First field - use all its lines
-        resultLines = new Set(fieldLines)
-      } else {
-        // Intersect with previous results
-        const intersection = new Set()
-        for (const line of fieldLines) {
-          if (resultLines.has(line)) {
-            intersection.add(line)
-          }
-        }
-        resultLines = intersection
-      }
-
-      // Early exit if no matches
-      if (resultLines.size === 0) {
-        break
-      }
-    }
-
-    return resultLines || new Set()
-  }
-
-  /**
-   * Get line numbers for a specific indexed field value
-   * @private
-   * @param {string} field - Field name
-   * @param {*} value - Field value to match (string, number, or array for OR matching)
-   * @returns {Array<number>} Array of line numbers
-   */
-  _getLinesForIndexedFieldValue(field, value) {
-    const fieldIndex = this.indexManager?.index?.data?.[field]
-    if (!fieldIndex) return []
-
-    const fieldType = this.opts.indexes[field]
-    const isTermMapped = this.termManager &&
-      this.termManager.termMappingFields &&
-      this.termManager.termMappingFields.includes(field)
-
-    const resultLines = new Set()
-
-    // Handle array values (OR logic)
-    const valuesToCheck = Array.isArray(value) ? value : [value]
-
-    for (const singleValue of valuesToCheck) {
-      let searchKey
-
-      if (fieldType === 'array:string') {
-        // For array:string fields, match records that contain this value
-        searchKey = isTermMapped ?
-          this.termManager.getTermIdWithoutIncrement(String(singleValue)) :
-          String(singleValue)
-      } else {
-        // For simple fields, exact match
-        searchKey = isTermMapped ?
-          this.termManager.getTermIdWithoutIncrement(String(singleValue)) :
-          String(singleValue)
-      }
-
-      if (searchKey === null || searchKey === undefined) {
-        continue
-      }
-
-      const termData = fieldIndex[searchKey]
-      if (termData) {
-        const lines = this.indexManager._getAllLineNumbers(termData)
-        lines.forEach(line => resultLines.add(line))
-      }
-    }
-
-    return Array.from(resultLines)
-  }
 
   /**
    * Update records matching criteria
@@ -3536,27 +3449,6 @@ class Database extends EventEmitter {
    * @param {object} criteria - Query criteria object
    * @returns {Promise<boolean>} - True if at least one match exists
    */
-  /**
-   * Check if criteria contains complex operators that require full query evaluation
-   * @private
-   * @param {object} criteria - Query criteria
-   * @returns {boolean} - True if criteria has complex operators
-   */
-  _hasComplexOperators(criteria) {
-    for (const [field, value] of Object.entries(criteria)) {
-      if (value && typeof value === 'object' && !Array.isArray(value)) {
-        // Check if it's an operator object (has operator keys)
-        const hasOperators = Object.keys(value).some(key =>
-          key.startsWith('$') || // MongoDB-style operators ($in, $ne, etc.)
-          ['>', '>=', '<', '<=', '!=', '!==', '===', '=='].includes(key) // Comparison operators
-        )
-        if (hasOperators) {
-          return true
-        }
-      }
-    }
-    return false
-  }
 
   async _existsWithCriteria(criteria) {
     if (criteria === null || criteria === undefined || typeof criteria !== 'object' || Array.isArray(criteria)) {
@@ -3575,27 +3467,14 @@ class Database extends EventEmitter {
       }
     }
 
-    // Check if criteria contains complex operators (requires full query evaluation)
-    const hasComplexOperators = this._hasComplexOperators(criteria)
-
-    // Check if all fields in criteria are indexed (for optimal performance)
-    const allFieldsIndexed = criteriaFields.every(field =>
-      this.opts.indexes && this.opts.indexes[field]
-    )
-
-    if (allFieldsIndexed && !hasComplexOperators) {
-      // Ultra-fast path: use index intersection for simple criteria
-      const filteredLines = this._intersectIndexedCriteria(criteria)
-      return filteredLines.size > 0
-    } else {
-      // Fallback: use find() with limit 1 (handles complex operators and non-indexed fields)
-      try {
-        const result = await this.find(criteria, { limit: 1 })
-        return result.length > 0
-      } catch (error) {
-        // If find() fails, no records exist
-        return false
-      }
+    // 🎯 ELEGANT SOLUTION: Use the same find() logic for perfect consistency
+    // This ensures exists() uses identical logic to find() for all criteria processing
+    try {
+      const result = await this.find(criteria, { limit: 1 })
+      return result.length > 0
+    } catch (error) {
+      // If find() fails (e.g., strict mode violations), no records exist
+      return false
     }
   }
 
@@ -3651,10 +3530,20 @@ class Database extends EventEmitter {
         }
       }
 
-      // Intersect index criteria for filtered line numbers
-      filteredLines = this._intersectIndexedCriteria(filterCriteria)
-      if (filteredLines.size === 0) {
-        return 0 // No records match the filter
+      // Get filtered records using QueryManager for consistency
+      try {
+        const filteredRecords = await this.queryManager.find(filterCriteria, {
+          limit: null, // Get all matching records for coverage calculation
+          indexedQueryMode: this.opts.indexedQueryMode,
+          allowNonIndexed: false
+        })
+        filteredLines = new Set(filteredRecords.map(record => record._))
+        if (filteredLines.size === 0) {
+          return 0 // No records match the filter
+        }
+      } catch (error) {
+        // If filtering fails, return 0 (no coverage possible)
+        return 0
       }
     }
 
