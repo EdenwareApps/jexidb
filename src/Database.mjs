@@ -2332,9 +2332,19 @@ class Database extends EventEmitter {
 
     // CRITICAL FIX: Validate state before find operation
     this.validateState()
-    
+
+    // Check for index-only optimization
+    if (options.indexOnly && this._canUseIndexOnlyForExists(criteria)) {
+      if (this.opts.debugMode) {
+        console.log(`⚡ find() using INDEX-ONLY optimization for: ${JSON.stringify(criteria)}`)
+      }
+      // Return records using index-only lookup (but we need to fetch actual records)
+      // For now, this just ensures we use optimized path in QueryManager
+      options._forceIndexOnly = true
+    }
+
     // OPTIMIZATION: Find searches writeBuffer directly
-    
+
     const startTime = Date.now()
     
     if (this.opts.debugMode) {
@@ -3467,7 +3477,15 @@ class Database extends EventEmitter {
       }
     }
 
-    // 🎯 ELEGANT SOLUTION: Use the same find() logic for perfect consistency
+    // 🚀 OPTIMIZATION: Try index-only existence check for simple criteria
+    if (this._canUseIndexOnlyForExists(criteria)) {
+      if (this.opts.debugMode) {
+        console.log(`⚡ exists() using INDEX-ONLY optimization for: ${JSON.stringify(criteria)}`)
+      }
+      return this._existsIndexOnly(criteria)
+    }
+
+    // 🎯 FALLBACK: Use the same find() logic for complex criteria or non-indexed fields
     // This ensures exists() uses identical logic to find() for all criteria processing
     try {
       const result = await this.find(criteria, { limit: 1 })
@@ -3479,10 +3497,173 @@ class Database extends EventEmitter {
   }
 
   /**
+   * Check if criteria can use index-only existence check
+   * @private
+   * @param {object} criteria - Query criteria
+   * @returns {boolean} - True if can use index-only
+   */
+  _canUseIndexOnlyForExists(criteria) {
+    // Must have indexes configured
+    if (!this.opts.indexes) return false
+
+    // All fields in criteria must be indexed
+    const criteriaFields = Object.keys(criteria)
+    const allFieldsIndexed = criteriaFields.every(field => this.opts.indexes[field])
+
+    if (!allFieldsIndexed) return false
+
+    // No complex operators allowed (only simple equality)
+    for (const [field, value] of Object.entries(criteria)) {
+      // Allow simple values (string, number, boolean)
+      if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+        continue
+      }
+
+      // Allow arrays (OR logic)
+      if (Array.isArray(value)) {
+        continue
+      }
+
+      // Reject any object (complex operators)
+      if (typeof value === 'object') {
+        return false
+      }
+    }
+
+    return true
+  }
+
+  /**
+   * Perform index-only existence check (ultra-fast, no disk I/O)
+   * @private
+   * @param {object} criteria - Simple criteria with only indexed fields
+   * @returns {boolean} - True if any records match the criteria
+   */
+  _existsIndexOnly(criteria) {
+    const criteriaEntries = Object.entries(criteria)
+
+    // For single field criteria, use direct indexManager.exists()
+    if (criteriaEntries.length === 1) {
+      const [field, value] = criteriaEntries[0]
+      return this.indexManager.exists(field, value)
+    }
+
+    // For multiple field criteria, implement index intersection (AND logic)
+    let intersection = null
+
+    for (const [field, value] of criteriaEntries) {
+      // Get line numbers for this field/value combination
+      const fieldLines = this._getIndexLinesForFieldValue(field, value)
+
+      if (intersection === null) {
+        // First field - start with all its lines
+        intersection = new Set(fieldLines)
+      } else {
+        // Intersect with previous results
+        const currentLines = new Set(fieldLines)
+        for (const line of Array.from(intersection)) {
+          if (!currentLines.has(line)) {
+            intersection.delete(line)
+          }
+        }
+      }
+
+      // Early exit if no matches possible
+      if (intersection.size === 0) {
+        return false
+      }
+    }
+
+    return intersection.size > 0
+  }
+
+  /**
+   * Get line numbers for a field/value combination using index-only lookup
+   * @private
+   * @param {string} field - Field name
+   * @param {*} value - Field value (string, number, or array)
+   * @returns {Array<number>} Array of line numbers
+   */
+  _getIndexLinesForFieldValue(field, value) {
+    // For arrays (OR logic), check each value
+    if (Array.isArray(value)) {
+      const allLines = new Set()
+      for (const singleValue of value) {
+        const lines = this._getSingleFieldLines(field, singleValue)
+        lines.forEach(line => allLines.add(line))
+      }
+      return Array.from(allLines)
+    }
+
+    // For single values
+    return this._getSingleFieldLines(field, value)
+  }
+
+  /**
+   * Get line numbers for a single field/value using index lookup
+   * @private
+   * @param {string} field - Field name
+   * @param {*} value - Single field value
+   * @returns {Array<number>} Array of line numbers
+   */
+  _getSingleFieldLines(field, value) {
+    // Use indexManager.exists() logic but return line numbers instead of boolean
+    const fieldIndex = this.indexManager?.index?.data?.[field]
+    if (!fieldIndex) return []
+
+    const fieldType = this.opts.indexes[field]
+    const isTermMapped = this.termManager &&
+      this.termManager.termMappingFields &&
+      this.termManager.termMappingFields.includes(field)
+
+    let searchKey
+
+    if (fieldType === 'array:string') {
+      // For array:string fields, match records that contain this value
+      searchKey = isTermMapped ?
+        this.termManager.getTermIdWithoutIncrement(String(value)) :
+        String(value)
+    } else {
+      // For simple fields, exact match
+      searchKey = isTermMapped ?
+        this.termManager.getTermIdWithoutIncrement(String(value)) :
+        String(value)
+    }
+
+    if (searchKey === null || searchKey === undefined) {
+      return []
+    }
+
+    const termData = fieldIndex[searchKey]
+    if (!termData) return []
+
+    // Extract all line numbers from termData (similar to indexManager._getAllLineNumbers)
+    const lines = new Set()
+
+    // Check Set (most common case)
+    if (termData.set && termData.set.size > 0) {
+      for (const line of termData.set) {
+        lines.add(line)
+      }
+    }
+
+    // Check ranges
+    if (termData.ranges && termData.ranges.length > 0) {
+      for (const range of termData.ranges) {
+        for (let line = range.start; line <= range.end; line++) {
+          lines.add(line)
+        }
+      }
+    }
+
+    return Array.from(lines)
+  }
+
+  /**
    * Calculate coverage for grouped include/exclude term sets
    * @param {string} fieldName - Name of the indexed field
    * @param {Array<object>} groups - Array of { terms, excludes } objects
-   * @param {object} filterCriteria - Optional filter criteria (indexed fields only)
+   * @param {object} filterCriteria - Optional filter criteria
    * @param {object} options - Optional settings
    * @returns {Promise<number>} Coverage percentage between 0 and 100
    */
@@ -3516,18 +3697,11 @@ class Database extends EventEmitter {
       return 0
     }
 
-    // Validate filter criteria - only indexed fields allowed for performance
+    // Validate filter criteria
     let filteredLines = null
     if (filterCriteria && typeof filterCriteria === 'object') {
       if (Array.isArray(filterCriteria)) {
         throw new Error('filterCriteria must be an object, not an array')
-      }
-
-      // Check that all filter fields are indexed
-      for (const field of Object.keys(filterCriteria)) {
-        if (!this.opts.indexes || !this.opts.indexes[field]) {
-          throw new Error(`Filter field "${field}" must be indexed for coverage() performance. Add it to indexes in database options.`)
-        }
       }
 
       // Get filtered records using QueryManager for consistency
@@ -3535,7 +3709,7 @@ class Database extends EventEmitter {
         const filteredRecords = await this.queryManager.find(filterCriteria, {
           limit: null, // Get all matching records for coverage calculation
           indexedQueryMode: this.opts.indexedQueryMode,
-          allowNonIndexed: false
+          allowNonIndexed: true
         })
         filteredLines = new Set(filteredRecords.map(record => record._))
         if (filteredLines.size === 0) {

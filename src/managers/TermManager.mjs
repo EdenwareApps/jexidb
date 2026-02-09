@@ -145,6 +145,13 @@ export default class TermManager {
       const stats = this.getStats()
       const orphanedCount = stats.orphanedTerms
       const totalTerms = stats.totalTerms
+
+      // SAFETY: If all terms are marked as orphaned, it likely means counts
+      // haven't been rebuilt after loading from disk. Skip cleanup to avoid
+      // wiping valid term mappings.
+      if (totalTerms > 0 && orphanedCount === totalTerms) {
+        return 0
+      }
       
       // Only cleanup if conditions are met
       const shouldCleanup = (

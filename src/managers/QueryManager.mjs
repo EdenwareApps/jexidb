@@ -631,18 +631,23 @@ export class QueryManager {
     const results = await this.fileHandler.readWithStreaming(criteria, streamingOptions, (record, criteria) => {
       return this.matchesCriteria(record, criteria, options);
     }, this.serializer || null);
+
+    // SPACE OPTIMIZATION: Restore term IDs to terms for user (unless disabled)
+    const resultsWithTerms = options.restoreTerms !== false ?
+      results.map(record => this.database.restoreTermIdsAfterDeserialization(record)) :
+      results;
     
     // Apply ordering if specified
     if (options.orderBy) {
       const [field, direction = 'asc'] = options.orderBy.split(' ');
-      results.sort((a, b) => {
+      resultsWithTerms.sort((a, b) => {
         if (a[field] > b[field]) return direction === 'asc' ? 1 : -1;
         if (a[field] < b[field]) return direction === 'asc' ? -1 : 1;
         return 0;
       });
     }
     
-    return results;
+    return resultsWithTerms;
   }
 
   /**
@@ -740,6 +745,7 @@ export class QueryManager {
                   const recordWithTerms = options.restoreTerms !== false ? 
                     this.database.restoreTermIdsAfterDeserialization(record) : 
                     record
+                  recordWithTerms._ = row._
                   results.push(recordWithTerms)
                   if (limit && results.length >= limit) break
                 } catch (error) {
@@ -766,6 +772,7 @@ export class QueryManager {
               const recordWithTerms = options.restoreTerms !== false ? 
                 this.database.restoreTermIdsAfterDeserialization(record) : 
                 record
+              recordWithTerms._ = lineNumber
               results.push(recordWithTerms)
             }
           }
