@@ -45,11 +45,17 @@ JexiDB stands out among JavaScript databases by combining **pure JavaScript simp
 ### Unique Advantages Over Other JavaScript Databases
 
 🚀 **Pure JavaScript, No Compromises** - 100% JavaScript, no native dependencies, WASM, or compilation required. Compatible with both CommonJS and ESM modules
+
 💾 **Intelligent Disk Persistence** - JSONL files with compressed persistent indexes, not memory-only storage
+
 📋 **Schema Enforcement** - Structured data model like SQL tables, ensuring data consistency in pure JavaScript
+
 🧠 **Smart Memory Management** - Point reading and streaming operations, handles millions of records without loading everything into RAM
+
 🔍 **Advanced Query Optimization** - MongoDB-like operators with automatic term mapping for 77% size reduction
+
 ⚡ **Production-Ready Performance** - Compressed indexes, streaming operations, and automatic optimization
+
 🖥️ **Desktop-First Design** - Optimized for Electron, NW.js, and local Node.js applications from the ground up
 
 ### Technical Specifications
@@ -449,12 +455,6 @@ If JexiDB helps your project, consider supporting its development:
 
 ## Links & Resources
 
-- **🏠 Homepage**: [edenware.app/jexidb](https://edenware.app/jexidb)
 - **📦 NPM Package**: [npmjs.com/package/jexidb](https://www.npmjs.com/package/jexidb)
 - **📚 Documentation**: [docs/README.md](docs/README.md)
 - **💬 Issues**: [github.com/EdenwareApps/jexidb/issues](https://github.com/EdenwareApps/jexidb/issues)
-- **⭐ GitHub**: [github.com/EdenwareApps/jexidb](https://github.com/EdenwareApps/jexidb)
-
-## Keywords & Tags
-
-javascript database, nodejs database, electron database, pure javascript database, embedded database, nosql database, json database, desktop database, local database, schema database, streaming database, memory efficient database, persistent database, term mapping, point reading, schema enforced database, jsonl database, compressed indexes
