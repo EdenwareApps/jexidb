@@ -53,9 +53,9 @@ describe('Array Mapping Debug Test', () => {
     // Insert test record that matches the reported problematic data
     const testRecord = {
       user_id: 'wp_3',
-      email: 'developerguru99@gmail.com',
+      email: 'alex.taylor@example.com',
       payment_email: null,
-      name: 'Krishna Rungta',
+      name: 'Alex Taylor',
       company: '',
       country: 'BR',
       commission_rate: 0.45,    // Position 6 in schema

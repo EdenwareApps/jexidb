@@ -1,7 +1,6 @@
 'use strict';
 
 var events = require('events');
-var asyncMutex = require('async-mutex');
 var fs = require('fs');
 var readline = require('readline');
 var path = require('path');
@@ -123,6 +122,182 @@ AsyncGenerator.prototype["function" == typeof Symbol && Symbol.asyncIterator || 
 }, AsyncGenerator.prototype.return = function (e) {
   return this._invoke("return", e);
 };
+
+const E_CANCELED = new Error('request for lock canceled');
+
+var __awaiter$2 = function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+class Semaphore {
+    constructor(_value, _cancelError = E_CANCELED) {
+        this._value = _value;
+        this._cancelError = _cancelError;
+        this._queue = [];
+        this._weightedWaiters = [];
+    }
+    acquire(weight = 1, priority = 0) {
+        if (weight <= 0)
+            throw new Error(`invalid weight ${weight}: must be positive`);
+        return new Promise((resolve, reject) => {
+            const task = { resolve, reject, weight, priority };
+            const i = findIndexFromEnd(this._queue, (other) => priority <= other.priority);
+            if (i === -1 && weight <= this._value) {
+                // Needs immediate dispatch, skip the queue
+                this._dispatchItem(task);
+            }
+            else {
+                this._queue.splice(i + 1, 0, task);
+            }
+        });
+    }
+    runExclusive(callback_1) {
+        return __awaiter$2(this, arguments, void 0, function* (callback, weight = 1, priority = 0) {
+            const [value, release] = yield this.acquire(weight, priority);
+            try {
+                return yield callback(value);
+            }
+            finally {
+                release();
+            }
+        });
+    }
+    waitForUnlock(weight = 1, priority = 0) {
+        if (weight <= 0)
+            throw new Error(`invalid weight ${weight}: must be positive`);
+        if (this._couldLockImmediately(weight, priority)) {
+            return Promise.resolve();
+        }
+        else {
+            return new Promise((resolve) => {
+                if (!this._weightedWaiters[weight - 1])
+                    this._weightedWaiters[weight - 1] = [];
+                insertSorted(this._weightedWaiters[weight - 1], { resolve, priority });
+            });
+        }
+    }
+    isLocked() {
+        return this._value <= 0;
+    }
+    getValue() {
+        return this._value;
+    }
+    setValue(value) {
+        this._value = value;
+        this._dispatchQueue();
+    }
+    release(weight = 1) {
+        if (weight <= 0)
+            throw new Error(`invalid weight ${weight}: must be positive`);
+        this._value += weight;
+        this._dispatchQueue();
+    }
+    cancel() {
+        this._queue.forEach((entry) => entry.reject(this._cancelError));
+        this._queue = [];
+    }
+    _dispatchQueue() {
+        this._drainUnlockWaiters();
+        while (this._queue.length > 0 && this._queue[0].weight <= this._value) {
+            this._dispatchItem(this._queue.shift());
+            this._drainUnlockWaiters();
+        }
+    }
+    _dispatchItem(item) {
+        const previousValue = this._value;
+        this._value -= item.weight;
+        item.resolve([previousValue, this._newReleaser(item.weight)]);
+    }
+    _newReleaser(weight) {
+        let called = false;
+        return () => {
+            if (called)
+                return;
+            called = true;
+            this.release(weight);
+        };
+    }
+    _drainUnlockWaiters() {
+        if (this._queue.length === 0) {
+            for (let weight = this._value; weight > 0; weight--) {
+                const waiters = this._weightedWaiters[weight - 1];
+                if (!waiters)
+                    continue;
+                waiters.forEach((waiter) => waiter.resolve());
+                this._weightedWaiters[weight - 1] = [];
+            }
+        }
+        else {
+            const queuedPriority = this._queue[0].priority;
+            for (let weight = this._value; weight > 0; weight--) {
+                const waiters = this._weightedWaiters[weight - 1];
+                if (!waiters)
+                    continue;
+                const i = waiters.findIndex((waiter) => waiter.priority <= queuedPriority);
+                (i === -1 ? waiters : waiters.splice(0, i))
+                    .forEach((waiter => waiter.resolve()));
+            }
+        }
+    }
+    _couldLockImmediately(weight, priority) {
+        return (this._queue.length === 0 || this._queue[0].priority < priority) &&
+            weight <= this._value;
+    }
+}
+function insertSorted(a, v) {
+    const i = findIndexFromEnd(a, (other) => v.priority <= other.priority);
+    a.splice(i + 1, 0, v);
+}
+function findIndexFromEnd(a, predicate) {
+    for (let i = a.length - 1; i >= 0; i--) {
+        if (predicate(a[i])) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+var __awaiter$1 = function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+class Mutex {
+    constructor(cancelError) {
+        this._semaphore = new Semaphore(1, cancelError);
+    }
+    acquire() {
+        return __awaiter$1(this, arguments, void 0, function* (priority = 0) {
+            const [, releaser] = yield this._semaphore.acquire(1, priority);
+            return releaser;
+        });
+    }
+    runExclusive(callback, priority = 0) {
+        return this._semaphore.runExclusive(() => callback(), 1, priority);
+    }
+    isLocked() {
+        return this._semaphore.isLocked();
+    }
+    waitForUnlock(priority = 0) {
+        return this._semaphore.waitForUnlock(1, priority);
+    }
+    release() {
+        if (this._semaphore.isLocked())
+            this._semaphore.release();
+    }
+    cancel() {
+        return this._semaphore.cancel();
+    }
+}
 
 const aliasToCanonical = {
   '>': '$gt',
@@ -246,7 +421,7 @@ class IndexManager {
 
     // CRITICAL: Use database mutex to prevent deadlocks
     // If no database mutex provided, create a local one (for backward compatibility)
-    this.mutex = databaseMutex || new asyncMutex.Mutex();
+    this.mutex = databaseMutex || new Mutex();
     this.indexedFields = [];
     this.setIndexesConfig(this.opts.indexes);
   }
@@ -3249,6 +3424,266 @@ class Serializer {
   }
 }
 
+const objectToString = Object.prototype.toString;
+
+const isError = value => objectToString.call(value) === '[object Error]';
+
+const errorMessages = new Set([
+	'network error', // Chrome
+	'Failed to fetch', // Chrome
+	'NetworkError when attempting to fetch resource.', // Firefox
+	'The Internet connection appears to be offline.', // Safari 16
+	'Network request failed', // `cross-fetch`
+	'fetch failed', // Undici (Node.js)
+	'terminated', // Undici (Node.js)
+	' A network error occurred.', // Bun (WebKit)
+	'Network connection lost', // Cloudflare Workers (fetch)
+]);
+
+function isNetworkError(error) {
+	const isValid = error
+		&& isError(error)
+		&& error.name === 'TypeError'
+		&& typeof error.message === 'string';
+
+	if (!isValid) {
+		return false;
+	}
+
+	const {message, stack} = error;
+
+	// Safari 17+ has generic message but no stack for network errors
+	if (message === 'Load failed') {
+		return stack === undefined
+			// Sentry adds its own stack trace to the fetch error, so also check for that
+			|| '__sentry_captured__' in error;
+	}
+
+	// Deno network errors start with specific text
+	if (message.startsWith('error sending request for url')) {
+		return true;
+	}
+
+	// Standard network error messages
+	return errorMessages.has(message);
+}
+
+function validateRetries(retries) {
+	if (typeof retries === 'number') {
+		if (retries < 0) {
+			throw new TypeError('Expected `retries` to be a non-negative number.');
+		}
+
+		if (Number.isNaN(retries)) {
+			throw new TypeError('Expected `retries` to be a valid number or Infinity, got NaN.');
+		}
+	} else if (retries !== undefined) {
+		throw new TypeError('Expected `retries` to be a number or Infinity.');
+	}
+}
+
+function validateNumberOption(name, value, {min = 0, allowInfinity = false} = {}) {
+	if (value === undefined) {
+		return;
+	}
+
+	if (typeof value !== 'number' || Number.isNaN(value)) {
+		throw new TypeError(`Expected \`${name}\` to be a number${allowInfinity ? ' or Infinity' : ''}.`);
+	}
+
+	if (!allowInfinity && !Number.isFinite(value)) {
+		throw new TypeError(`Expected \`${name}\` to be a finite number.`);
+	}
+
+	if (value < min) {
+		throw new TypeError(`Expected \`${name}\` to be \u2265 ${min}.`);
+	}
+}
+
+class AbortError extends Error {
+	constructor(message) {
+		super();
+
+		if (message instanceof Error) {
+			this.originalError = message;
+			({message} = message);
+		} else {
+			this.originalError = new Error(message);
+			this.originalError.stack = this.stack;
+		}
+
+		this.name = 'AbortError';
+		this.message = message;
+	}
+}
+
+function calculateDelay(retriesConsumed, options) {
+	const attempt = Math.max(1, retriesConsumed + 1);
+	const random = options.randomize ? (Math.random() + 1) : 1;
+
+	let timeout = Math.round(random * options.minTimeout * (options.factor ** (attempt - 1)));
+	timeout = Math.min(timeout, options.maxTimeout);
+
+	return timeout;
+}
+
+function calculateRemainingTime(start, max) {
+	if (!Number.isFinite(max)) {
+		return max;
+	}
+
+	return max - (performance.now() - start);
+}
+
+async function onAttemptFailure({error, attemptNumber, retriesConsumed, startTime, options}) {
+	const normalizedError = error instanceof Error
+		? error
+		: new TypeError(`Non-error was thrown: "${error}". You should only throw errors.`);
+
+	if (normalizedError instanceof AbortError) {
+		throw normalizedError.originalError;
+	}
+
+	const retriesLeft = Number.isFinite(options.retries)
+		? Math.max(0, options.retries - retriesConsumed)
+		: options.retries;
+
+	const maxRetryTime = options.maxRetryTime ?? Number.POSITIVE_INFINITY;
+
+	const context = Object.freeze({
+		error: normalizedError,
+		attemptNumber,
+		retriesLeft,
+		retriesConsumed,
+	});
+
+	await options.onFailedAttempt(context);
+
+	if (calculateRemainingTime(startTime, maxRetryTime) <= 0) {
+		throw normalizedError;
+	}
+
+	const consumeRetry = await options.shouldConsumeRetry(context);
+
+	const remainingTime = calculateRemainingTime(startTime, maxRetryTime);
+
+	if (remainingTime <= 0 || retriesLeft <= 0) {
+		throw normalizedError;
+	}
+
+	if (normalizedError instanceof TypeError && !isNetworkError(normalizedError)) {
+		if (consumeRetry) {
+			throw normalizedError;
+		}
+
+		options.signal?.throwIfAborted();
+		return false;
+	}
+
+	if (!await options.shouldRetry(context)) {
+		throw normalizedError;
+	}
+
+	if (!consumeRetry) {
+		options.signal?.throwIfAborted();
+		return false;
+	}
+
+	const delayTime = calculateDelay(retriesConsumed, options);
+	const finalDelay = Math.min(delayTime, remainingTime);
+
+	options.signal?.throwIfAborted();
+
+	if (finalDelay > 0) {
+		await new Promise((resolve, reject) => {
+			const onAbort = () => {
+				clearTimeout(timeoutToken);
+				options.signal?.removeEventListener('abort', onAbort);
+				reject(options.signal.reason);
+			};
+
+			const timeoutToken = setTimeout(() => {
+				options.signal?.removeEventListener('abort', onAbort);
+				resolve();
+			}, finalDelay);
+
+			if (options.unref) {
+				timeoutToken.unref?.();
+			}
+
+			options.signal?.addEventListener('abort', onAbort, {once: true});
+		});
+	}
+
+	options.signal?.throwIfAborted();
+
+	return true;
+}
+
+async function pRetry(input, options = {}) {
+	options = {...options};
+
+	validateRetries(options.retries);
+
+	if (Object.hasOwn(options, 'forever')) {
+		throw new Error('The `forever` option is no longer supported. For many use-cases, you can set `retries: Infinity` instead.');
+	}
+
+	options.retries ??= 10;
+	options.factor ??= 2;
+	options.minTimeout ??= 1000;
+	options.maxTimeout ??= Number.POSITIVE_INFINITY;
+	options.maxRetryTime ??= Number.POSITIVE_INFINITY;
+	options.randomize ??= false;
+	options.onFailedAttempt ??= () => {};
+	options.shouldRetry ??= () => true;
+	options.shouldConsumeRetry ??= () => true;
+
+	// Validate numeric options and normalize edge cases
+	validateNumberOption('factor', options.factor, {min: 0, allowInfinity: false});
+	validateNumberOption('minTimeout', options.minTimeout, {min: 0, allowInfinity: false});
+	validateNumberOption('maxTimeout', options.maxTimeout, {min: 0, allowInfinity: true});
+	validateNumberOption('maxRetryTime', options.maxRetryTime, {min: 0, allowInfinity: true});
+
+	// Treat non-positive factor as 1 to avoid zero backoff or negative behavior
+	if (!(options.factor > 0)) {
+		options.factor = 1;
+	}
+
+	options.signal?.throwIfAborted();
+
+	let attemptNumber = 0;
+	let retriesConsumed = 0;
+	const startTime = performance.now();
+
+	while (Number.isFinite(options.retries) ? retriesConsumed <= options.retries : true) {
+		attemptNumber++;
+
+		try {
+			options.signal?.throwIfAborted();
+
+			const result = await input(attemptNumber);
+
+			options.signal?.throwIfAborted();
+
+			return result;
+		} catch (error) {
+			if (await onAttemptFailure({
+				error,
+				attemptNumber,
+				retriesConsumed,
+				startTime,
+				options,
+			})) {
+				retriesConsumed++;
+			}
+		}
+	}
+
+	// Should not reach here, but in case it does, throw an error
+	throw new Error('Retry attempts exhausted without throwing an error.');
+}
+
 /**
  * OperationQueue - Queue system for database operations
  * Resolves race conditions between concurrent operations
@@ -4521,14 +4956,50 @@ class FileHandler {
         // Add a small delay to ensure any pending operations complete
         await new Promise(resolve => setTimeout(resolve, 5));
         // Use global read limiter to prevent file descriptor exhaustion
-        return this.readLimiter(() => this._readWithStreamingInternal(criteria, options, matchesCriteria, serializer));
+        return this.readLimiter(() => this._readWithStreamingRetry(criteria, options, matchesCriteria, serializer));
       });
     } else {
       // Use global read limiter to prevent file descriptor exhaustion
-      return this.readLimiter(() => this._readWithStreamingInternal(criteria, options, matchesCriteria, serializer));
+      return this.readLimiter(() => this._readWithStreamingRetry(criteria, options, matchesCriteria, serializer));
     }
   }
-  async _readWithStreamingInternal(criteria, options = {}, matchesCriteria, serializer = null) {
+  async _readWithStreamingRetry(criteria, options = {}, matchesCriteria, serializer = null) {
+    // If no timeout configured, use original implementation without retry
+    if (!options.ioTimeoutMs) {
+      return this._readWithStreamingInternal(criteria, options, matchesCriteria, serializer);
+    }
+    const timeoutMs = options.ioTimeoutMs || 5000; // Default 5s timeout per attempt
+    const maxRetries = options.maxRetries || 3;
+    return pRetry(async attempt => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const results = await this._readWithStreamingInternal(criteria, options, matchesCriteria, serializer, controller.signal);
+        return results;
+      } catch (error) {
+        if (error.name === 'AbortError' || error.code === 'ETIMEDOUT') {
+          if (this.opts.debugMode) {
+            console.log(`⚠️ Streaming read attempt ${attempt} timed out, retrying...`);
+          }
+          throw error; // p-retry will retry
+        }
+        // For other errors, don't retry
+        throw new pRetry.AbortError(error);
+      } finally {
+        clearTimeout(timeout);
+      }
+    }, {
+      retries: maxRetries,
+      minTimeout: 100,
+      maxTimeout: 1000,
+      onFailedAttempt: error => {
+        if (this.opts.debugMode) {
+          console.log(`Streaming read failed (attempt ${error.attemptNumber}), ${error.retriesLeft} retries left`);
+        }
+      }
+    });
+  }
+  async _readWithStreamingInternal(criteria, options = {}, matchesCriteria, serializer = null, signal = null) {
     const {
       limit,
       skip = 0
@@ -4558,6 +5029,14 @@ class FileHandler {
         crlfDelay: Infinity // Better performance
       });
 
+      // Handle abort signal
+      if (signal) {
+        signal.addEventListener('abort', () => {
+          stream.destroy();
+          rl.close();
+        });
+      }
+
       // Process line by line
       var _iteratorAbruptCompletion3 = false;
       var _didIteratorError3 = false;
@@ -4566,41 +5045,46 @@ class FileHandler {
         for (var _iterator3 = _asyncIterator(rl), _step3; _iteratorAbruptCompletion3 = !(_step3 = await _iterator3.next()).done; _iteratorAbruptCompletion3 = false) {
           const line = _step3.value;
           {
-            if (lineNumber >= skip) {
-              try {
-                let record;
-                if (serializer && typeof serializer.deserialize === 'function') {
-                  // Use serializer for deserialization
-                  record = serializer.deserialize(line);
-                } else {
-                  // Fallback to JSON.parse for backward compatibility
-                  record = JSON.parse(line);
-                }
-                if (record && matchesCriteria(record, criteria)) {
-                  // Return raw data - term mapping will be handled by Database layer
-                  results.push({
-                    ...record,
-                    _: lineNumber
-                  });
-                  matched++;
-
-                  // Check if we've reached the limit
-                  if (results.length >= limit) {
-                    break;
-                  }
-                }
-              } catch (error) {
-                // CRITICAL FIX: Only log errors if they're not expected during concurrent operations
-                // Don't log JSON parsing errors that occur during file writes
-                if (this.opts && this.opts.debugMode && !error.message.includes('Unexpected')) {
-                  console.log(`Error reading line ${lineNumber}:`, error.message);
-                }
-                // Ignore invalid lines - they may be partial writes
-              }
-            } else {
-              skipped++;
+            if (signal && signal.aborted) {
+              break; // Stop if aborted
             }
             lineNumber++;
+
+            // Skip lines that were already processed in previous attempts
+            if (lineNumber <= skip) {
+              skipped++;
+              continue;
+            }
+            try {
+              let record;
+              if (serializer && typeof serializer.deserialize === 'function') {
+                // Use serializer for deserialization
+                record = serializer.deserialize(line);
+              } else {
+                // Fallback to JSON.parse for backward compatibility
+                record = JSON.parse(line);
+              }
+              if (record && matchesCriteria(record, criteria)) {
+                // Return raw data - term mapping will be handled by Database layer
+                results.push({
+                  ...record,
+                  _: lineNumber
+                });
+                matched++;
+
+                // Check if we've reached the limit
+                if (results.length >= limit) {
+                  break;
+                }
+              }
+            } catch (error) {
+              // CRITICAL FIX: Only log errors if they're not expected during concurrent operations
+              // Don't log JSON parsing errors that occur during file writes
+              if (this.opts && this.opts.debugMode && !error.message.includes('Unexpected')) {
+                console.log(`Error reading line ${lineNumber}:`, error.message);
+              }
+              // Ignore invalid lines - they may be partial writes
+            }
             processed++;
           }
         }
@@ -4623,6 +5107,10 @@ class FileHandler {
       }
       return results;
     } catch (error) {
+      if (error.message === 'AbortError') {
+        // Return partial results if aborted
+        return results;
+      }
       console.error('Error in readWithStreaming:', error);
       throw error;
     }
@@ -5513,7 +6001,6 @@ class QueryManager {
       // OPTIMIZATION: Use ranges instead of reading entire file
       const ranges = this.database.getRanges(batch);
       const groupedRanges = await this.fileHandler.groupedRanges(ranges);
-      const fs = await import('fs');
       const fd = await fs.promises.open(this.fileHandler.file, 'r');
       try {
         for (const groupedRange of groupedRanges) {
@@ -5768,7 +6255,6 @@ class QueryManager {
         const ranges = this.database.getRanges(fileLineNumbers);
         if (ranges.length > 0) {
           const groupedRanges = await this.database.fileHandler.groupedRanges(ranges);
-          const fs = await import('fs');
           const fd = await fs.promises.open(this.database.fileHandler.file, 'r');
           try {
             for (const groupedRange of groupedRanges) {
@@ -8106,7 +8592,7 @@ class Database extends events.EventEmitter {
     this.initializeManagers();
 
     // Initialize file mutex for thread safety
-    this.fileMutex = new asyncMutex.Mutex();
+    this.fileMutex = new Mutex();
 
     // Initialize performance tracking
     this.performanceStats = {
@@ -10703,10 +11189,132 @@ class Database extends events.EventEmitter {
       let count = 0;
       const startTime = Date.now();
 
-      // Auto-detect schema from first line if not initialized
-      if (!this.serializer.schemaManager.isInitialized) {
-        const fs = await import('fs');
-        const readline = await import('readline');
+      // Use retry for the streaming rebuild only if timeout is configured
+      if (this.opts.ioTimeoutMs && this.opts.ioTimeoutMs > 0) {
+        count = await this._rebuildIndexesWithRetry();
+      } else {
+        // Use original logic without retry for backward compatibility
+        count = await this._rebuildIndexesOriginal();
+      }
+
+      // Update indexManager totalLines
+      if (this.indexManager) {
+        this.indexManager.setTotalLines(this.offsets.length);
+      }
+      this._indexRebuildNeeded = false;
+      if (this.opts.debugMode) {
+        console.log(`✅ Index rebuilt from ${count} records in ${Date.now() - startTime}ms`);
+      }
+
+      // Save the rebuilt index
+      await this._saveIndexDataToFile();
+    } catch (error) {
+      if (this.opts.debugMode) {
+        console.error('❌ Failed to rebuild indexes:', error.message);
+      }
+      // Don't throw - queries will fall back to streaming
+    }
+  }
+
+  /**
+   * Rebuild indexes with retry logic to handle I/O hangs
+   * @private
+   */
+  async _rebuildIndexesWithRetry() {
+    // If no timeout configured, use original implementation without retry
+    if (!this.opts.ioTimeoutMs) {
+      return this._rebuildIndexesOriginal();
+    }
+    const timeoutMs = this.opts.ioTimeoutMs || 10000; // Longer timeout for rebuild
+    const maxRetries = this.opts.maxRetries || 3;
+    let count = 0;
+    await pRetry(async attempt => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        // Auto-detect schema from first line if not initialized
+        if (!this.serializer.schemaManager.isInitialized) {
+          const stream = fs.createReadStream(this.fileHandler.file, {
+            highWaterMark: 64 * 1024,
+            encoding: 'utf8'
+          });
+          const rl = readline.createInterface({
+            input: stream,
+            crlfDelay: Infinity
+          });
+
+          // Handle abort
+          controller.signal.addEventListener('abort', () => {
+            stream.destroy(new Error('AbortError'));
+            rl.close();
+          });
+          var _iteratorAbruptCompletion = false;
+          var _didIteratorError = false;
+          var _iteratorError;
+          try {
+            for (var _iterator = _asyncIterator(rl), _step; _iteratorAbruptCompletion = !(_step = await _iterator.next()).done; _iteratorAbruptCompletion = false) {
+              const line = _step.value;
+              {
+                if (controller.signal.aborted) break;
+                if (line && line.trim()) {
+                  try {
+                    const firstRecord = JSON.parse(line);
+                    if (Array.isArray(firstRecord)) {
+                      // Try to infer schema from opts.fields if available
+                      if (this.opts.fields && typeof this.opts.fields === 'object') {
+                        const fieldNames = Object.keys(this.opts.fields);
+                        if (fieldNames.length >= firstRecord.length) {
+                          // Use first N fields from opts.fields to match array length
+                          const schema = fieldNames.slice(0, firstRecord.length);
+                          this.serializer.initializeSchema(schema);
+                          if (this.opts.debugMode) {
+                            console.log(`🔍 Inferred schema from opts.fields: ${schema.join(', ')}`);
+                          }
+                        } else {
+                          throw new Error(`Cannot rebuild index: array has ${firstRecord.length} elements but opts.fields only defines ${fieldNames.length} fields. Schema must be explicitly provided.`);
+                        }
+                      } else {
+                        throw new Error('Cannot rebuild index: schema missing, file uses array format, and opts.fields not provided. The .idx.jdb file is corrupted.');
+                      }
+                    } else {
+                      // Object format, initialize from object keys
+                      this.serializer.initializeSchema(firstRecord, true);
+                      if (this.opts.debugMode) {
+                        console.log(`🔍 Auto-detected schema from object: ${Object.keys(firstRecord).join(', ')}`);
+                      }
+                    }
+                    break;
+                  } catch (error) {
+                    if (this.opts.debugMode) {
+                      console.error('❌ Failed to auto-detect schema:', error.message);
+                    }
+                    throw error;
+                  }
+                }
+              }
+            }
+          } catch (err) {
+            _didIteratorError = true;
+            _iteratorError = err;
+          } finally {
+            try {
+              if (_iteratorAbruptCompletion && _iterator.return != null) {
+                await _iterator.return();
+              }
+            } finally {
+              if (_didIteratorError) {
+                throw _iteratorError;
+              }
+            }
+          }
+          stream.destroy();
+        }
+
+        // Use streaming to read records without loading everything into memory
+        // Also rebuild offsets while we're at it
+
+        this.offsets = [];
+        let currentOffset = 0;
         const stream = fs.createReadStream(this.fileHandler.file, {
           highWaterMark: 64 * 1024,
           encoding: 'utf8'
@@ -10715,82 +11323,13 @@ class Database extends events.EventEmitter {
           input: stream,
           crlfDelay: Infinity
         });
-        var _iteratorAbruptCompletion = false;
-        var _didIteratorError = false;
-        var _iteratorError;
-        try {
-          for (var _iterator = _asyncIterator(rl), _step; _iteratorAbruptCompletion = !(_step = await _iterator.next()).done; _iteratorAbruptCompletion = false) {
-            const line = _step.value;
-            {
-              if (line && line.trim()) {
-                try {
-                  const firstRecord = JSON.parse(line);
-                  if (Array.isArray(firstRecord)) {
-                    // Try to infer schema from opts.fields if available
-                    if (this.opts.fields && typeof this.opts.fields === 'object') {
-                      const fieldNames = Object.keys(this.opts.fields);
-                      if (fieldNames.length >= firstRecord.length) {
-                        // Use first N fields from opts.fields to match array length
-                        const schema = fieldNames.slice(0, firstRecord.length);
-                        this.serializer.initializeSchema(schema);
-                        if (this.opts.debugMode) {
-                          console.log(`🔍 Inferred schema from opts.fields: ${schema.join(', ')}`);
-                        }
-                      } else {
-                        throw new Error(`Cannot rebuild index: array has ${firstRecord.length} elements but opts.fields only defines ${fieldNames.length} fields. Schema must be explicitly provided.`);
-                      }
-                    } else {
-                      throw new Error('Cannot rebuild index: schema missing, file uses array format, and opts.fields not provided. The .idx.jdb file is corrupted.');
-                    }
-                  } else {
-                    // Object format, initialize from object keys
-                    this.serializer.initializeSchema(firstRecord, true);
-                    if (this.opts.debugMode) {
-                      console.log(`🔍 Auto-detected schema from object: ${Object.keys(firstRecord).join(', ')}`);
-                    }
-                  }
-                  break;
-                } catch (error) {
-                  if (this.opts.debugMode) {
-                    console.error('❌ Failed to auto-detect schema:', error.message);
-                  }
-                  throw error;
-                }
-              }
-            }
-          }
-        } catch (err) {
-          _didIteratorError = true;
-          _iteratorError = err;
-        } finally {
-          try {
-            if (_iteratorAbruptCompletion && _iterator.return != null) {
-              await _iterator.return();
-            }
-          } finally {
-            if (_didIteratorError) {
-              throw _iteratorError;
-            }
-          }
-        }
-        stream.destroy();
-      }
 
-      // Use streaming to read records without loading everything into memory
-      // Also rebuild offsets while we're at it
-      const fs = await import('fs');
-      const readline = await import('readline');
-      this.offsets = [];
-      let currentOffset = 0;
-      const stream = fs.createReadStream(this.fileHandler.file, {
-        highWaterMark: 64 * 1024,
-        encoding: 'utf8'
-      });
-      const rl = readline.createInterface({
-        input: stream,
-        crlfDelay: Infinity
-      });
-      try {
+        // Handle abort
+        controller.signal.addEventListener('abort', () => {
+          stream.destroy(new Error('AbortError'));
+          rl.close();
+        });
+        let localCount = 0;
         var _iteratorAbruptCompletion2 = false;
         var _didIteratorError2 = false;
         var _iteratorError2;
@@ -10798,18 +11337,19 @@ class Database extends events.EventEmitter {
           for (var _iterator2 = _asyncIterator(rl), _step2; _iteratorAbruptCompletion2 = !(_step2 = await _iterator2.next()).done; _iteratorAbruptCompletion2 = false) {
             const line = _step2.value;
             {
+              if (controller.signal.aborted) break;
               if (line && line.trim()) {
                 try {
                   // Record the offset for this line
                   this.offsets.push(currentOffset);
                   const record = this.serializer.deserialize(line);
                   const recordWithTerms = this.restoreTermIdsAfterDeserialization(record);
-                  await this.indexManager.add(recordWithTerms, count);
-                  count++;
+                  await this.indexManager.add(recordWithTerms, count + localCount);
+                  localCount++;
                 } catch (error) {
                   // Skip invalid lines
                   if (this.opts.debugMode) {
-                    console.log(`⚠️ Rebuild: Failed to deserialize line ${count}:`, error.message);
+                    console.log(`⚠️ Rebuild: Failed to deserialize line ${count + localCount}:`, error.message);
                   }
                 }
               }
@@ -10831,27 +11371,31 @@ class Database extends events.EventEmitter {
             }
           }
         }
-      } finally {
+        count += localCount;
         stream.destroy();
+      } catch (error) {
+        if (error.name === 'AbortError' || error.code === 'ETIMEDOUT') {
+          if (this.opts.debugMode) {
+            console.log(`⚠️ Index rebuild attempt ${attempt} timed out, retrying...`);
+          }
+          throw error; // p-retry will retry
+        }
+        // For other errors, don't retry
+        throw new pRetry.AbortError(error);
+      } finally {
+        clearTimeout(timeout);
       }
-
-      // Update indexManager totalLines
-      if (this.indexManager) {
-        this.indexManager.setTotalLines(this.offsets.length);
+    }, {
+      retries: maxRetries,
+      minTimeout: 200,
+      maxTimeout: 2000,
+      onFailedAttempt: error => {
+        if (this.opts.debugMode) {
+          console.log(`Index rebuild failed (attempt ${error.attemptNumber}), ${error.retriesLeft} retries left`);
+        }
       }
-      this._indexRebuildNeeded = false;
-      if (this.opts.debugMode) {
-        console.log(`✅ Index rebuilt from ${count} records in ${Date.now() - startTime}ms`);
-      }
-
-      // Save the rebuilt index
-      await this._saveIndexDataToFile();
-    } catch (error) {
-      if (this.opts.debugMode) {
-        console.error('❌ Failed to rebuild indexes:', error.message);
-      }
-      // Don't throw - queries will fall back to streaming
-    }
+    });
+    return count;
   }
 
   /**
@@ -11632,56 +12176,11 @@ class Database extends events.EventEmitter {
           }
         }
         const groupedRanges = await this.fileHandler.groupedRanges(ranges);
-        const fs = await import('fs');
         const fd = await fs.promises.open(this.fileHandler.file, 'r');
         try {
           for (const groupedRange of groupedRanges) {
-            var _iteratorAbruptCompletion3 = false;
-            var _didIteratorError3 = false;
-            var _iteratorError3;
-            try {
-              for (var _iterator3 = _asyncIterator(this.fileHandler.readGroupedRange(groupedRange, fd)), _step3; _iteratorAbruptCompletion3 = !(_step3 = await _iterator3.next()).done; _iteratorAbruptCompletion3 = false) {
-                const row = _step3.value;
-                {
-                  try {
-                    const record = this.serializer.deserialize(row.line);
-
-                    // Get line number from the row, fallback to start offset mapping
-                    let lineNumber = row._ !== null && row._ !== undefined ? row._ : startToLineNumber.get(row.start) ?? 0;
-
-                    // Restore term IDs to terms
-                    const recordWithTerms = this.restoreTermIdsAfterDeserialization(record);
-
-                    // Add line number
-                    recordWithTerms._ = lineNumber;
-
-                    // Add score if includeScore is true (default is true)
-                    if (opts.includeScore !== false) {
-                      recordWithTerms.score = scoresByLineNumber.get(lineNumber) || 0;
-                    }
-                    results.push(recordWithTerms);
-                  } catch (error) {
-                    // Skip invalid lines
-                    if (this.opts.debugMode) {
-                      console.error('Error deserializing record in score():', error);
-                    }
-                  }
-                }
-              }
-            } catch (err) {
-              _didIteratorError3 = true;
-              _iteratorError3 = err;
-            } finally {
-              try {
-                if (_iteratorAbruptCompletion3 && _iterator3.return != null) {
-                  await _iterator3.return();
-                }
-              } finally {
-                if (_didIteratorError3) {
-                  throw _iteratorError3;
-                }
-              }
-            }
+            const rangeResults = await this._readGroupedRangeWithRetry(groupedRange, fd, startToLineNumber, scoresByLineNumber, opts);
+            results.push(...rangeResults);
           }
         } finally {
           await fd.close();
@@ -11719,6 +12218,300 @@ class Database extends events.EventEmitter {
       return opts.sort === 'asc' ? scoreA - scoreB : scoreB - scoreA;
     });
     return results;
+  }
+
+  /**
+   * Read a grouped range with retry logic to handle I/O hangs
+   * @private
+   */
+  async _readGroupedRangeWithRetry(groupedRange, fd, startToLineNumber, scoresByLineNumber, opts) {
+    // If no timeout configured, use original implementation without retry
+    if (!this.opts.ioTimeoutMs) {
+      return this._readGroupedRangeOriginal(groupedRange, fd, startToLineNumber, scoresByLineNumber, opts);
+    }
+    const timeoutMs = this.opts.ioTimeoutMs || 3000; // Shorter timeout for range reads
+    const maxRetries = this.opts.maxRetries || 3;
+    const results = [];
+    await pRetry(async attempt => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        // Collect results from the generator
+        const rangeResults = [];
+        const generator = this.fileHandler.readGroupedRange(groupedRange, fd);
+
+        // Handle abort
+        controller.signal.addEventListener('abort', () => {
+          generator.return(); // Close the generator
+        });
+        var _iteratorAbruptCompletion3 = false;
+        var _didIteratorError3 = false;
+        var _iteratorError3;
+        try {
+          for (var _iterator3 = _asyncIterator(generator), _step3; _iteratorAbruptCompletion3 = !(_step3 = await _iterator3.next()).done; _iteratorAbruptCompletion3 = false) {
+            const row = _step3.value;
+            {
+              if (controller.signal.aborted) break;
+              try {
+                const record = this.serializer.deserialize(row.line);
+
+                // Get line number from the row, fallback to start offset mapping
+                let lineNumber = row._ !== null && row._ !== undefined ? row._ : startToLineNumber.get(row.start) ?? 0;
+
+                // Restore term IDs to terms
+                const recordWithTerms = this.restoreTermIdsAfterDeserialization(record);
+
+                // Add line number
+                recordWithTerms._ = lineNumber;
+
+                // Add score if includeScore is true (default is true)
+                if (opts.includeScore !== false) {
+                  recordWithTerms.score = scoresByLineNumber.get(lineNumber) || 0;
+                }
+                rangeResults.push(recordWithTerms);
+              } catch (error) {
+                // Skip invalid lines
+                if (this.opts.debugMode) {
+                  console.error('Error deserializing record in score():', error);
+                }
+              }
+            }
+          }
+        } catch (err) {
+          _didIteratorError3 = true;
+          _iteratorError3 = err;
+        } finally {
+          try {
+            if (_iteratorAbruptCompletion3 && _iterator3.return != null) {
+              await _iterator3.return();
+            }
+          } finally {
+            if (_didIteratorError3) {
+              throw _iteratorError3;
+            }
+          }
+        }
+        results.push(...rangeResults);
+      } catch (error) {
+        if (error.name === 'AbortError' || error.code === 'ETIMEDOUT') {
+          if (this.opts.debugMode) {
+            console.log(`⚠️ Score range read attempt ${attempt} timed out, retrying...`);
+          }
+          throw error; // p-retry will retry
+        }
+        // For other errors, don't retry
+        throw new pRetry.AbortError(error);
+      } finally {
+        clearTimeout(timeout);
+      }
+    }, {
+      retries: maxRetries,
+      minTimeout: 100,
+      maxTimeout: 500,
+      onFailedAttempt: error => {
+        if (this.opts.debugMode) {
+          console.log(`Score range read failed (attempt ${error.attemptNumber}), ${error.retriesLeft} retries left`);
+        }
+      }
+    });
+    return results;
+  }
+
+  /**
+   * Original read grouped range logic without retry (for backward compatibility)
+   * @private
+   */
+  async _readGroupedRangeOriginal(groupedRange, fd, startToLineNumber, scoresByLineNumber, opts) {
+    const results = [];
+
+    // Collect results from the generator
+    const rangeResults = [];
+    const generator = this.fileHandler.readGroupedRange(groupedRange, fd);
+    var _iteratorAbruptCompletion4 = false;
+    var _didIteratorError4 = false;
+    var _iteratorError4;
+    try {
+      for (var _iterator4 = _asyncIterator(generator), _step4; _iteratorAbruptCompletion4 = !(_step4 = await _iterator4.next()).done; _iteratorAbruptCompletion4 = false) {
+        const row = _step4.value;
+        {
+          try {
+            const record = this.serializer.deserialize(row.line);
+
+            // Get line number from the row, fallback to start offset mapping
+            let lineNumber = row._ !== null && row._ !== undefined ? row._ : startToLineNumber.get(row.start) ?? 0;
+
+            // Restore term IDs to terms
+            const recordWithTerms = this.restoreTermIdsAfterDeserialization(record);
+
+            // Add line number
+            recordWithTerms._ = lineNumber;
+
+            // Add score if includeScore is true (default is true)
+            if (opts.includeScore !== false) {
+              recordWithTerms.score = scoresByLineNumber.get(lineNumber) || 0;
+            }
+            rangeResults.push(recordWithTerms);
+          } catch (error) {
+            // Skip invalid lines
+            if (this.opts.debugMode) {
+              console.error('Error deserializing record in score():', error);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      _didIteratorError4 = true;
+      _iteratorError4 = err;
+    } finally {
+      try {
+        if (_iteratorAbruptCompletion4 && _iterator4.return != null) {
+          await _iterator4.return();
+        }
+      } finally {
+        if (_didIteratorError4) {
+          throw _iteratorError4;
+        }
+      }
+    }
+    results.push(...rangeResults);
+    return results;
+  }
+
+  /**
+   * Original rebuild indexes logic without retry (for backward compatibility)
+   * @private
+   */
+  async _rebuildIndexesOriginal() {
+    let count = 0;
+
+    // Auto-detect schema from first line if not initialized
+    if (!this.serializer.schemaManager.isInitialized) {
+      const stream = fs.createReadStream(this.fileHandler.file, {
+        highWaterMark: 64 * 1024,
+        encoding: 'utf8'
+      });
+      const rl = readline.createInterface({
+        input: stream,
+        crlfDelay: Infinity
+      });
+      var _iteratorAbruptCompletion5 = false;
+      var _didIteratorError5 = false;
+      var _iteratorError5;
+      try {
+        for (var _iterator5 = _asyncIterator(rl), _step5; _iteratorAbruptCompletion5 = !(_step5 = await _iterator5.next()).done; _iteratorAbruptCompletion5 = false) {
+          const line = _step5.value;
+          {
+            if (line && line.trim()) {
+              try {
+                const firstRecord = JSON.parse(line);
+                if (Array.isArray(firstRecord)) {
+                  // Try to infer schema from opts.fields if available
+                  if (this.opts.fields && typeof this.opts.fields === 'object') {
+                    const fieldNames = Object.keys(this.opts.fields);
+                    if (fieldNames.length >= firstRecord.length) {
+                      // Use first N fields from opts.fields to match array length
+                      const schema = fieldNames.slice(0, firstRecord.length);
+                      this.serializer.initializeSchema(schema);
+                      if (this.opts.debugMode) {
+                        console.log(`🔍 Inferred schema from opts.fields: ${schema.join(', ')}`);
+                      }
+                    } else {
+                      throw new Error(`Cannot rebuild index: array has ${firstRecord.length} elements but opts.fields only defines ${fieldNames.length} fields. Schema must be explicitly provided.`);
+                    }
+                  } else {
+                    throw new Error('Cannot rebuild index: schema missing, file uses array format, and opts.fields not provided. The .idx.jdb file is corrupted.');
+                  }
+                } else {
+                  // Object format, initialize from object keys
+                  this.serializer.initializeSchema(firstRecord, true);
+                  if (this.opts.debugMode) {
+                    console.log(`🔍 Auto-detected schema from object: ${Object.keys(firstRecord).join(', ')}`);
+                  }
+                }
+                break;
+              } catch (error) {
+                if (this.opts.debugMode) {
+                  console.error('❌ Failed to auto-detect schema:', error.message);
+                }
+                throw error;
+              }
+            }
+          }
+        }
+      } catch (err) {
+        _didIteratorError5 = true;
+        _iteratorError5 = err;
+      } finally {
+        try {
+          if (_iteratorAbruptCompletion5 && _iterator5.return != null) {
+            await _iterator5.return();
+          }
+        } finally {
+          if (_didIteratorError5) {
+            throw _iteratorError5;
+          }
+        }
+      }
+      stream.destroy();
+    }
+
+    // Use streaming to read records without loading everything into memory
+    // Also rebuild offsets while we're at it
+    this.offsets = [];
+    let currentOffset = 0;
+    const stream = fs.createReadStream(this.fileHandler.file, {
+      highWaterMark: 64 * 1024,
+      encoding: 'utf8'
+    });
+    const rl = readline.createInterface({
+      input: stream,
+      crlfDelay: Infinity
+    });
+    try {
+      var _iteratorAbruptCompletion6 = false;
+      var _didIteratorError6 = false;
+      var _iteratorError6;
+      try {
+        for (var _iterator6 = _asyncIterator(rl), _step6; _iteratorAbruptCompletion6 = !(_step6 = await _iterator6.next()).done; _iteratorAbruptCompletion6 = false) {
+          const line = _step6.value;
+          {
+            if (line && line.trim()) {
+              try {
+                // Record the offset for this line
+                this.offsets.push(currentOffset);
+                const record = this.serializer.deserialize(line);
+                const recordWithTerms = this.restoreTermIdsAfterDeserialization(record);
+                await this.indexManager.add(recordWithTerms, count);
+                count++;
+              } catch (error) {
+                // Skip invalid lines
+                if (this.opts.debugMode) {
+                  console.log(`⚠️ Rebuild: Failed to deserialize line ${count}:`, error.message);
+                }
+              }
+            }
+            // Update offset for next line (including newline character)
+            currentOffset += Buffer.byteLength(line, 'utf8') + 1;
+          }
+        }
+      } catch (err) {
+        _didIteratorError6 = true;
+        _iteratorError6 = err;
+      } finally {
+        try {
+          if (_iteratorAbruptCompletion6 && _iterator6.return != null) {
+            await _iterator6.return();
+          }
+        } finally {
+          if (_didIteratorError6) {
+            throw _iteratorError6;
+          }
+        }
+      }
+    } finally {
+      stream.destroy();
+    }
+    return count;
   }
 
   /**
@@ -12030,7 +12823,6 @@ class Database extends events.EventEmitter {
 
       // Method 1: Try to read the entire file and filter
       if (this.fileHandler.exists()) {
-        const fs = await import('fs');
         const fileContent = await fs.promises.readFile(this.normalizedFile, 'utf8');
         const lines = fileContent.split('\n').filter(line => line.trim());
         for (let i = 0; i < lines.length && i < this.offsets.length; i++) {
@@ -12730,10 +13522,9 @@ class Database extends events.EventEmitter {
         return;
       }
       _this._offsetRecoveryInProgress = true;
-      const fsModule = _this._fsModule || (_this._fsModule = yield _awaitAsyncGenerator(import('fs')));
       let fd;
       try {
-        fd = yield _awaitAsyncGenerator(fsModule.promises.open(_this.fileHandler.file, 'r'));
+        fd = yield _awaitAsyncGenerator(fs.promises.open(_this.fileHandler.file, 'r'));
       } catch (error) {
         _this._offsetRecoveryInProgress = false;
         if (_this.opts.debugMode) {
@@ -13036,16 +13827,15 @@ class Database extends events.EventEmitter {
             // OPTIMIZATION: Use ranges instead of reading entire file
             const ranges = _this2.getRanges(map);
             const groupedRanges = yield _awaitAsyncGenerator(_this2.fileHandler.groupedRanges(ranges));
-            const fs = yield _awaitAsyncGenerator(import('fs'));
             const fd = yield _awaitAsyncGenerator(fs.promises.open(_this2.fileHandler.file, 'r'));
             try {
               for (const groupedRange of groupedRanges) {
-                var _iteratorAbruptCompletion4 = false;
-                var _didIteratorError4 = false;
-                var _iteratorError4;
+                var _iteratorAbruptCompletion7 = false;
+                var _didIteratorError7 = false;
+                var _iteratorError7;
                 try {
-                  for (var _iterator4 = _asyncIterator(_this2.fileHandler.readGroupedRange(groupedRange, fd)), _step4; _iteratorAbruptCompletion4 = !(_step4 = yield _awaitAsyncGenerator(_iterator4.next())).done; _iteratorAbruptCompletion4 = false) {
-                    const row = _step4.value;
+                  for (var _iterator7 = _asyncIterator(_this2.fileHandler.readGroupedRange(groupedRange, fd)), _step7; _iteratorAbruptCompletion7 = !(_step7 = yield _awaitAsyncGenerator(_iterator7.next())).done; _iteratorAbruptCompletion7 = false) {
+                    const row = _step7.value;
                     {
                       if (options.limit && count >= options.limit) {
                         break;
@@ -13119,28 +13909,28 @@ class Database extends events.EventEmitter {
                           }
                         }
                         if (!_this2._offsetRecoveryInProgress) {
-                          var _iteratorAbruptCompletion5 = false;
-                          var _didIteratorError5 = false;
-                          var _iteratorError5;
+                          var _iteratorAbruptCompletion8 = false;
+                          var _didIteratorError8 = false;
+                          var _iteratorError8;
                           try {
-                            for (var _iterator5 = _asyncIterator(_this2._streamingRecoveryGenerator(criteria, options, count, map, remainingSkip)), _step5; _iteratorAbruptCompletion5 = !(_step5 = yield _awaitAsyncGenerator(_iterator5.next())).done; _iteratorAbruptCompletion5 = false) {
-                              const recoveredEntry = _step5.value;
+                            for (var _iterator8 = _asyncIterator(_this2._streamingRecoveryGenerator(criteria, options, count, map, remainingSkip)), _step8; _iteratorAbruptCompletion8 = !(_step8 = yield _awaitAsyncGenerator(_iterator8.next())).done; _iteratorAbruptCompletion8 = false) {
+                              const recoveredEntry = _step8.value;
                               {
                                 yield recoveredEntry;
                                 count++;
                               }
                             }
                           } catch (err) {
-                            _didIteratorError5 = true;
-                            _iteratorError5 = err;
+                            _didIteratorError8 = true;
+                            _iteratorError8 = err;
                           } finally {
                             try {
-                              if (_iteratorAbruptCompletion5 && _iterator5.return != null) {
-                                yield _awaitAsyncGenerator(_iterator5.return());
+                              if (_iteratorAbruptCompletion8 && _iterator8.return != null) {
+                                yield _awaitAsyncGenerator(_iterator8.return());
                               }
                             } finally {
-                              if (_didIteratorError5) {
-                                throw _iteratorError5;
+                              if (_didIteratorError8) {
+                                throw _iteratorError8;
                               }
                             }
                           }
@@ -13152,16 +13942,16 @@ class Database extends events.EventEmitter {
                     }
                   }
                 } catch (err) {
-                  _didIteratorError4 = true;
-                  _iteratorError4 = err;
+                  _didIteratorError7 = true;
+                  _iteratorError7 = err;
                 } finally {
                   try {
-                    if (_iteratorAbruptCompletion4 && _iterator4.return != null) {
-                      yield _awaitAsyncGenerator(_iterator4.return());
+                    if (_iteratorAbruptCompletion7 && _iterator7.return != null) {
+                      yield _awaitAsyncGenerator(_iterator7.return());
                     }
                   } finally {
-                    if (_didIteratorError4) {
-                      throw _iteratorError4;
+                    if (_didIteratorError7) {
+                      throw _iteratorError7;
                     }
                   }
                 }
@@ -13227,12 +14017,12 @@ class Database extends events.EventEmitter {
           if (options.limit && count >= options.limit) {
             break;
           }
-          var _iteratorAbruptCompletion6 = false;
-          var _didIteratorError6 = false;
-          var _iteratorError6;
+          var _iteratorAbruptCompletion9 = false;
+          var _didIteratorError9 = false;
+          var _iteratorError9;
           try {
-            for (var _iterator6 = _asyncIterator(_this2.fileHandler.readGroupedRange(groupedRange, fd)), _step6; _iteratorAbruptCompletion6 = !(_step6 = yield _awaitAsyncGenerator(_iterator6.next())).done; _iteratorAbruptCompletion6 = false) {
-              const row = _step6.value;
+            for (var _iterator9 = _asyncIterator(_this2.fileHandler.readGroupedRange(groupedRange, fd)), _step9; _iteratorAbruptCompletion9 = !(_step9 = yield _awaitAsyncGenerator(_iterator9.next())).done; _iteratorAbruptCompletion9 = false) {
+              const row = _step9.value;
               {
                 if (options.limit && count >= options.limit) {
                   break;
@@ -13313,28 +14103,28 @@ class Database extends events.EventEmitter {
                     }
                   }
                   if (!_this2._offsetRecoveryInProgress) {
-                    var _iteratorAbruptCompletion7 = false;
-                    var _didIteratorError7 = false;
-                    var _iteratorError7;
+                    var _iteratorAbruptCompletion0 = false;
+                    var _didIteratorError0 = false;
+                    var _iteratorError0;
                     try {
-                      for (var _iterator7 = _asyncIterator(_this2._streamingRecoveryGenerator(criteria, options, count, map, remainingSkip)), _step7; _iteratorAbruptCompletion7 = !(_step7 = yield _awaitAsyncGenerator(_iterator7.next())).done; _iteratorAbruptCompletion7 = false) {
-                        const recoveredEntry = _step7.value;
+                      for (var _iterator0 = _asyncIterator(_this2._streamingRecoveryGenerator(criteria, options, count, map, remainingSkip)), _step0; _iteratorAbruptCompletion0 = !(_step0 = yield _awaitAsyncGenerator(_iterator0.next())).done; _iteratorAbruptCompletion0 = false) {
+                        const recoveredEntry = _step0.value;
                         {
                           yield recoveredEntry;
                           count++;
                         }
                       }
                     } catch (err) {
-                      _didIteratorError7 = true;
-                      _iteratorError7 = err;
+                      _didIteratorError0 = true;
+                      _iteratorError0 = err;
                     } finally {
                       try {
-                        if (_iteratorAbruptCompletion7 && _iterator7.return != null) {
-                          yield _awaitAsyncGenerator(_iterator7.return());
+                        if (_iteratorAbruptCompletion0 && _iterator0.return != null) {
+                          yield _awaitAsyncGenerator(_iterator0.return());
                         }
                       } finally {
-                        if (_didIteratorError7) {
-                          throw _iteratorError7;
+                        if (_didIteratorError0) {
+                          throw _iteratorError0;
                         }
                       }
                     }
@@ -13346,16 +14136,16 @@ class Database extends events.EventEmitter {
               }
             }
           } catch (err) {
-            _didIteratorError6 = true;
-            _iteratorError6 = err;
+            _didIteratorError9 = true;
+            _iteratorError9 = err;
           } finally {
             try {
-              if (_iteratorAbruptCompletion6 && _iterator6.return != null) {
-                yield _awaitAsyncGenerator(_iterator6.return());
+              if (_iteratorAbruptCompletion9 && _iterator9.return != null) {
+                yield _awaitAsyncGenerator(_iterator9.return());
               }
             } finally {
-              if (_didIteratorError6) {
-                throw _iteratorError6;
+              if (_didIteratorError9) {
+                throw _iteratorError9;
               }
             }
           }
@@ -13410,12 +14200,12 @@ class Database extends events.EventEmitter {
 
       try {
         // Always use walk() now that the bug is fixed - it works for both small and large datasets
-        var _iteratorAbruptCompletion8 = false;
-        var _didIteratorError8 = false;
-        var _iteratorError8;
+        var _iteratorAbruptCompletion1 = false;
+        var _didIteratorError1 = false;
+        var _iteratorError1;
         try {
-          for (var _iterator8 = _asyncIterator(_this3.walk(criteria, options)), _step8; _iteratorAbruptCompletion8 = !(_step8 = yield _awaitAsyncGenerator(_iterator8.next())).done; _iteratorAbruptCompletion8 = false) {
-            const entry = _step8.value;
+          for (var _iterator1 = _asyncIterator(_this3.walk(criteria, options)), _step1; _iteratorAbruptCompletion1 = !(_step1 = yield _awaitAsyncGenerator(_iterator1.next())).done; _iteratorAbruptCompletion1 = false) {
+            const entry = _step1.value;
             {
               processedCount++;
 
@@ -13475,16 +14265,16 @@ class Database extends events.EventEmitter {
 
           // Process remaining records in buffers
         } catch (err) {
-          _didIteratorError8 = true;
-          _iteratorError8 = err;
+          _didIteratorError1 = true;
+          _iteratorError1 = err;
         } finally {
           try {
-            if (_iteratorAbruptCompletion8 && _iterator8.return != null) {
-              yield _awaitAsyncGenerator(_iterator8.return());
+            if (_iteratorAbruptCompletion1 && _iterator1.return != null) {
+              yield _awaitAsyncGenerator(_iterator1.return());
             }
           } finally {
-            if (_didIteratorError8) {
-              throw _iteratorError8;
+            if (_didIteratorError1) {
+              throw _iteratorError1;
             }
           }
         }
@@ -13677,7 +14467,6 @@ class Database extends events.EventEmitter {
         // If the .idx.jdb file exists and has data, and we're trying to save empty index,
         // skip the save to prevent corruption
         if (isEmpty && !this.offsets?.length) {
-          const fs = await import('fs');
           if (fs.existsSync(idxPath)) {
             try {
               const existingData = JSON.parse(await fs.promises.readFile(idxPath, 'utf8'));

@@ -1,4 +1,5 @@
 import { normalizeOperator } from '../utils/operatorNormalizer.mjs'
+import { promises as fs } from 'fs'
 
 /**
  * QueryManager - Handles all query operations and strategies
@@ -492,8 +493,7 @@ export class QueryManager {
       const ranges = this.database.getRanges(batch);
       const groupedRanges = await this.fileHandler.groupedRanges(ranges);
       
-      const fs = await import('fs');
-      const fd = await fs.promises.open(this.fileHandler.file, 'r');
+      const fd = await fs.open(this.fileHandler.file, 'r');
       
       try {
         for (const groupedRange of groupedRanges) {
@@ -734,8 +734,7 @@ export class QueryManager {
         if (ranges.length > 0) {
           const groupedRanges = await this.database.fileHandler.groupedRanges(ranges)
           
-          const fs = await import('fs')
-          const fd = await fs.promises.open(this.database.fileHandler.file, 'r')
+          const fd = await fs.open(this.database.fileHandler.file, 'r')
           
           try {
             for (const groupedRange of groupedRanges) {

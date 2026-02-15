@@ -4,6 +4,7 @@ import Serializer from './Serializer.mjs'
 import { Mutex } from 'async-mutex'
 import fs from 'fs'
 import readline from 'readline'
+import pRetry from 'p-retry'
 import { OperationQueue } from './OperationQueue.mjs'
 
 /**
@@ -3100,100 +3101,12 @@ class Database extends EventEmitter {
       let count = 0
       const startTime = Date.now()
       
-      // Auto-detect schema from first line if not initialized
-      if (!this.serializer.schemaManager.isInitialized) {
-        const fs = await import('fs')
-        const readline = await import('readline')
-        const stream = fs.createReadStream(this.fileHandler.file, {
-          highWaterMark: 64 * 1024,
-          encoding: 'utf8'
-        })
-        const rl = readline.createInterface({
-          input: stream,
-          crlfDelay: Infinity
-        })
-        
-        for await (const line of rl) {
-          if (line && line.trim()) {
-            try {
-              const firstRecord = JSON.parse(line)
-              if (Array.isArray(firstRecord)) {
-                // Try to infer schema from opts.fields if available
-                if (this.opts.fields && typeof this.opts.fields === 'object') {
-                  const fieldNames = Object.keys(this.opts.fields)
-                  if (fieldNames.length >= firstRecord.length) {
-                    // Use first N fields from opts.fields to match array length
-                    const schema = fieldNames.slice(0, firstRecord.length)
-                    this.serializer.initializeSchema(schema)
-                    if (this.opts.debugMode) {
-                      console.log(`🔍 Inferred schema from opts.fields: ${schema.join(', ')}`)
-                    }
-                  } else {
-                    throw new Error(`Cannot rebuild index: array has ${firstRecord.length} elements but opts.fields only defines ${fieldNames.length} fields. Schema must be explicitly provided.`)
-                  }
-                } else {
-                  throw new Error('Cannot rebuild index: schema missing, file uses array format, and opts.fields not provided. The .idx.jdb file is corrupted.')
-                }
-              } else {
-                // Object format, initialize from object keys
-                this.serializer.initializeSchema(firstRecord, true)
-                if (this.opts.debugMode) {
-                  console.log(`🔍 Auto-detected schema from object: ${Object.keys(firstRecord).join(', ')}`)
-                }
-              }
-              break
-            } catch (error) {
-              if (this.opts.debugMode) {
-                console.error('❌ Failed to auto-detect schema:', error.message)
-              }
-              throw error
-            }
-          }
-        }
-        stream.destroy()
-      }
-      
-      // Use streaming to read records without loading everything into memory
-      // Also rebuild offsets while we're at it
-      const fs = await import('fs')
-      const readline = await import('readline')
-      
-      this.offsets = []
-      let currentOffset = 0
-      
-      const stream = fs.createReadStream(this.fileHandler.file, {
-        highWaterMark: 64 * 1024,
-        encoding: 'utf8'
-      })
-      
-      const rl = readline.createInterface({
-        input: stream,
-        crlfDelay: Infinity
-      })
-      
-      try {
-        for await (const line of rl) {
-          if (line && line.trim()) {
-            try {
-              // Record the offset for this line
-              this.offsets.push(currentOffset)
-              
-              const record = this.serializer.deserialize(line)
-              const recordWithTerms = this.restoreTermIdsAfterDeserialization(record)
-              await this.indexManager.add(recordWithTerms, count)
-              count++
-            } catch (error) {
-              // Skip invalid lines
-              if (this.opts.debugMode) {
-                console.log(`⚠️ Rebuild: Failed to deserialize line ${count}:`, error.message)
-              }
-            }
-          }
-          // Update offset for next line (including newline character)
-          currentOffset += Buffer.byteLength(line, 'utf8') + 1
-        }
-      } finally {
-        stream.destroy()
+      // Use retry for the streaming rebuild only if timeout is configured
+      if (this.opts.ioTimeoutMs && this.opts.ioTimeoutMs > 0) {
+        count = await this._rebuildIndexesWithRetry()
+      } else {
+        // Use original logic without retry for backward compatibility
+        count = await this._rebuildIndexesOriginal()
       }
       
       // Update indexManager totalLines
@@ -3215,6 +3128,157 @@ class Database extends EventEmitter {
       }
       // Don't throw - queries will fall back to streaming
     }
+  }
+
+  /**
+   * Rebuild indexes with retry logic to handle I/O hangs
+   * @private
+   */
+  async _rebuildIndexesWithRetry() {
+    // If no timeout configured, use original implementation without retry
+    if (!this.opts.ioTimeoutMs) {
+      return this._rebuildIndexesOriginal();
+    }
+
+    const timeoutMs = this.opts.ioTimeoutMs || 10000; // Longer timeout for rebuild
+    const maxRetries = this.opts.maxRetries || 3;
+
+    let count = 0;
+
+    await pRetry(async (attempt) => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+      try {
+        // Auto-detect schema from first line if not initialized
+        if (!this.serializer.schemaManager.isInitialized) {
+          const stream = fs.createReadStream(this.fileHandler.file, {
+            highWaterMark: 64 * 1024,
+            encoding: 'utf8'
+          })
+          const rl = readline.createInterface({
+            input: stream,
+            crlfDelay: Infinity
+          })
+
+          // Handle abort
+          controller.signal.addEventListener('abort', () => {
+            stream.destroy(new Error('AbortError'));
+            rl.close();
+          });
+
+          for await (const line of rl) {
+            if (controller.signal.aborted) break;
+            if (line && line.trim()) {
+              try {
+                const firstRecord = JSON.parse(line)
+                if (Array.isArray(firstRecord)) {
+                  // Try to infer schema from opts.fields if available
+                  if (this.opts.fields && typeof this.opts.fields === 'object') {
+                    const fieldNames = Object.keys(this.opts.fields)
+                    if (fieldNames.length >= firstRecord.length) {
+                      // Use first N fields from opts.fields to match array length
+                      const schema = fieldNames.slice(0, firstRecord.length)
+                      this.serializer.initializeSchema(schema)
+                      if (this.opts.debugMode) {
+                        console.log(`🔍 Inferred schema from opts.fields: ${schema.join(', ')}`)
+                      }
+                    } else {
+                      throw new Error(`Cannot rebuild index: array has ${firstRecord.length} elements but opts.fields only defines ${fieldNames.length} fields. Schema must be explicitly provided.`)
+                    }
+                  } else {
+                    throw new Error('Cannot rebuild index: schema missing, file uses array format, and opts.fields not provided. The .idx.jdb file is corrupted.')
+                  }
+                } else {
+                  // Object format, initialize from object keys
+                  this.serializer.initializeSchema(firstRecord, true)
+                  if (this.opts.debugMode) {
+                    console.log(`🔍 Auto-detected schema from object: ${Object.keys(firstRecord).join(', ')}`)
+                  }
+                }
+                break
+              } catch (error) {
+                if (this.opts.debugMode) {
+                  console.error('❌ Failed to auto-detect schema:', error.message)
+                }
+                throw error
+              }
+            }
+          }
+          stream.destroy()
+        }
+
+        // Use streaming to read records without loading everything into memory
+        // Also rebuild offsets while we're at it
+
+        this.offsets = []
+        let currentOffset = 0
+
+        const stream = fs.createReadStream(this.fileHandler.file, {
+          highWaterMark: 64 * 1024,
+          encoding: 'utf8'
+        })
+
+        const rl = readline.createInterface({
+          input: stream,
+          crlfDelay: Infinity
+        })
+
+        // Handle abort
+        controller.signal.addEventListener('abort', () => {
+          stream.destroy(new Error('AbortError'));
+          rl.close();
+        });
+
+        let localCount = 0;
+        for await (const line of rl) {
+          if (controller.signal.aborted) break;
+          if (line && line.trim()) {
+            try {
+              // Record the offset for this line
+              this.offsets.push(currentOffset)
+
+              const record = this.serializer.deserialize(line)
+              const recordWithTerms = this.restoreTermIdsAfterDeserialization(record)
+              await this.indexManager.add(recordWithTerms, count + localCount)
+              localCount++
+            } catch (error) {
+              // Skip invalid lines
+              if (this.opts.debugMode) {
+                console.log(`⚠️ Rebuild: Failed to deserialize line ${count + localCount}:`, error.message)
+              }
+            }
+          }
+          // Update offset for next line (including newline character)
+          currentOffset += Buffer.byteLength(line, 'utf8') + 1
+        }
+
+        count += localCount;
+        stream.destroy()
+      } catch (error) {
+        if (error.name === 'AbortError' || error.code === 'ETIMEDOUT') {
+          if (this.opts.debugMode) {
+            console.log(`⚠️ Index rebuild attempt ${attempt} timed out, retrying...`);
+          }
+          throw error; // p-retry will retry
+        }
+        // For other errors, don't retry
+        throw new pRetry.AbortError(error);
+      } finally {
+        clearTimeout(timeout);
+      }
+    }, {
+      retries: maxRetries,
+      minTimeout: 200,
+      maxTimeout: 2000,
+      onFailedAttempt: (error) => {
+        if (this.opts.debugMode) {
+          console.log(`Index rebuild failed (attempt ${error.attemptNumber}), ${error.retriesLeft} retries left`);
+        }
+      }
+    });
+
+    return count;
   }
 
   /**
@@ -4068,37 +4132,12 @@ class Database extends EventEmitter {
         
         const groupedRanges = await this.fileHandler.groupedRanges(ranges)
         
-        const fs = await import('fs')
         const fd = await fs.promises.open(this.fileHandler.file, 'r')
         
         try {
           for (const groupedRange of groupedRanges) {
-            for await (const row of this.fileHandler.readGroupedRange(groupedRange, fd)) {
-              try {
-                const record = this.serializer.deserialize(row.line)
-                
-                // Get line number from the row, fallback to start offset mapping
-                let lineNumber = row._ !== null && row._ !== undefined ? row._ : (startToLineNumber.get(row.start) ?? 0)
-                
-                // Restore term IDs to terms
-                const recordWithTerms = this.restoreTermIdsAfterDeserialization(record)
-                
-                // Add line number
-                recordWithTerms._ = lineNumber
-                
-                // Add score if includeScore is true (default is true)
-                if (opts.includeScore !== false) {
-                  recordWithTerms.score = scoresByLineNumber.get(lineNumber) || 0
-                }
-                
-                results.push(recordWithTerms)
-              } catch (error) {
-                // Skip invalid lines
-                if (this.opts.debugMode) {
-                  console.error('Error deserializing record in score():', error)
-                }
-              }
-            }
+            const rangeResults = await this._readGroupedRangeWithRetry(groupedRange, fd, startToLineNumber, scoresByLineNumber, opts);
+            results.push(...rangeResults);
           }
         } finally {
           await fd.close()
@@ -4138,6 +4177,234 @@ class Database extends EventEmitter {
     })
     
     return results
+  }
+
+  /**
+   * Read a grouped range with retry logic to handle I/O hangs
+   * @private
+   */
+  async _readGroupedRangeWithRetry(groupedRange, fd, startToLineNumber, scoresByLineNumber, opts) {
+    // If no timeout configured, use original implementation without retry
+    if (!this.opts.ioTimeoutMs) {
+      return this._readGroupedRangeOriginal(groupedRange, fd, startToLineNumber, scoresByLineNumber, opts);
+    }
+
+    const timeoutMs = this.opts.ioTimeoutMs || 3000; // Shorter timeout for range reads
+    const maxRetries = this.opts.maxRetries || 3;
+
+    const results = [];
+
+    await pRetry(async (attempt) => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+      try {
+        // Collect results from the generator
+        const rangeResults = [];
+        const generator = this.fileHandler.readGroupedRange(groupedRange, fd);
+
+        // Handle abort
+        controller.signal.addEventListener('abort', () => {
+          generator.return(); // Close the generator
+        });
+
+        for await (const row of generator) {
+          if (controller.signal.aborted) break;
+
+          try {
+            const record = this.serializer.deserialize(row.line)
+
+            // Get line number from the row, fallback to start offset mapping
+            let lineNumber = row._ !== null && row._ !== undefined ? row._ : (startToLineNumber.get(row.start) ?? 0)
+
+            // Restore term IDs to terms
+            const recordWithTerms = this.restoreTermIdsAfterDeserialization(record)
+
+            // Add line number
+            recordWithTerms._ = lineNumber
+
+            // Add score if includeScore is true (default is true)
+            if (opts.includeScore !== false) {
+              recordWithTerms.score = scoresByLineNumber.get(lineNumber) || 0
+            }
+
+            rangeResults.push(recordWithTerms)
+          } catch (error) {
+            // Skip invalid lines
+            if (this.opts.debugMode) {
+              console.error('Error deserializing record in score():', error)
+            }
+          }
+        }
+
+        results.push(...rangeResults);
+      } catch (error) {
+        if (error.name === 'AbortError' || error.code === 'ETIMEDOUT') {
+          if (this.opts.debugMode) {
+            console.log(`⚠️ Score range read attempt ${attempt} timed out, retrying...`);
+          }
+          throw error; // p-retry will retry
+        }
+        // For other errors, don't retry
+        throw new pRetry.AbortError(error);
+      } finally {
+        clearTimeout(timeout);
+      }
+    }, {
+      retries: maxRetries,
+      minTimeout: 100,
+      maxTimeout: 500,
+      onFailedAttempt: (error) => {
+        if (this.opts.debugMode) {
+          console.log(`Score range read failed (attempt ${error.attemptNumber}), ${error.retriesLeft} retries left`);
+        }
+      }
+    });
+
+    return results;
+  }
+
+  /**
+   * Original read grouped range logic without retry (for backward compatibility)
+   * @private
+   */
+  async _readGroupedRangeOriginal(groupedRange, fd, startToLineNumber, scoresByLineNumber, opts) {
+    const results = [];
+
+    // Collect results from the generator
+    const rangeResults = [];
+    const generator = this.fileHandler.readGroupedRange(groupedRange, fd);
+
+    for await (const row of generator) {
+      try {
+        const record = this.serializer.deserialize(row.line)
+
+        // Get line number from the row, fallback to start offset mapping
+        let lineNumber = row._ !== null && row._ !== undefined ? row._ : (startToLineNumber.get(row.start) ?? 0)
+
+        // Restore term IDs to terms
+        const recordWithTerms = this.restoreTermIdsAfterDeserialization(record)
+
+        // Add line number
+        recordWithTerms._ = lineNumber
+
+        // Add score if includeScore is true (default is true)
+        if (opts.includeScore !== false) {
+          recordWithTerms.score = scoresByLineNumber.get(lineNumber) || 0
+        }
+
+        rangeResults.push(recordWithTerms)
+      } catch (error) {
+        // Skip invalid lines
+        if (this.opts.debugMode) {
+          console.error('Error deserializing record in score():', error)
+        }
+      }
+    }
+
+    results.push(...rangeResults);
+    return results;
+  }
+
+  /**
+   * Original rebuild indexes logic without retry (for backward compatibility)
+   * @private
+   */
+  async _rebuildIndexesOriginal() {
+    let count = 0;
+
+    // Auto-detect schema from first line if not initialized
+    if (!this.serializer.schemaManager.isInitialized) {
+      const stream = fs.createReadStream(this.fileHandler.file, {
+        highWaterMark: 64 * 1024,
+        encoding: 'utf8'
+      })
+      const rl = readline.createInterface({
+        input: stream,
+        crlfDelay: Infinity
+      })
+
+      for await (const line of rl) {
+        if (line && line.trim()) {
+          try {
+            const firstRecord = JSON.parse(line)
+            if (Array.isArray(firstRecord)) {
+              // Try to infer schema from opts.fields if available
+              if (this.opts.fields && typeof this.opts.fields === 'object') {
+                const fieldNames = Object.keys(this.opts.fields)
+                if (fieldNames.length >= firstRecord.length) {
+                  // Use first N fields from opts.fields to match array length
+                  const schema = fieldNames.slice(0, firstRecord.length)
+                  this.serializer.initializeSchema(schema)
+                  if (this.opts.debugMode) {
+                    console.log(`🔍 Inferred schema from opts.fields: ${schema.join(', ')}`)
+                  }
+                } else {
+                  throw new Error(`Cannot rebuild index: array has ${firstRecord.length} elements but opts.fields only defines ${fieldNames.length} fields. Schema must be explicitly provided.`)
+                }
+              } else {
+                throw new Error('Cannot rebuild index: schema missing, file uses array format, and opts.fields not provided. The .idx.jdb file is corrupted.')
+              }
+            } else {
+              // Object format, initialize from object keys
+              this.serializer.initializeSchema(firstRecord, true)
+              if (this.opts.debugMode) {
+                console.log(`🔍 Auto-detected schema from object: ${Object.keys(firstRecord).join(', ')}`)
+              }
+            }
+            break
+          } catch (error) {
+            if (this.opts.debugMode) {
+              console.error('❌ Failed to auto-detect schema:', error.message)
+            }
+            throw error
+          }
+        }
+      }
+      stream.destroy()
+    }
+
+    // Use streaming to read records without loading everything into memory
+    // Also rebuild offsets while we're at it
+    this.offsets = []
+    let currentOffset = 0
+
+    const stream = fs.createReadStream(this.fileHandler.file, {
+      highWaterMark: 64 * 1024,
+      encoding: 'utf8'
+    })
+
+    const rl = readline.createInterface({
+      input: stream,
+      crlfDelay: Infinity
+    })
+
+    try {
+      for await (const line of rl) {
+        if (line && line.trim()) {
+          try {
+            // Record the offset for this line
+            this.offsets.push(currentOffset)
+
+            const record = this.serializer.deserialize(line)
+            const recordWithTerms = this.restoreTermIdsAfterDeserialization(record)
+            await this.indexManager.add(recordWithTerms, count)
+            count++
+          } catch (error) {
+            // Skip invalid lines
+            if (this.opts.debugMode) {
+              console.log(`⚠️ Rebuild: Failed to deserialize line ${count}:`, error.message)
+            }
+          }
+        }
+        // Update offset for next line (including newline character)
+        currentOffset += Buffer.byteLength(line, 'utf8') + 1
+      }
+    } finally {
+      stream.destroy()
+    }
+
+    return count;
   }
 
   /**
@@ -4462,7 +4729,6 @@ class Database extends EventEmitter {
       
       // Method 1: Try to read the entire file and filter
       if (this.fileHandler.exists()) {
-        const fs = await import('fs')
         const fileContent = await fs.promises.readFile(this.normalizedFile, 'utf8')
         const lines = fileContent.split('\n').filter(line => line.trim())
         
@@ -5169,11 +5435,10 @@ class Database extends EventEmitter {
 
     this._offsetRecoveryInProgress = true
 
-    const fsModule = this._fsModule || (this._fsModule = await import('fs'))
     let fd
 
     try {
-      fd = await fsModule.promises.open(this.fileHandler.file, 'r')
+      fd = await fs.promises.open(this.fileHandler.file, 'r')
     } catch (error) {
       this._offsetRecoveryInProgress = false
       if (this.opts.debugMode) {
@@ -5499,7 +5764,6 @@ class Database extends EventEmitter {
           const ranges = this.getRanges(map)
           const groupedRanges = await this.fileHandler.groupedRanges(ranges)
           
-          const fs = await import('fs')
           const fd = await fs.promises.open(this.fileHandler.file, 'r')
           
           try {
@@ -6045,7 +6309,6 @@ class Database extends EventEmitter {
         // If the .idx.jdb file exists and has data, and we're trying to save empty index,
         // skip the save to prevent corruption
         if (isEmpty && !this.offsets?.length) {
-          const fs = await import('fs')
           if (fs.existsSync(idxPath)) {
             try {
               const existingData = JSON.parse(await fs.promises.readFile(idxPath, 'utf8'))

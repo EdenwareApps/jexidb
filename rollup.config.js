@@ -8,6 +8,7 @@ export default {
     file: 'dist/Database.cjs',
     format: 'cjs',
     exports: 'named',
+    inlineDynamicImports: true,
   },
   plugins: [
     nodeResolve({
@@ -22,9 +23,8 @@ export default {
   ],
   external: [
     'events',
-    'async-mutex',
     'fs',
     'readline',
-    'path',
+    'path'
   ]
 };

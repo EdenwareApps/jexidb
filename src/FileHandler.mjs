@@ -2,6 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import readline from 'readline'
 import pLimit from 'p-limit'
+import pRetry from 'p-retry'
 
 export default class FileHandler {
   constructor(file, fileMutex = null, opts = {}) {
@@ -835,15 +836,55 @@ export default class FileHandler {
         // Add a small delay to ensure any pending operations complete
         await new Promise(resolve => setTimeout(resolve, 5));
         // Use global read limiter to prevent file descriptor exhaustion
-        return this.readLimiter(() => this._readWithStreamingInternal(criteria, options, matchesCriteria, serializer));
+        return this.readLimiter(() => this._readWithStreamingRetry(criteria, options, matchesCriteria, serializer));
       });
     } else {
       // Use global read limiter to prevent file descriptor exhaustion
-      return this.readLimiter(() => this._readWithStreamingInternal(criteria, options, matchesCriteria, serializer));
+      return this.readLimiter(() => this._readWithStreamingRetry(criteria, options, matchesCriteria, serializer));
     }
   }
 
-  async _readWithStreamingInternal(criteria, options = {}, matchesCriteria, serializer = null) {
+  async _readWithStreamingRetry(criteria, options = {}, matchesCriteria, serializer = null) {
+    // If no timeout configured, use original implementation without retry
+    if (!options.ioTimeoutMs) {
+      return this._readWithStreamingInternal(criteria, options, matchesCriteria, serializer);
+    }
+
+    const timeoutMs = options.ioTimeoutMs || 5000; // Default 5s timeout per attempt
+    const maxRetries = options.maxRetries || 3;
+
+    return pRetry(async (attempt) => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+      try {
+        const results = await this._readWithStreamingInternal(criteria, options, matchesCriteria, serializer, controller.signal);
+        return results;
+      } catch (error) {
+        if (error.name === 'AbortError' || error.code === 'ETIMEDOUT') {
+          if (this.opts.debugMode) {
+            console.log(`⚠️ Streaming read attempt ${attempt} timed out, retrying...`);
+          }
+          throw error; // p-retry will retry
+        }
+        // For other errors, don't retry
+        throw new pRetry.AbortError(error);
+      } finally {
+        clearTimeout(timeout);
+      }
+    }, {
+      retries: maxRetries,
+      minTimeout: 100,
+      maxTimeout: 1000,
+      onFailedAttempt: (error) => {
+        if (this.opts.debugMode) {
+          console.log(`Streaming read failed (attempt ${error.attemptNumber}), ${error.retriesLeft} retries left`);
+        }
+      }
+    });
+  }
+
+  async _readWithStreamingInternal(criteria, options = {}, matchesCriteria, serializer = null, signal = null) {
     const { limit, skip = 0 } = options; // No default limit
     const results = [];
     let lineNumber = 0;
@@ -870,42 +911,57 @@ export default class FileHandler {
         crlfDelay: Infinity // Better performance
       });
 
+      // Handle abort signal
+      if (signal) {
+        signal.addEventListener('abort', () => {
+          stream.destroy();
+          rl.close();
+        });
+      }
+
       // Process line by line
       for await (const line of rl) {
-        if (lineNumber >= skip) {
-          try {
-            let record;
-            if (serializer && typeof serializer.deserialize === 'function') {
-              // Use serializer for deserialization
-              record = serializer.deserialize(line);
-            } else {
-              // Fallback to JSON.parse for backward compatibility
-              record = JSON.parse(line);
-            }
-            
-            if (record && matchesCriteria(record, criteria)) {
-              // Return raw data - term mapping will be handled by Database layer
-              results.push({ ...record, _: lineNumber });
-              matched++;
-              
-              // Check if we've reached the limit
-              if (results.length >= limit) {
-                break;
-              }
-            }
-          } catch (error) {
-            // CRITICAL FIX: Only log errors if they're not expected during concurrent operations
-            // Don't log JSON parsing errors that occur during file writes
-            if (this.opts && this.opts.debugMode && !error.message.includes('Unexpected')) {
-              console.log(`Error reading line ${lineNumber}:`, error.message);
-            }
-            // Ignore invalid lines - they may be partial writes
-          }
-        } else {
-          skipped++;
+        if (signal && signal.aborted) {
+          break; // Stop if aborted
         }
 
         lineNumber++;
+
+        // Skip lines that were already processed in previous attempts
+        if (lineNumber <= skip) {
+          skipped++;
+          continue;
+        }
+
+        try {
+          let record;
+          if (serializer && typeof serializer.deserialize === 'function') {
+            // Use serializer for deserialization
+            record = serializer.deserialize(line);
+          } else {
+            // Fallback to JSON.parse for backward compatibility
+            record = JSON.parse(line);
+          }
+          
+          if (record && matchesCriteria(record, criteria)) {
+            // Return raw data - term mapping will be handled by Database layer
+            results.push({ ...record, _: lineNumber });
+            matched++;
+            
+            // Check if we've reached the limit
+            if (results.length >= limit) {
+              break;
+            }
+          }
+        } catch (error) {
+          // CRITICAL FIX: Only log errors if they're not expected during concurrent operations
+          // Don't log JSON parsing errors that occur during file writes
+          if (this.opts && this.opts.debugMode && !error.message.includes('Unexpected')) {
+            console.log(`Error reading line ${lineNumber}:`, error.message);
+          }
+          // Ignore invalid lines - they may be partial writes
+        }
+
         processed++;
       }
 
@@ -916,6 +972,10 @@ export default class FileHandler {
       return results;
 
     } catch (error) {
+      if (error.message === 'AbortError') {
+        // Return partial results if aborted
+        return results;
+      }
       console.error('Error in readWithStreaming:', error);
       throw error;
     }

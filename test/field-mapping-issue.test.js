@@ -55,9 +55,9 @@ describe('Field Mapping Issue Test', () => {
     // Insert the exact record from the bug report
     const krishnaRecord = {
       user_id: 'wp_3',
-      email: 'developerguru99@gmail.com',
+      email: 'alex.taylor@example.com',
       payment_email: null,
-      name: 'Krishna Rungta',
+      name: 'Alex Taylor',
       company: '',
       country: 'BR',
       commission_rate: 0.45,
@@ -139,9 +139,9 @@ describe('Field Mapping Issue Test', () => {
     // Insert initial record
     const initialRecord = {
       user_id: 'wp_3',
-      email: 'developerguru99@gmail.com',
+      email: 'alex.taylor@example.com',
       payment_email: null,
-      name: 'Krishna Rungta',
+      name: 'Alex Taylor',
       company: '',
       country: 'BR',
       commission_rate: 0.35,  // Different initial value

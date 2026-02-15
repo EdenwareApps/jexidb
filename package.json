@@ -1,6 +1,6 @@
 {
   "name": "jexidb",
-  "version": "2.1.6",
+  "version": "2.1.7",
   "type": "module",
   "description": "JexiDB is a pure JS NPM library for managing data on disk efficiently, without the need for a server.",
   "main": "./dist/Database.cjs",
@@ -40,7 +40,8 @@
   },
   "dependencies": {
     "async-mutex": "^0.5.0",
-    "p-limit": "^6.1.0"
+    "p-limit": "^6.1.0",
+    "p-retry": "^7.1.1"
   },
   "directories": {
     "test": "test"
