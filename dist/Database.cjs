@@ -4126,6 +4126,37 @@ class FileHandler {
     // Global I/O limiter to prevent file descriptor exhaustion in concurrent operations
     this.readLimiter = pLimit(opts.maxConcurrentReads || 4);
   }
+  _getIoTimeoutMs(override) {
+    if (typeof override === 'number') return override;
+    if (typeof this.opts.ioTimeoutMs === 'number') return this.opts.ioTimeoutMs;
+    return 0;
+  }
+  async _withIoTimeout(fn, timeoutMs, onTimeout) {
+    if (!timeoutMs || timeoutMs <= 0) {
+      return fn();
+    }
+    let timeoutId;
+    const timeoutPromise = new Promise((_, reject) => {
+      timeoutId = setTimeout(() => {
+        if (onTimeout) {
+          try {
+            onTimeout();
+          } catch {}
+        }
+        const err = new Error(`I/O timeout after ${timeoutMs}ms`);
+        err.code = 'ETIMEDOUT';
+        reject(err);
+      }, timeoutMs);
+    });
+    try {
+      return await Promise.race([fn(), timeoutPromise]);
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+    }
+  }
+  async _readWithTimeout(fd, buffer, offset, length, position, timeoutMs) {
+    return this._withIoTimeout(() => fd.read(buffer, offset, length, position), timeoutMs, () => fd.close().catch(() => {}));
+  }
   async truncate(offset) {
     try {
       await fs.promises.access(this.file, fs.constants.F_OK);
@@ -4230,6 +4261,7 @@ class FileHandler {
     if (!(await this.exists())) {
       return Buffer.alloc(0); // Return empty buffer if file doesn't exist
     }
+    const timeoutMs = this._getIoTimeoutMs();
     let fd = await fs.promises.open(this.file, 'r');
     try {
       // CRITICAL FIX: Check file size before attempting to read
@@ -4254,7 +4286,7 @@ class FileHandler {
       let buffer = Buffer.alloc(length);
       const {
         bytesRead
-      } = await fd.read(buffer, 0, length, start);
+      } = await this._readWithTimeout(fd, buffer, 0, length, start, timeoutMs);
       await fd.close();
 
       // CRITICAL FIX: Ensure we read the expected amount of data
