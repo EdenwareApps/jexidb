@@ -489,6 +489,46 @@ describe('exists() Method', () => {
       const existsNonIndexed = await db.exists({ name: 'TV Câmara' });
       expect(typeof existsNonIndexed).toBe('boolean');
     });
+
+    describe('multiExists()', () => {
+      it('batches multiple term checks per field', async () => {
+        const results = await db.multiExists([
+          { id: 'tv', field: 'nameTerms', terms: 'tv' },
+          { id: 'missing', field: 'nameTerms', terms: 'nonexistent' },
+          { id: 'tvGlobo', field: 'nameTerms', terms: ['tv', 'globo'], options: { $all: true } },
+          { id: 'tvExcluded', field: 'nameTerms', terms: 'tv', options: { excludes: ['globo'] } }
+        ]);
+
+        expect(results).toMatchObject({
+          tv: true,
+          missing: false,
+          tvGlobo: true,
+          tvExcluded: true
+        });
+      });
+
+      it('supports multi-field and case-insensitive batches', async () => {
+        const results = await db.multiExists([
+          { id: 'groupBrazil', field: 'group', terms: 'Brazil' },
+          { id: 'mediaVod', field: 'mediaType', terms: 'vod' },
+          { id: 'ciName', field: 'nameTerms', terms: 'TV', options: { caseInsensitive: true } }
+        ]);
+
+        expect(results.groupBrazil).toBe(true);
+        expect(results.mediaVod).toBe(true);
+        expect(results.ciName).toBe(true);
+      });
+
+      it('gracefully handles invalid or empty criteria', async () => {
+        const results = await db.multiExists([
+          { id: 'noField', terms: 'tv' },
+          { id: 'emptyField', field: 'nameTerms' }
+        ]);
+
+        expect(results.noField).toBe(false);
+        expect(results.emptyField).toBe(false);
+      });
+    });
   });
 });
 

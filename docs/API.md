@@ -434,6 +434,35 @@ try {
 }
 ```
 
+### `multiExists(criteriaArray, opts)`
+
+Run batched index-only existence checks using a shared cursor per indexed field. Each entry describes a single field/term set so large batches can avoid thousands of separate `exists()` calls.
+
+```javascript
+const results = await db.multiExists([
+  { id: 'tv', field: 'nameTerms', terms: 'tv' },
+  { id: 'globo', field: 'nameTerms', terms: ['tv', 'globo'], options: { $all: true } },
+  { id: 'liveMatch', field: 'mediaType', terms: 'live' }
+], { allowPartial: true, limit: 2 })
+
+console.log(results.tv)      // true
+console.log(results.globo)   // true
+console.log(results.liveMatch)  // true
+```
+
+**Parameters:**
+
+- `criteriaArray` (Array, required): Each item is `{ field, terms, options?, id? }`. At minimum `field` and `terms` must be provided. `options` follows the same schema as `exists()` (`{ $all, caseInsensitive, excludes }`). Omitting `id` yields stable auto-generated keys.
+- `opts` (Object, optional): `{ allowPartial: boolean, limit: number }`. When `allowPartial` is `true`, the scan exits after `limit` positive matches (defaults to `Infinity`). When `allowPartial` is `false` (default) every entry is evaluated even if matches are found early.
+
+**Returns:** Promise resolving to a map `{ [criteriaId]: boolean }`.
+
+**Tips:**
+
+- Group terms that target the same indexed field so each bucket reuses the same cursor/context.
+- Use `allowPartial + limit` when you only care about a handful of hits and want the batch scan to stop early.
+- Each criterion respects `$all`, `caseInsensitive`, and `excludes`, just like `exists()`.
+
 ### `coverage(fieldName, groups, filterCriteria, options)`
 
 Calculate coverage percentage for grouped include/exclude term sets with optional filtering.

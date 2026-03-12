@@ -3517,6 +3517,56 @@ class Database extends EventEmitter {
   }
 
   /**
+   * Run batched index-only existence checks using a single connection per field.
+   * Each entry must specify { field, terms, options?, id? } so the result map stays stable.
+   *
+   * @param {Array<Object>} criteriaArray
+   * @param {Object} opts
+   * @returns {Promise<Object<string, boolean>>}
+   */
+  async multiExists(criteriaArray, opts = {}) {
+    this._validateInitialization('multiExists')
+
+    if (!Array.isArray(criteriaArray) || criteriaArray.length === 0) {
+      return {}
+    }
+
+    if (!this.indexManager) {
+      return {}
+    }
+
+    const results = {}
+    const perField = new Map()
+
+    for (let i = 0; i < criteriaArray.length; i++) {
+      const raw = criteriaArray[i] || {}
+      const fieldName = raw.field || raw.fieldName || raw.fieldname
+      const terms = raw.terms ?? raw.value
+      const id = raw.id !== undefined && raw.id !== null ? String(raw.id) : `criteria-${i}`
+      const options = raw.options
+
+      results[id] = false
+
+      if (!fieldName || typeof fieldName !== 'string') {
+        continue
+      }
+
+      const bucket = perField.get(fieldName) || []
+      bucket.push({ id, terms, options })
+      perField.set(fieldName, bucket)
+    }
+
+    for (const [field, entries] of perField) {
+      const fieldResults = this.indexManager.multiExists(field, entries, opts)
+      for (const [id, value] of Object.entries(fieldResults)) {
+        results[id] = value
+      }
+    }
+
+    return results
+  }
+
+  /**
    * Check if any records exist using full query criteria
    * Uses index intersection when possible for maximum performance
    * @private
