@@ -2154,6 +2154,247 @@ class IndexManager {
     return candidateLines.size > 0;
   }
 
+  /**
+   * Evaluate many index-only existence checks while sharing the same field data.
+   * Returns a map keyed by the criteria id so callers can reuse a single scan per field.
+   *
+   * @param {string} fieldName - Indexed field name
+   * @param {Array<Object>} criteriaArray - Array of { id, terms, options }
+   * @param {Object} opts - { limit, allowPartial } (limit only applies when allowPartial is true)
+   * @returns {Object<string, boolean>} - Map of criteria id to boolean existence
+   */
+  multiExists(fieldName, criteriaArray, opts = {}) {
+    const results = {};
+    if (!Array.isArray(criteriaArray) || criteriaArray.length === 0) {
+      return results;
+    }
+    const prepared = [];
+    for (let i = 0; i < criteriaArray.length; i++) {
+      const entry = criteriaArray[i] || {};
+      const key = entry.id !== undefined && entry.id !== null ? String(entry.id) : `criteria-${i}`;
+      results[key] = false;
+      prepared.push({
+        id: key,
+        terms: entry.terms,
+        options: entry.options || {}
+      });
+    }
+    if (!fieldName || typeof fieldName !== 'string') {
+      return results;
+    }
+    const fieldIndex = this.index?.data?.[fieldName];
+    if (!fieldIndex || typeof fieldIndex !== 'object') {
+      return results;
+    }
+    const termManager = this.database?.termManager;
+    const isTermMappingField = Boolean(termManager && termManager.termMappingFields && termManager.termMappingFields.includes(fieldName));
+    const normalizedLimit = Number.isFinite(opts.limit) && opts.limit > 0 ? Math.floor(opts.limit) : Infinity;
+    const allowPartial = Boolean(opts.allowPartial);
+    const positiveTarget = allowPartial ? Math.max(1, normalizedLimit) : Infinity;
+    const termCache = new Map();
+    let caseInsensitiveLookup = null;
+    let termMappingLookup = null;
+    const normalizeValues = value => {
+      if (value === null || value === undefined) {
+        return [];
+      }
+      if (Array.isArray(value)) {
+        return value.slice();
+      }
+      return [value];
+    };
+    const buildCaseInsensitiveLookup = () => {
+      const map = new Map();
+      for (const key in fieldIndex) {
+        const lowerKey = key.toLowerCase();
+        if (!map.has(lowerKey)) {
+          map.set(lowerKey, key);
+        }
+      }
+      return map;
+    };
+    const buildTermMappingLookup = () => {
+      const map = new Map();
+      const termToId = termManager?.termToId;
+      if (termToId) {
+        for (const [termStr, id] of termToId.entries()) {
+          const lower = termStr.toLowerCase();
+          if (!map.has(lower)) {
+            map.set(lower, String(id));
+          }
+        }
+      }
+      return map;
+    };
+    const resolveTermKey = (value, caseInsensitive) => {
+      if (value === null || value === undefined) {
+        return null;
+      }
+      if (isTermMappingField) {
+        if (typeof value === 'string') {
+          if (caseInsensitive) {
+            if (!termMappingLookup) {
+              termMappingLookup = buildTermMappingLookup();
+            }
+            return termMappingLookup.get(value.toLowerCase()) ?? null;
+          }
+          const termId = termManager?.getTermIdWithoutIncrement(String(value));
+          if (termId === undefined || termId === null) {
+            return null;
+          }
+          return String(termId);
+        }
+        return String(value);
+      }
+      if (caseInsensitive && typeof value === 'string') {
+        if (!caseInsensitiveLookup) {
+          caseInsensitiveLookup = buildCaseInsensitiveLookup();
+        }
+        return caseInsensitiveLookup.get(value.toLowerCase()) ?? null;
+      }
+      return String(value);
+    };
+    const ensureTermEntry = termKey => {
+      if (!termCache.has(termKey)) {
+        const data = fieldIndex[termKey];
+        const entry = {
+          data,
+          hasData: Boolean(data && (data.set && data.set.size > 0 || data.ranges && data.ranges.length > 0)),
+          lineArray: null
+        };
+        termCache.set(termKey, entry);
+      }
+      return termCache.get(termKey);
+    };
+    const getLineArray = entry => {
+      if (!entry.hasData || !entry.data) return [];
+      if (!entry.lineArray) {
+        entry.lineArray = this._getAllLineNumbers(entry.data);
+      }
+      return entry.lineArray;
+    };
+    const applyExcludes = (lineSet, excludeKeys) => {
+      if (excludeKeys.length === 0) {
+        return lineSet.size > 0;
+      }
+      for (const excludeKey of excludeKeys) {
+        const excludeEntry = ensureTermEntry(excludeKey);
+        if (!excludeEntry.hasData) continue;
+        const excludeLines = getLineArray(excludeEntry);
+        for (const line of excludeLines) {
+          lineSet.delete(line);
+        }
+        if (lineSet.size === 0) {
+          return false;
+        }
+      }
+      return lineSet.size > 0;
+    };
+    let successes = 0;
+    for (const criterion of prepared) {
+      if (successes >= positiveTarget) {
+        break;
+      }
+      const {
+        id,
+        terms,
+        options
+      } = criterion;
+      const {
+        $all = false,
+        caseInsensitive = false,
+        excludes = []
+      } = options;
+      const normalizedTerms = normalizeValues(terms);
+      if (normalizedTerms.length === 0) {
+        continue;
+      }
+      const normalizedExcludes = normalizeValues(excludes);
+      const resolvedKeys = [];
+      const seenKeys = new Set();
+      let missingRequiredTerm = false;
+      for (const term of normalizedTerms) {
+        const termKey = resolveTermKey(term, caseInsensitive);
+        if (termKey === null) {
+          if ($all) {
+            missingRequiredTerm = true;
+            break;
+          }
+          continue;
+        }
+        if (!seenKeys.has(termKey)) {
+          seenKeys.add(termKey);
+          resolvedKeys.push(termKey);
+        }
+      }
+      if ($all && missingRequiredTerm) {
+        continue;
+      }
+      if (resolvedKeys.length === 0) {
+        continue;
+      }
+      const excludeKeySet = [];
+      const seenExcludeKeys = new Set();
+      for (const excludeTerm of normalizedExcludes) {
+        const excludeKey = resolveTermKey(excludeTerm, caseInsensitive);
+        if (excludeKey && !seenExcludeKeys.has(excludeKey)) {
+          seenExcludeKeys.add(excludeKey);
+          excludeKeySet.push(excludeKey);
+        }
+      }
+      let match = false;
+      if ($all) {
+        let intersection = null;
+        let failed = false;
+        for (const termKey of resolvedKeys) {
+          const entry = ensureTermEntry(termKey);
+          if (!entry.hasData) {
+            failed = true;
+            break;
+          }
+          const lines = getLineArray(entry);
+          if (lines.length === 0) {
+            failed = true;
+            break;
+          }
+          const currentSet = new Set(lines);
+          if (intersection === null) {
+            intersection = currentSet;
+          } else {
+            intersection = new Set([...intersection].filter(value => currentSet.has(value)));
+            if (intersection.size === 0) {
+              failed = true;
+              break;
+            }
+          }
+        }
+        if (!failed && intersection && intersection.size > 0) {
+          match = applyExcludes(intersection, excludeKeySet);
+        }
+      } else if (excludeKeySet.length === 0) {
+        match = resolvedKeys.some(termKey => ensureTermEntry(termKey).hasData);
+      } else {
+        const candidates = new Set();
+        for (const termKey of resolvedKeys) {
+          const entry = ensureTermEntry(termKey);
+          if (!entry.hasData) continue;
+          const lines = getLineArray(entry);
+          for (const line of lines) {
+            candidates.add(line);
+          }
+        }
+        if (candidates.size > 0) {
+          match = applyExcludes(candidates, excludeKeySet);
+        }
+      }
+      results[id] = Boolean(match);
+      if (match) {
+        successes += 1;
+      }
+    }
+    return results;
+  }
+
   // Ultra-fast load with minimal conversions
   load(index) {
     // CRITICAL FIX: Check if index is already loaded by looking for actual data, not just empty field structures
@@ -11654,6 +11895,51 @@ class Database extends events.EventEmitter {
       // Invalid input type
       throw new Error('First parameter must be a string (fieldName) or object (criteria)');
     }
+  }
+
+  /**
+   * Run batched index-only existence checks using a single connection per field.
+   * Each entry must specify { field, terms, options?, id? } so the result map stays stable.
+   *
+   * @param {Array<Object>} criteriaArray
+   * @param {Object} opts
+   * @returns {Promise<Object<string, boolean>>}
+   */
+  async multiExists(criteriaArray, opts = {}) {
+    this._validateInitialization('multiExists');
+    if (!Array.isArray(criteriaArray) || criteriaArray.length === 0) {
+      return {};
+    }
+    if (!this.indexManager) {
+      return {};
+    }
+    const results = {};
+    const perField = new Map();
+    for (let i = 0; i < criteriaArray.length; i++) {
+      const raw = criteriaArray[i] || {};
+      const fieldName = raw.field || raw.fieldName || raw.fieldname;
+      const terms = raw.terms ?? raw.value;
+      const id = raw.id !== undefined && raw.id !== null ? String(raw.id) : `criteria-${i}`;
+      const options = raw.options;
+      results[id] = false;
+      if (!fieldName || typeof fieldName !== 'string') {
+        continue;
+      }
+      const bucket = perField.get(fieldName) || [];
+      bucket.push({
+        id,
+        terms,
+        options
+      });
+      perField.set(fieldName, bucket);
+    }
+    for (const [field, entries] of perField) {
+      const fieldResults = this.indexManager.multiExists(field, entries, opts);
+      for (const [id, value] of Object.entries(fieldResults)) {
+        results[id] = value;
+      }
+    }
+    return results;
   }
 
   /**
