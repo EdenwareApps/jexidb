@@ -1354,6 +1354,7 @@ class Database extends EventEmitter {
         const startLineNumber = this.pendingIndexUpdates[0].lineNumber
         
         // Process index updates in batch
+        await this._ensureLazyIndexLoaded()
         await this.indexManager.addBatch(records, startLineNumber)
         
         // Clear pending updates
@@ -2729,6 +2730,7 @@ class Database extends EventEmitter {
         
         // CRITICAL FIX: Remove old terms from index before adding new ones
         if (this.indexManager) {
+          await this._ensureLazyIndexLoaded()
           await this.indexManager.remove(record)
           if (this.opts.debugMode) {
             console.log(`🔄 UPDATE: Removed old terms from index for record ${record.id}`)
@@ -2767,6 +2769,7 @@ class Database extends EventEmitter {
         }
         
         const indexUpdateStart = Date.now()
+        await this._ensureLazyIndexLoaded()
         await this.indexManager.update(record, updated, lineNumber)
         if (this.opts.debugMode) {
           console.log(`🔄 UPDATE: Index update completed in ${Date.now() - indexUpdateStart}ms`)
@@ -2838,6 +2841,7 @@ class Database extends EventEmitter {
         // Remove term mapping
         this.removeTermMapping(record)
         
+        await this._ensureLazyIndexLoaded()
         await this.indexManager.remove(record)
         
         // Remove record from writeBuffer or mark as deleted
@@ -3509,6 +3513,7 @@ class Database extends EventEmitter {
       // Legacy syntax: exists(fieldName, terms, options)
       // Also handle invalid inputs (null, array) for backward compatibility
       const fieldName = fieldNameOrCriteria
+      await this._ensureLazyIndexLoaded()
       return this.indexManager.exists(fieldName, terms, options)
     } else {
       // Invalid input type
@@ -3535,6 +3540,7 @@ class Database extends EventEmitter {
       return {}
     }
 
+    await this._ensureLazyIndexLoaded()
     const results = {}
     const perField = new Map()
 
@@ -3596,7 +3602,7 @@ class Database extends EventEmitter {
       if (this.opts.debugMode) {
         console.log(`⚡ exists() using INDEX-ONLY optimization for: ${JSON.stringify(criteria)}`)
       }
-      return this._existsIndexOnly(criteria)
+      return await this._existsIndexOnly(criteria)
     }
 
     // 🎯 FALLBACK: Use the same find() logic for complex criteria or non-indexed fields
@@ -3653,7 +3659,8 @@ class Database extends EventEmitter {
    * @param {object} criteria - Simple criteria with only indexed fields
    * @returns {boolean} - True if any records match the criteria
    */
-  _existsIndexOnly(criteria) {
+  async _existsIndexOnly(criteria) {
+    await this._ensureLazyIndexLoaded()
     const criteriaEntries = Object.entries(criteria)
 
     // For single field criteria, use direct indexManager.exists()
@@ -5331,7 +5338,7 @@ class Database extends EventEmitter {
   }
 
   _hasActualIndexData() {
-    if (!this.indexManager) return false
+    if (!this.indexManager || this.indexManager.indexLoaded === false) return false
     
     const data = this.indexManager.index.data
     for (const field in data) {
@@ -5344,6 +5351,55 @@ class Database extends EventEmitter {
       }
     }
     return false
+  }
+
+  async _loadIndexDataFromFile() {
+    const idxPath = this.normalizedFile.replace('.jdb', '.idx.jdb')
+    try {
+      await fs.promises.access(idxPath)
+    } catch (error) {
+      return null
+    }
+
+    try {
+      const raw = await fs.promises.readFile(idxPath, 'utf8')
+      const parsed = JSON.parse(raw)
+      return parsed?.index ?? null
+    } catch (error) {
+      if (this.opts.debugMode) {
+        console.error(`⚠️ _loadIndexDataFromFile: Failed to read or parse ${idxPath}`, error)
+      }
+      return null
+    }
+  }
+
+  async _ensureLazyIndexLoaded() {
+    if (!this.indexManager || this.indexManager.indexLoaded) return
+    if (!this.indexManager.indexedFields || this.indexManager.indexedFields.length === 0) {
+      this.indexManager.indexLoaded = true
+      return
+    }
+
+    if (this._lazyIndexLoadPromise) {
+      return this._lazyIndexLoadPromise
+    }
+
+    this._lazyIndexLoadPromise = (async () => {
+      const indexData = await this._loadIndexDataFromFile()
+      if (indexData) {
+        this.indexManager.load(indexData)
+      } else {
+        if (this.opts.debugMode) {
+          console.log('🔍 _ensureLazyIndexLoaded: No index file found or invalid index data, continuing with empty index')
+        }
+        this.indexManager.indexLoaded = true
+        this.indexManager.markIndexUsed()
+      }
+
+      this._lazyIndexLoadPromise = null
+    })()
+
+    return this._lazyIndexLoadPromise
   }
 
   /**
@@ -6213,6 +6269,7 @@ class Database extends EventEmitter {
           
           // Update index
           const absoluteLineNumber = this._getAbsoluteLineNumber(targetIndex)
+          await this._ensureLazyIndexLoaded()
           await this.indexManager.update(record, record, absoluteLineNumber)
         }
         
@@ -6233,6 +6290,7 @@ class Database extends EventEmitter {
             this.removeTermMapping(record)
             
             // Remove from index
+            await this._ensureLazyIndexLoaded()
             await this.indexManager.remove(record)
             
             // Remove from writeBuffer or mark as deleted
@@ -6313,11 +6371,14 @@ class Database extends EventEmitter {
         }
       }
       
-      // 2. Mark as closed (but not destroyed) to allow reopening
+      // 2. Cancel any pending idle unload timers before shutdown
+      this.indexManager?.cancelIdleUnloadTimer?.()
+
+      // 3. Mark as closed (but not destroyed) to allow reopening
       this.closed = true
       this.initialized = false
       
-      // 3. Clear any remaining state for clean reopening
+      // 4. Clear any remaining state for clean reopening
       this.writeBuffer = []
       this.writeBufferOffsets = []
       this.writeBufferSizes = []
@@ -6346,6 +6407,13 @@ class Database extends EventEmitter {
     if (this.indexManager) {
       try {
         const idxPath = this.normalizedFile.replace('.jdb', '.idx.jdb')
+        if (this.indexManager.indexLoaded === false && fs.existsSync(idxPath)) {
+          if (this.opts.debugMode) {
+            console.log(`⚠️ _saveIndexDataToFile: Index unloaded in memory, preserving existing index file ${idxPath}`)
+          }
+          return
+        }
+
         const indexJSON = this.indexManager.indexedFields && this.indexManager.indexedFields.length > 0 ? this.indexManager.toJSON() : {}
         
         // Check if index is empty

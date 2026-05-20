@@ -9,6 +9,10 @@ export default class IndexManager {
     this.rangeThreshold = 10 // Sensible threshold: 10+ consecutive numbers justify ranges
     this.binarySearchThreshold = 32 // Much higher for better performance
     this.database = database // Reference to database for term manager access
+    this.indexLoaded = false
+    this.indexIdleUnloadMs = typeof this.opts.indexIdleUnloadMs === 'number' ? this.opts.indexIdleUnloadMs : 30000
+    this._idleUnloadTimer = null
+    this._indexLoadPromise = null
     
     // CRITICAL: Use database mutex to prevent deadlocks
     // If no database mutex provided, create a local one (for backward compatibility)
@@ -59,6 +63,53 @@ export default class IndexManager {
         }
       }
     }
+  }
+
+  _clearIdleUnloadTimer() {
+    if (this._idleUnloadTimer) {
+      clearTimeout(this._idleUnloadTimer)
+      this._idleUnloadTimer = null
+    }
+  }
+
+  cancelIdleUnloadTimer() {
+    this._clearIdleUnloadTimer()
+  }
+
+  markIndexUsed() {
+    if (!this.indexLoaded) return
+
+    this._clearIdleUnloadTimer()
+    if (this.indexIdleUnloadMs > 0) {
+      const timer = setTimeout(() => {
+        try {
+          this.unload()
+        } catch (error) {
+          if (this.opts.debugMode) {
+            console.error('⚠️ IndexManager.markIndexUsed: Failed to unload index', error)
+          }
+        }
+      }, this.indexIdleUnloadMs)
+      if (timer && typeof timer.unref === 'function') {
+        timer.unref()
+      }
+      this._idleUnloadTimer = timer
+    }
+  }
+
+  unload() {
+    if (!this.indexLoaded) return
+    if (this.opts.debugMode) {
+      console.log(`🧹 IndexManager.unload: Unloading index data after ${this.indexIdleUnloadMs}ms idle`)
+    }
+
+    this._clearIdleUnloadTimer()
+    const newData = {}
+    for (const field of this.indexedFields) {
+      newData[field] = {}
+    }
+    this.index.data = newData
+    this.indexLoaded = false
   }
 
   /**
@@ -466,6 +517,7 @@ export default class IndexManager {
 
   // OPTIMIZATION 6: Ultra-fast add operation with incremental index updates
   async add(row, lineNumber) {
+    this.markIndexUsed()
     if (typeof row !== 'object' || !row) {
       throw new Error('Invalid \'row\' parameter, it must be an object')
     }
@@ -549,6 +601,7 @@ export default class IndexManager {
    * @param {number} startLineNumber - Starting line number
    */
   async addBatch(records, startLineNumber) {
+    this.markIndexUsed()
     if (!records || !records.length) return
     
     // OPTIMIZATION 6: Pre-allocate index structures for better performance
@@ -672,6 +725,7 @@ export default class IndexManager {
 
   // Cleanup method to free memory
   cleanup() {
+    this._clearIdleUnloadTimer()
     const data = this.index.data
     for (const field in data) {
       for (const value in data[field]) {
@@ -696,6 +750,7 @@ export default class IndexManager {
 
   // Clear all indexes
   clear() {
+    this._clearIdleUnloadTimer()
     this.index.data = {}
     this.totalLines = 0
   }
@@ -704,6 +759,7 @@ export default class IndexManager {
 
   // Update a record in the index
   async update(oldRecord, newRecord, lineNumber = null) {
+    this.markIndexUsed()
     if (!oldRecord || !newRecord) return
     
     // Remove old record by ID
@@ -732,6 +788,7 @@ export default class IndexManager {
 
   // Remove a record from the index
   async remove(record) {
+    this.markIndexUsed()
     if (!record) return
     
     // If record is an array of line numbers, use the original method
@@ -919,6 +976,7 @@ export default class IndexManager {
 
   // Ultra-fast query with early exit and smart processing
   query(criteria, options = {}) {
+    this.markIndexUsed()
     if (typeof options === 'boolean') {
       options = { matchAny: options };
     }
@@ -1443,6 +1501,7 @@ export default class IndexManager {
    * indexManager.exists('nameTerms', ['tv', 'news'], { $all: true, excludes: ['sports'] })
    */
   exists(fieldName, terms, options = {}) {
+    this.markIndexUsed()
     // Early exit: validate fieldName
     if (!fieldName || typeof fieldName !== 'string') {
       return false;
@@ -1823,6 +1882,7 @@ export default class IndexManager {
    * @returns {Object<string, boolean>} - Map of criteria id to boolean existence
    */
   multiExists(fieldName, criteriaArray, opts = {}) {
+    this.markIndexUsed()
     const results = {}
     if (!Array.isArray(criteriaArray) || criteriaArray.length === 0) {
       return results
@@ -2232,6 +2292,8 @@ export default class IndexManager {
         console.log(`🔍 IndexManager.load: No data loaded, preserving initialized fields: ${Object.keys(this.index.data).join(', ')}`)
       }
       // Keep the current index with initialized fields
+      this.indexLoaded = true
+      this.markIndexUsed()
       return
     }
     
@@ -2244,6 +2306,8 @@ export default class IndexManager {
     }
 
     this.index = processedIndex
+    this.indexLoaded = true
+    this.markIndexUsed()
   }
 
   /**
@@ -2267,14 +2331,9 @@ export default class IndexManager {
         }
       }
     }
-    
-    if (this.opts.debugMode) {
-      console.log(`🔍 IndexManager._initializeDefaults: Initialized with fields: ${Object.keys(this.index.data).join(', ')}`)
-    }
-  }
-  
-  readColumnIndex(column) {
-    return new Set((this.index.data && this.index.data[column]) ? Object.keys(this.index.data[column]) : [])
+
+    this.indexLoaded = true
+    this.markIndexUsed()
   }
 
   /**

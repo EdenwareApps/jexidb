@@ -174,7 +174,15 @@ export class QueryManager {
       const results = await this.findWithStreaming(criteria, options);
       count = results.length;
     } else {
-      // OPTIMIZATION: For indexed strategy, use indexManager.query().size directly
+      try {
+        await this.database._ensureLazyIndexLoaded()
+      } catch (error) {
+        if (this.opts.debugMode) {
+          console.log('⚠️ _ensureLazyIndexLoaded failed in count, falling back to streaming', error.message || error)
+        }
+        const streamingResults = await this.findWithStreaming(criteria, { ...options, forceFullScan: true })
+        return streamingResults.length
+      }
       // This avoids reading actual records from the file - much faster!
       const lineNumbers = this.indexManager.query(criteria, options);
       
@@ -256,6 +264,23 @@ export class QueryManager {
       // OPTIMIZATION: Try to use indices for pre-filtering when possible
       const indexableFields = this._getIndexableFields(criteria);
       if (indexableFields.length > 0) {
+        try {
+          await this.database._ensureLazyIndexLoaded()
+        } catch (error) {
+          if (this.opts.debugMode) {
+            console.log('⚠️ _ensureLazyIndexLoaded failed, falling back to full streaming', error.message || error)
+          }
+          return this._streamAllRecords(criteria, streamingOptions)
+        }
+
+        const usableIndexableFields = indexableFields.filter(field => this.indexManager.hasUsableIndexData(field));
+        if (usableIndexableFields.length !== indexableFields.length) {
+          if (this.opts.debugMode) {
+            console.log('🌊 Falling back to full streaming because some indexed fields lack usable index data');
+          }
+          return this._streamAllRecords(criteria, streamingOptions)
+        }
+
         if (this.opts.debugMode) {
           console.log(`🌊 Using pre-filtered streaming with ${indexableFields.length} indexable fields`);
         }
@@ -488,46 +513,80 @@ export class QueryManager {
       batches.push(lineNumbers.slice(i, i + batchSize));
     }
     
-    for (const batch of batches) {
-      // OPTIMIZATION: Use ranges instead of reading entire file
-      const ranges = this.database.getRanges(batch);
-      const groupedRanges = await this.fileHandler.groupedRanges(ranges);
-      
-      const fd = await fs.open(this.fileHandler.file, 'r');
-      
-      try {
-        for (const groupedRange of groupedRanges) {
-          for await (const row of this.fileHandler.readGroupedRange(groupedRange, fd)) {
-            if (row.line && row.line.trim()) {
-              try {
-                // CRITICAL FIX: Use serializer.deserialize instead of JSON.parse to handle array format
-                const record = this.database.serializer.deserialize(row.line);
-                
-                // OPTIMIZATION 4: Use optimized criteria matching for pre-filtered records
-                if (this._matchesCriteriaOptimized(record, criteria, options)) {
-                  // SPACE OPTIMIZATION: Restore term IDs to terms for user (unless disabled)
-                  const recordWithTerms = options.restoreTerms !== false ? 
-                    this.database.restoreTermIdsAfterDeserialization(record) : 
-                    record
-                  results.push(recordWithTerms);
+    const persistedCount = Array.isArray(this.database.offsets) ? this.database.offsets.length : 0
+    const fileLineNumbers = []
+    const writeBufferLineNumbers = []
+
+    for (const lineNumber of lineNumbers) {
+      if (lineNumber >= persistedCount) {
+        writeBufferLineNumbers.push(lineNumber)
+      } else {
+        fileLineNumbers.push(lineNumber)
+      }
+    }
+
+    if (fileLineNumbers.length > 0) {
+      const fileBatches = []
+      for (let i = 0; i < fileLineNumbers.length; i += batchSize) {
+        fileBatches.push(fileLineNumbers.slice(i, i + batchSize));
+      }
+
+      for (const batch of fileBatches) {
+        // OPTIMIZATION: Use ranges instead of reading entire file
+        const ranges = this.database.getRanges(batch);
+        const groupedRanges = await this.fileHandler.groupedRanges(ranges);
+        
+        const fd = await fs.open(this.fileHandler.file, 'r');
+        
+        try {
+          for (const groupedRange of groupedRanges) {
+            for await (const row of this.fileHandler.readGroupedRange(groupedRange, fd)) {
+              if (row.line && row.line.trim()) {
+                try {
+                  const record = this.database.serializer.deserialize(row.line);
                   
-                  // Check limit
-                  if (options.limit && results.length >= options.limit) {
-                    return this._applyOrdering(results, options);
+                  if (this._matchesCriteriaOptimized(record, criteria, options)) {
+                    const recordWithTerms = options.restoreTerms !== false ? 
+                      this.database.restoreTermIdsAfterDeserialization(record) : 
+                      record
+                    results.push(recordWithTerms);
+                    
+                    if (options.limit && results.length >= options.limit) {
+                      return this._applyOrdering(results, options);
+                    }
                   }
+                } catch (error) {
+                  continue;
                 }
-              } catch (error) {
-                // Skip invalid lines
-                continue;
               }
             }
           }
+        } finally {
+          await fd.close();
         }
-      } finally {
-        await fd.close();
       }
     }
-    
+
+    if (writeBufferLineNumbers.length > 0) {
+      writeBufferLineNumbers.sort((a, b) => a - b)
+      for (const lineNumber of writeBufferLineNumbers) {
+        const writeBufferIndex = lineNumber - persistedCount
+        const record = this.database.writeBuffer[writeBufferIndex]
+        if (!record) continue
+
+        if (this._matchesCriteriaOptimized(record, criteria, options)) {
+          const recordWithTerms = options.restoreTerms !== false ? 
+            this.database.restoreTermIdsAfterDeserialization(record) : 
+            record
+          results.push(recordWithTerms)
+
+          if (options.limit && results.length >= options.limit) {
+            return this._applyOrdering(results, options);
+          }
+        }
+      }
+    }
+
     return this._applyOrdering(results, options);
   }
 
@@ -661,6 +720,14 @@ export class QueryManager {
       console.log('📊 Using indexed strategy with real streaming');
     }
     
+    try {
+      await this.database._ensureLazyIndexLoaded()
+    } catch (error) {
+      if (this.opts.debugMode) {
+        console.log('⚠️ _ensureLazyIndexLoaded failed, falling back to full streaming', error.message || error)
+      }
+      return this.findWithStreaming(criteria, { ...options, forceFullScan: true })
+    }
     let results = []
     const limit = options.limit // No default limit - return all results unless explicitly limited
 
@@ -1264,7 +1331,7 @@ export class QueryManager {
 
     // OPTIMIZATION 2: Hybrid strategy - use pre-filtered streaming when index is empty
     const indexData = this.indexManager.index.data || {};
-    const hasIndexData = Object.keys(indexData).length > 0;
+    const hasIndexData = Object.keys(indexData).some(field => this.indexManager.hasUsableIndexData(field));
     if (!hasIndexData) {
       // Check if we can use pre-filtered streaming with term mapping
       if (this.opts.termMapping && this._canUsePreFilteredStreaming(criteria)) {
