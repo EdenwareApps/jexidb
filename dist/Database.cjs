@@ -418,6 +418,10 @@ class IndexManager {
     this.rangeThreshold = 10; // Sensible threshold: 10+ consecutive numbers justify ranges
     this.binarySearchThreshold = 32; // Much higher for better performance
     this.database = database; // Reference to database for term manager access
+    this.indexLoaded = false;
+    this.indexIdleUnloadMs = typeof this.opts.indexIdleUnloadMs === 'number' ? this.opts.indexIdleUnloadMs : 30000;
+    this._idleUnloadTimer = null;
+    this._indexLoadPromise = null;
 
     // CRITICAL: Use database mutex to prevent deadlocks
     // If no database mutex provided, create a local one (for backward compatibility)
@@ -462,6 +466,52 @@ class IndexManager {
         }
       }
     }
+  }
+  _clearIdleUnloadTimer() {
+    if (this._idleUnloadTimer) {
+      clearTimeout(this._idleUnloadTimer);
+      this._idleUnloadTimer = null;
+    }
+  }
+  cancelIdleUnloadTimer() {
+    this._clearIdleUnloadTimer();
+  }
+  markIndexUsed() {
+    if (!this.indexLoaded) return;
+    this._clearIdleUnloadTimer();
+    if (this.indexIdleUnloadMs > 0) {
+      const timer = setTimeout(() => {
+        try {
+          this.unload();
+        } catch (error) {
+          if (this.opts.debugMode) {
+            console.error('⚠️ IndexManager.markIndexUsed: Failed to unload index', error);
+          }
+        }
+      }, this.indexIdleUnloadMs);
+      if (timer && typeof timer.unref === 'function') {
+        timer.unref();
+      }
+      this._idleUnloadTimer = timer;
+    }
+  }
+  unload() {
+    if (!this.indexLoaded) return;
+    if (this.opts.debugMode) {
+      console.log(`🧹 IndexManager.unload: Unloading index data after ${this.indexIdleUnloadMs}ms idle`);
+    }
+
+    // Mark rebuild as needed so score() can trigger lazy reload
+    if (this.database) {
+      this.database._indexRebuildNeeded = true;
+    }
+    this._clearIdleUnloadTimer();
+    const newData = {};
+    for (const field of this.indexedFields) {
+      newData[field] = {};
+    }
+    this.index.data = newData;
+    this.indexLoaded = false;
   }
 
   /**
@@ -875,6 +925,7 @@ class IndexManager {
 
   // OPTIMIZATION 6: Ultra-fast add operation with incremental index updates
   async add(row, lineNumber) {
+    this.markIndexUsed();
     if (typeof row !== 'object' || !row) {
       throw new Error('Invalid \'row\' parameter, it must be an object');
     }
@@ -956,6 +1007,7 @@ class IndexManager {
    * @param {number} startLineNumber - Starting line number
    */
   async addBatch(records, startLineNumber) {
+    this.markIndexUsed();
     if (!records || !records.length) return;
 
     // OPTIMIZATION 6: Pre-allocate index structures for better performance
@@ -1072,6 +1124,7 @@ class IndexManager {
 
   // Cleanup method to free memory
   cleanup() {
+    this._clearIdleUnloadTimer();
     const data = this.index.data;
     for (const field in data) {
       for (const value in data[field]) {
@@ -1096,12 +1149,14 @@ class IndexManager {
 
   // Clear all indexes
   clear() {
+    this._clearIdleUnloadTimer();
     this.index.data = {};
     this.totalLines = 0;
   }
 
   // Update a record in the index
   async update(oldRecord, newRecord, lineNumber = null) {
+    this.markIndexUsed();
     if (!oldRecord || !newRecord) return;
 
     // Remove old record by ID
@@ -1130,6 +1185,7 @@ class IndexManager {
 
   // Remove a record from the index
   async remove(record) {
+    this.markIndexUsed();
     if (!record) return;
 
     // If record is an array of line numbers, use the original method
@@ -1307,6 +1363,7 @@ class IndexManager {
 
   // Ultra-fast query with early exit and smart processing
   query(criteria, options = {}) {
+    this.markIndexUsed();
     if (typeof options === 'boolean') {
       options = {
         matchAny: options
@@ -1802,6 +1859,7 @@ class IndexManager {
    * indexManager.exists('nameTerms', ['tv', 'news'], { $all: true, excludes: ['sports'] })
    */
   exists(fieldName, terms, options = {}) {
+    this.markIndexUsed();
     // Early exit: validate fieldName
     if (!fieldName || typeof fieldName !== 'string') {
       return false;
@@ -2164,6 +2222,7 @@ class IndexManager {
    * @returns {Object<string, boolean>} - Map of criteria id to boolean existence
    */
   multiExists(fieldName, criteriaArray, opts = {}) {
+    this.markIndexUsed();
     const results = {};
     if (!Array.isArray(criteriaArray) || criteriaArray.length === 0) {
       return results;
@@ -2549,6 +2608,8 @@ class IndexManager {
         console.log(`🔍 IndexManager.load: No data loaded, preserving initialized fields: ${Object.keys(this.index.data).join(', ')}`);
       }
       // Keep the current index with initialized fields
+      this.indexLoaded = true;
+      this.markIndexUsed();
       return;
     }
 
@@ -2560,6 +2621,8 @@ class IndexManager {
       }
     }
     this.index = processedIndex;
+    this.indexLoaded = true;
+    this.markIndexUsed();
   }
 
   /**
@@ -2585,12 +2648,8 @@ class IndexManager {
         }
       }
     }
-    if (this.opts.debugMode) {
-      console.log(`🔍 IndexManager._initializeDefaults: Initialized with fields: ${Object.keys(this.index.data).join(', ')}`);
-    }
-  }
-  readColumnIndex(column) {
-    return new Set(this.index.data && this.index.data[column] ? Object.keys(this.index.data[column]) : []);
+    this.indexLoaded = true;
+    this.markIndexUsed();
   }
 
   /**
@@ -5985,7 +6044,18 @@ class QueryManager {
       const results = await this.findWithStreaming(criteria, options);
       count = results.length;
     } else {
-      // OPTIMIZATION: For indexed strategy, use indexManager.query().size directly
+      try {
+        await this.database._ensureLazyIndexLoaded();
+      } catch (error) {
+        if (this.opts.debugMode) {
+          console.log('⚠️ _ensureLazyIndexLoaded failed in count, falling back to streaming', error.message || error);
+        }
+        const streamingResults = await this.findWithStreaming(criteria, {
+          ...options,
+          forceFullScan: true
+        });
+        return streamingResults.length;
+      }
       // This avoids reading actual records from the file - much faster!
       const lineNumbers = this.indexManager.query(criteria, options);
       if (lineNumbers.size === 0) {
@@ -6071,6 +6141,21 @@ class QueryManager {
       // OPTIMIZATION: Try to use indices for pre-filtering when possible
       const indexableFields = this._getIndexableFields(criteria);
       if (indexableFields.length > 0) {
+        try {
+          await this.database._ensureLazyIndexLoaded();
+        } catch (error) {
+          if (this.opts.debugMode) {
+            console.log('⚠️ _ensureLazyIndexLoaded failed, falling back to full streaming', error.message || error);
+          }
+          return this._streamAllRecords(criteria, streamingOptions);
+        }
+        const usableIndexableFields = indexableFields.filter(field => this.indexManager.hasUsableIndexData(field));
+        if (usableIndexableFields.length !== indexableFields.length) {
+          if (this.opts.debugMode) {
+            console.log('🌊 Falling back to full streaming because some indexed fields lack usable index data');
+          }
+          return this._streamAllRecords(criteria, streamingOptions);
+        }
         if (this.opts.debugMode) {
           console.log(`🌊 Using pre-filtered streaming with ${indexableFields.length} indexable fields`);
         }
@@ -6270,60 +6355,84 @@ class QueryManager {
     for (let i = 0; i < lineNumbers.length; i += batchSize) {
       batches.push(lineNumbers.slice(i, i + batchSize));
     }
-    for (const batch of batches) {
-      // OPTIMIZATION: Use ranges instead of reading entire file
-      const ranges = this.database.getRanges(batch);
-      const groupedRanges = await this.fileHandler.groupedRanges(ranges);
-      const fd = await fs.promises.open(this.fileHandler.file, 'r');
-      try {
-        for (const groupedRange of groupedRanges) {
-          var _iteratorAbruptCompletion = false;
-          var _didIteratorError = false;
-          var _iteratorError;
-          try {
-            for (var _iterator = _asyncIterator(this.fileHandler.readGroupedRange(groupedRange, fd)), _step; _iteratorAbruptCompletion = !(_step = await _iterator.next()).done; _iteratorAbruptCompletion = false) {
-              const row = _step.value;
-              {
-                if (row.line && row.line.trim()) {
-                  try {
-                    // CRITICAL FIX: Use serializer.deserialize instead of JSON.parse to handle array format
-                    const record = this.database.serializer.deserialize(row.line);
-
-                    // OPTIMIZATION 4: Use optimized criteria matching for pre-filtered records
-                    if (this._matchesCriteriaOptimized(record, criteria, options)) {
-                      // SPACE OPTIMIZATION: Restore term IDs to terms for user (unless disabled)
-                      const recordWithTerms = options.restoreTerms !== false ? this.database.restoreTermIdsAfterDeserialization(record) : record;
-                      results.push(recordWithTerms);
-
-                      // Check limit
-                      if (options.limit && results.length >= options.limit) {
-                        return this._applyOrdering(results, options);
+    const persistedCount = Array.isArray(this.database.offsets) ? this.database.offsets.length : 0;
+    const fileLineNumbers = [];
+    const writeBufferLineNumbers = [];
+    for (const lineNumber of lineNumbers) {
+      if (lineNumber >= persistedCount) {
+        writeBufferLineNumbers.push(lineNumber);
+      } else {
+        fileLineNumbers.push(lineNumber);
+      }
+    }
+    if (fileLineNumbers.length > 0) {
+      const fileBatches = [];
+      for (let i = 0; i < fileLineNumbers.length; i += batchSize) {
+        fileBatches.push(fileLineNumbers.slice(i, i + batchSize));
+      }
+      for (const batch of fileBatches) {
+        // OPTIMIZATION: Use ranges instead of reading entire file
+        const ranges = this.database.getRanges(batch);
+        const groupedRanges = await this.fileHandler.groupedRanges(ranges);
+        const fd = await fs.promises.open(this.fileHandler.file, 'r');
+        try {
+          for (const groupedRange of groupedRanges) {
+            var _iteratorAbruptCompletion = false;
+            var _didIteratorError = false;
+            var _iteratorError;
+            try {
+              for (var _iterator = _asyncIterator(this.fileHandler.readGroupedRange(groupedRange, fd)), _step; _iteratorAbruptCompletion = !(_step = await _iterator.next()).done; _iteratorAbruptCompletion = false) {
+                const row = _step.value;
+                {
+                  if (row.line && row.line.trim()) {
+                    try {
+                      const record = this.database.serializer.deserialize(row.line);
+                      if (this._matchesCriteriaOptimized(record, criteria, options)) {
+                        const recordWithTerms = options.restoreTerms !== false ? this.database.restoreTermIdsAfterDeserialization(record) : record;
+                        results.push(recordWithTerms);
+                        if (options.limit && results.length >= options.limit) {
+                          return this._applyOrdering(results, options);
+                        }
                       }
+                    } catch (error) {
+                      continue;
                     }
-                  } catch (error) {
-                    // Skip invalid lines
-                    continue;
                   }
                 }
               }
-            }
-          } catch (err) {
-            _didIteratorError = true;
-            _iteratorError = err;
-          } finally {
-            try {
-              if (_iteratorAbruptCompletion && _iterator.return != null) {
-                await _iterator.return();
-              }
+            } catch (err) {
+              _didIteratorError = true;
+              _iteratorError = err;
             } finally {
-              if (_didIteratorError) {
-                throw _iteratorError;
+              try {
+                if (_iteratorAbruptCompletion && _iterator.return != null) {
+                  await _iterator.return();
+                }
+              } finally {
+                if (_didIteratorError) {
+                  throw _iteratorError;
+                }
               }
             }
           }
+        } finally {
+          await fd.close();
         }
-      } finally {
-        await fd.close();
+      }
+    }
+    if (writeBufferLineNumbers.length > 0) {
+      writeBufferLineNumbers.sort((a, b) => a - b);
+      for (const lineNumber of writeBufferLineNumbers) {
+        const writeBufferIndex = lineNumber - persistedCount;
+        const record = this.database.writeBuffer[writeBufferIndex];
+        if (!record) continue;
+        if (this._matchesCriteriaOptimized(record, criteria, options)) {
+          const recordWithTerms = options.restoreTerms !== false ? this.database.restoreTermIdsAfterDeserialization(record) : record;
+          results.push(recordWithTerms);
+          if (options.limit && results.length >= options.limit) {
+            return this._applyOrdering(results, options);
+          }
+        }
       }
     }
     return this._applyOrdering(results, options);
@@ -6451,6 +6560,17 @@ class QueryManager {
   async findWithIndexed(criteria, options = {}) {
     if (this.opts.debugMode) {
       console.log('📊 Using indexed strategy with real streaming');
+    }
+    try {
+      await this.database._ensureLazyIndexLoaded();
+    } catch (error) {
+      if (this.opts.debugMode) {
+        console.log('⚠️ _ensureLazyIndexLoaded failed, falling back to full streaming', error.message || error);
+      }
+      return this.findWithStreaming(criteria, {
+        ...options,
+        forceFullScan: true
+      });
     }
     let results = [];
     const limit = options.limit; // No default limit - return all results unless explicitly limited
@@ -7062,7 +7182,7 @@ class QueryManager {
 
     // OPTIMIZATION 2: Hybrid strategy - use pre-filtered streaming when index is empty
     const indexData = this.indexManager.index.data || {};
-    const hasIndexData = Object.keys(indexData).length > 0;
+    const hasIndexData = Object.keys(indexData).some(field => this.indexManager.hasUsableIndexData(field));
     if (!hasIndexData) {
       // Check if we can use pre-filtered streaming with term mapping
       if (this.opts.termMapping && this._canUsePreFilteredStreaming(criteria)) {
@@ -9758,6 +9878,7 @@ class Database extends events.EventEmitter {
         const startLineNumber = this.pendingIndexUpdates[0].lineNumber;
 
         // Process index updates in batch
+        await this._ensureLazyIndexLoaded();
         await this.indexManager.addBatch(records, startLineNumber);
 
         // Clear pending updates
@@ -11116,6 +11237,7 @@ class Database extends events.EventEmitter {
 
           // CRITICAL FIX: Remove old terms from index before adding new ones
           if (this.indexManager) {
+            await this._ensureLazyIndexLoaded();
             await this.indexManager.remove(record);
             if (this.opts.debugMode) {
               console.log(`🔄 UPDATE: Removed old terms from index for record ${record.id}`);
@@ -11151,6 +11273,7 @@ class Database extends events.EventEmitter {
             }
           }
           const indexUpdateStart = Date.now();
+          await this._ensureLazyIndexLoaded();
           await this.indexManager.update(record, updated, lineNumber);
           if (this.opts.debugMode) {
             console.log(`🔄 UPDATE: Index update completed in ${Date.now() - indexUpdateStart}ms`);
@@ -11217,6 +11340,7 @@ class Database extends events.EventEmitter {
         for (const record of records) {
           // Remove term mapping
           this.removeTermMapping(record);
+          await this._ensureLazyIndexLoaded();
           await this.indexManager.remove(record);
 
           // Remove record from writeBuffer or mark as deleted
@@ -11890,6 +12014,7 @@ class Database extends events.EventEmitter {
       // Legacy syntax: exists(fieldName, terms, options)
       // Also handle invalid inputs (null, array) for backward compatibility
       const fieldName = fieldNameOrCriteria;
+      await this._ensureLazyIndexLoaded();
       return this.indexManager.exists(fieldName, terms, options);
     } else {
       // Invalid input type
@@ -11913,6 +12038,7 @@ class Database extends events.EventEmitter {
     if (!this.indexManager) {
       return {};
     }
+    await this._ensureLazyIndexLoaded();
     const results = {};
     const perField = new Map();
     for (let i = 0; i < criteriaArray.length; i++) {
@@ -11974,7 +12100,7 @@ class Database extends events.EventEmitter {
       if (this.opts.debugMode) {
         console.log(`⚡ exists() using INDEX-ONLY optimization for: ${JSON.stringify(criteria)}`);
       }
-      return this._existsIndexOnly(criteria);
+      return await this._existsIndexOnly(criteria);
     }
 
     // 🎯 FALLBACK: Use the same find() logic for complex criteria or non-indexed fields
@@ -12031,7 +12157,8 @@ class Database extends events.EventEmitter {
    * @param {object} criteria - Simple criteria with only indexed fields
    * @returns {boolean} - True if any records match the criteria
    */
-  _existsIndexOnly(criteria) {
+  async _existsIndexOnly(criteria) {
+    await this._ensureLazyIndexLoaded();
     const criteriaEntries = Object.entries(criteria);
 
     // For single field criteria, use direct indexManager.exists()
@@ -12367,11 +12494,20 @@ class Database extends events.EventEmitter {
     // Check if this is a term-mapped field
     const isTermMapped = this.termManager && this.termManager.termMappingFields && this.termManager.termMappingFields.includes(fieldName);
 
+    // CRITICAL FIX: Ensure index is loaded before accessing data
+    // After idle unload, index.data[fieldName] becomes {} (truthy but empty)
+    if (!this.indexManager.indexLoaded) {
+      await this._rebuildIndexesIfNeeded();
+    }
+
     // Access the index for this field
     const fieldIndex = this.indexManager.index.data[fieldName];
-    if (!fieldIndex) {
+    if (!fieldIndex || Object.keys(fieldIndex).length === 0) {
       return [];
     }
+
+    // Reset idle unload timer since we're using the index
+    this.indexManager.markIndexUsed();
 
     // Accumulate scores for each line number
     const scoreMap = new Map();
@@ -13690,7 +13826,7 @@ class Database extends events.EventEmitter {
     };
   }
   _hasActualIndexData() {
-    if (!this.indexManager) return false;
+    if (!this.indexManager || this.indexManager.indexLoaded === false) return false;
     const data = this.indexManager.index.data;
     for (const field in data) {
       const fieldData = data[field];
@@ -13702,6 +13838,48 @@ class Database extends events.EventEmitter {
       }
     }
     return false;
+  }
+  async _loadIndexDataFromFile() {
+    const idxPath = this.normalizedFile.replace('.jdb', '.idx.jdb');
+    try {
+      await fs.promises.access(idxPath);
+    } catch (error) {
+      return null;
+    }
+    try {
+      const raw = await fs.promises.readFile(idxPath, 'utf8');
+      const parsed = JSON.parse(raw);
+      return parsed?.index ?? null;
+    } catch (error) {
+      if (this.opts.debugMode) {
+        console.error(`⚠️ _loadIndexDataFromFile: Failed to read or parse ${idxPath}`, error);
+      }
+      return null;
+    }
+  }
+  async _ensureLazyIndexLoaded() {
+    if (!this.indexManager || this.indexManager.indexLoaded) return;
+    if (!this.indexManager.indexedFields || this.indexManager.indexedFields.length === 0) {
+      this.indexManager.indexLoaded = true;
+      return;
+    }
+    if (this._lazyIndexLoadPromise) {
+      return this._lazyIndexLoadPromise;
+    }
+    this._lazyIndexLoadPromise = (async () => {
+      const indexData = await this._loadIndexDataFromFile();
+      if (indexData) {
+        this.indexManager.load(indexData);
+      } else {
+        if (this.opts.debugMode) {
+          console.log('🔍 _ensureLazyIndexLoaded: No index file found or invalid index data, continuing with empty index');
+        }
+        this.indexManager.indexLoaded = true;
+        this.indexManager.markIndexUsed();
+      }
+      this._lazyIndexLoadPromise = null;
+    })();
+    return this._lazyIndexLoadPromise;
   }
 
   /**
@@ -14649,6 +14827,7 @@ class Database extends events.EventEmitter {
 
           // Update index
           const absoluteLineNumber = this._getAbsoluteLineNumber(targetIndex);
+          await this._ensureLazyIndexLoaded();
           await this.indexManager.update(record, record, absoluteLineNumber);
         }
         if (this.opts.debugMode) {
@@ -14668,6 +14847,7 @@ class Database extends events.EventEmitter {
             this.removeTermMapping(record);
 
             // Remove from index
+            await this._ensureLazyIndexLoaded();
             await this.indexManager.remove(record);
 
             // Remove from writeBuffer or mark as deleted
@@ -14742,11 +14922,14 @@ class Database extends events.EventEmitter {
         }
       }
 
-      // 2. Mark as closed (but not destroyed) to allow reopening
+      // 2. Cancel any pending idle unload timers before shutdown
+      this.indexManager?.cancelIdleUnloadTimer?.();
+
+      // 3. Mark as closed (but not destroyed) to allow reopening
       this.closed = true;
       this.initialized = false;
 
-      // 3. Clear any remaining state for clean reopening
+      // 4. Clear any remaining state for clean reopening
       this.writeBuffer = [];
       this.writeBufferOffsets = [];
       this.writeBufferSizes = [];
@@ -14773,6 +14956,12 @@ class Database extends events.EventEmitter {
     if (this.indexManager) {
       try {
         const idxPath = this.normalizedFile.replace('.jdb', '.idx.jdb');
+        if (this.indexManager.indexLoaded === false && fs.existsSync(idxPath)) {
+          if (this.opts.debugMode) {
+            console.log(`⚠️ _saveIndexDataToFile: Index unloaded in memory, preserving existing index file ${idxPath}`);
+          }
+          return;
+        }
         const indexJSON = this.indexManager.indexedFields && this.indexManager.indexedFields.length > 0 ? this.indexManager.toJSON() : {};
 
         // Check if index is empty

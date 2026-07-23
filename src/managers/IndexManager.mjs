@@ -103,6 +103,11 @@ export default class IndexManager {
       console.log(`🧹 IndexManager.unload: Unloading index data after ${this.indexIdleUnloadMs}ms idle`)
     }
 
+    // Mark rebuild as needed so score() can trigger lazy reload
+    if (this.database) {
+      this.database._indexRebuildNeeded = true
+    }
+
     this._clearIdleUnloadTimer()
     const newData = {}
     for (const field of this.indexedFields) {

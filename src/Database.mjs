@@ -4056,11 +4056,20 @@ class Database extends EventEmitter {
       this.termManager.termMappingFields && 
       this.termManager.termMappingFields.includes(fieldName)
     
+    // CRITICAL FIX: Ensure index is loaded before accessing data
+    // After idle unload, index.data[fieldName] becomes {} (truthy but empty)
+    if (!this.indexManager.indexLoaded) {
+      await this._rebuildIndexesIfNeeded()
+    }
+    
     // Access the index for this field
     const fieldIndex = this.indexManager.index.data[fieldName]
-    if (!fieldIndex) {
+    if (!fieldIndex || Object.keys(fieldIndex).length === 0) {
       return []
     }
+    
+    // Reset idle unload timer since we're using the index
+    this.indexManager.markIndexUsed()
     
     // Accumulate scores for each line number
     const scoreMap = new Map()
