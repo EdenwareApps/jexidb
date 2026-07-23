@@ -4058,8 +4058,10 @@ class Database extends EventEmitter {
     
     // CRITICAL FIX: Ensure index is loaded before accessing data
     // After idle unload, index.data[fieldName] becomes {} (truthy but empty)
+    // Use _ensureLazyIndexLoaded() to reload from disk instead of _rebuildIndexesIfNeeded()
+    // which requires allowIndexRebuild=true and rebuilds from scratch
     if (!this.indexManager.indexLoaded) {
-      await this._rebuildIndexesIfNeeded()
+      await this._ensureLazyIndexLoaded()
     }
     
     // Access the index for this field
