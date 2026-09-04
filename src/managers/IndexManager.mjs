@@ -2342,6 +2342,60 @@ export default class IndexManager {
   }
 
   /**
+   * Restored public API: return the indexed terms (keys) currently held in memory
+   * for a given column.
+   *
+   * IMPORTANT: This method reads ONLY the in-memory index. It never triggers a lazy
+   * reload and never performs any disk I/O. If the index was idle-unloaded
+   * (`indexLoaded === false`), it returns an empty Set. Callers that need the
+   * on-disk index after an unload must first ensure it is loaded again, e.g.
+   * `await database._ensureLazyIndexLoaded()`.
+   *
+   * The return format is ALWAYS the actual term strings (words/values), never the
+   * internal numeric term IDs. For term-mapped columns the index stores term IDs as
+   * keys, so they are translated back to words through the TermManager before being
+   * returned. This keeps the API consistent across indexed fields.
+   *
+   * @param {string} column - Indexed field name (e.g. 'nameTerms', 'groupTerms', 'category')
+   * @returns {Set<string>} Terms currently indexed for the column (empty Set if the
+   * column is not indexed or the index is not loaded)
+   */
+  readColumnIndex(column) {
+    if (!this.index || !this.index.data || !this.index.data[column]) {
+      return new Set()
+    }
+
+    const keys = Object.keys(this.index.data[column])
+
+    // Consistent contract: always return term strings, never numeric term IDs.
+    const termManager = this.database?.termManager
+    const isTermMappingField = Boolean(
+      termManager &&
+      termManager.termMappingFields &&
+      termManager.termMappingFields.includes(column)
+    )
+
+    if (!isTermMappingField) {
+      return new Set(keys)
+    }
+
+    // Term-mapped column: index keys are numeric term IDs -> translate back to words.
+    const terms = new Set()
+    for (const key of keys) {
+      if (/^\d+$/.test(key)) {
+        const word = termManager.getTerm?.(Number(key))
+        if (word !== null && word !== undefined) {
+          terms.add(word)
+        }
+      } else {
+        // Defensive: key is already a term string (legacy/in-memory data)
+        terms.add(key)
+      }
+    }
+    return terms
+  }
+
+  /**
    * Convert index to JSON-serializable format for debugging and export
    * This resolves the issue where Sets appear as empty objects in JSON.stringify
    */
