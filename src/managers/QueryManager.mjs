@@ -305,6 +305,29 @@ export class QueryManager {
   }
 
   /**
+   * Whether a single field condition can/should be answered by the index during
+   * pre-filtering (so the LEAST number of entries is streamed).
+   *
+   * - Raw RegExp is pre-filterable only on string/term indexes (IndexManager.query
+   *   resolves it via the index keys). Regex on numeric indexes -> residual.
+   * - Complement operators ($ne/$nin) expand to nearly every record, so they are
+   *   NOT pre-filtered: they are applied LAST, on the minimal candidate set, by the
+   *   streaming matcher. (CHANGELOG [2.2.5])
+   */
+  _canPrefilterFieldCondition(field, condition) {
+    if (!this.indexManager?.opts?.indexes?.[field]) return false
+    if (condition instanceof RegExp) {
+      const idxType = this.indexManager.opts.indexes[field]
+      return idxType !== 'number' && idxType !== 'array:number'
+    }
+    if (condition && typeof condition === 'object' && !Array.isArray(condition)) {
+      const ops = Object.keys(condition).map(op => normalizeOperator(op))
+      if (ops.some(op => op === '$ne' || op === '$nin')) return false
+    }
+    return true
+  }
+
+  /**
    * Get indexable fields from criteria
    * @param {Object} criteria - Query criteria
    * @returns {Array} - Array of indexable field names
@@ -327,8 +350,9 @@ export class QueryManager {
     for (const [field, condition] of Object.entries(criteria)) {
       if (field.startsWith('$')) continue; // Skip logical operators
       
-      // RegExp conditions cannot be pre-filtered using indices
-      if (condition instanceof RegExp) {
+      // Pre-filter with the index only what it can answer minimally; everything
+      // else is applied LAST over the streamed candidates (filter last, stream least).
+      if (!this._canPrefilterFieldCondition(field, condition)) {
         continue;
       }
       
@@ -384,8 +408,9 @@ export class QueryManager {
     for (const [field, condition] of Object.entries(criteria)) {
       if (field.startsWith('$')) continue; // Skip logical operators (already handled above)
       
-      // RegExp conditions cannot be pre-filtered using indices
-      if (condition instanceof RegExp) {
+      // Pre-filter with the index only what it can answer minimally; complement/
+      // numeric-regex conditions are left residual and applied LAST on the candidates.
+      if (!this._canPrefilterFieldCondition(field, condition)) {
         continue;
       }
       
@@ -728,6 +753,19 @@ export class QueryManager {
       }
       return this.findWithStreaming(criteria, { ...options, forceFullScan: true })
     }
+
+    // Swap detection: if another process atomically replaced the data file, the
+    // in-memory offsets/index describe the previous file. Reload cleanly, or -
+    // when a writer sentinel is present / the clean reload fails - fall back to
+    // a full streaming scan so stale byte offsets are never used on the new file.
+    const refreshStatus = await this.database._refreshFromDiskIfChanged()
+    if (refreshStatus === 'busy') {
+      if (this.opts.debugMode) {
+        console.log('⚠️ findWithIndexed: file busy (writer active) or clean reload failed, falling back to full streaming')
+      }
+      return this.findWithStreaming(criteria, { ...options, forceFullScan: true })
+    }
+
     let results = []
     const limit = options.limit // No default limit - return all results unless explicitly limited
 
@@ -944,15 +982,25 @@ export class QueryManager {
   matchesFieldCondition(record, field, condition, options = {}) {
     const value = record[field];
 
-    // Debug logging for all field conditions
+    // Debug logging for all field conditions - SAMPLED: only the first record of
+    // each query logs per field, so a full streaming scan (which calls this for
+    // every record) does not spam the console with one line per record.
     if (this.database.opts.debugMode) {
-      console.log(`🔍 Checking field '${field}':`, { value, condition, record: record.name || record.id });
+      if (!options._dbFieldLog) options._dbFieldLog = {};
+      if (!options._dbFieldLog[field]) {
+        options._dbFieldLog[field] = true;
+        console.log(`🔍 Checking field '${field}':`, { value, condition, record: record.name || record.id });
+      }
     }
 
-    // Debug logging for term mapping fields
+    // Debug logging for term mapping fields (sampled the same way)
     if (this.database.opts.termMapping && Object.keys(this.database.opts.indexes || {}).includes(field)) {
       if (this.database.opts.debugMode) {
-        console.log(`🔍 Checking term mapping field '${field}':`, { value, condition, record: record.name || record.id });
+        if (!options._dbFieldLog) options._dbFieldLog = {};
+        if (!options._dbFieldLog[`tm:${field}`]) {
+          options._dbFieldLog[`tm:${field}`] = true;
+          console.log(`🔍 Checking term mapping field '${field}':`, { value, condition, record: record.name || record.id });
+        }
       }
     }
 
@@ -1229,9 +1277,11 @@ export class QueryManager {
           
           const condition = andCondition[field];
           
-          // RegExp cannot be efficiently queried using indices - must use streaming
+          // INTENTIONAL (CHANGELOG [2.2.5]): raw RegExp on string/term indexes is resolved
+          // via index keys (not streaming). Do not revert to "regex => streaming".
           if (condition instanceof RegExp) {
-            return false;
+            const idxType = this.indexManager?.opts?.indexes?.[field];
+            return idxType !== 'number' && idxType !== 'array:number';
           }
           
           if (typeof condition === 'object' && !Array.isArray(condition)) {
@@ -1280,12 +1330,17 @@ export class QueryManager {
       // Check if the field uses operators that are supported by IndexManager
       const condition = criteria[field];
       
-      // RegExp cannot be efficiently queried using indices - must use streaming
+      // INTENTIONAL (CHANGELOG [2.2.5]): raw RegExp on string/term indexes is resolved
+      // via index keys (not streaming). Do not revert to "regex => streaming".
       if (condition instanceof RegExp) {
-        if (this.opts.debugMode) {
-          console.log(`🔍 Field '${field}' uses RegExp - requires streaming strategy`)
+        const idxType = this.indexManager?.opts?.indexes?.[field];
+        if (idxType === 'number' || idxType === 'array:number') {
+          if (this.opts.debugMode) {
+            console.log(`🔍 Field '${field}' uses RegExp on a numeric index - requires streaming strategy`)
+          }
+          return false;
         }
-        return false;
+        return true;
       }
       
       if (typeof condition === 'object' && !Array.isArray(condition) && condition !== null) {

@@ -6,6 +6,7 @@ import fs from 'fs'
 import readline from 'readline'
 import pRetry from 'p-retry'
 import { OperationQueue } from './OperationQueue.mjs'
+import { createIoTimeoutError, isIoTimeoutError } from './utils/ioTimeout.mjs'
 
 /**
  * IterateEntry class for intuitive API with automatic change detection
@@ -359,6 +360,9 @@ class Database extends EventEmitter {
       enableArraySerialization: opts.enableArraySerialization !== false, // Enable array serialization by default
       // Index rebuild options
       allowIndexRebuild: opts.allowIndexRebuild === true, // Allow automatic index rebuild when corrupted (default false - throws error)
+      // Read-only mode: never create, write, rebuild or auto-flush. Use it to
+      // open a DB purely for reads (e.g. while another process is the writer).
+      readOnly: opts.readOnly === true,
     }, opts)
     
     // CRITICAL FIX: Initialize AbortController for lifecycle management
@@ -387,6 +391,14 @@ class Database extends EventEmitter {
     this.initialized = false
     this._offsetRecoveryInProgress = false
     this.writeBufferTotalSize = 0
+
+    // Swap detection state: the data file may be atomically replaced by another
+    // process while this instance holds offsets/index computed for the previous
+    // file. _offsetsFileSignature remembers which on-disk file the offsets
+    // describe (size + mtime) so the read path can detect a swap cheaply.
+    this._offsetsFileSignature = null
+    this._dataFingerprint = null          // cached stat (short TTL) for the read path
+    this._offsetsReloadPromise = null     // single-flight clean reload after a swap
     
     
     // Initialize managers
@@ -779,8 +791,8 @@ class Database extends EventEmitter {
         const fileExists = await this.fileHandler.exists()
         
         if (!fileExists) {
-          if (!this.opts.create) {
-            throw new Error(`Database file '${this.normalizedFile}' does not exist and create option is disabled`)
+          if (!this.opts.create || this.opts.readOnly) {
+            throw new Error(`Database file '${this.normalizedFile}' does not exist and ${this.opts.readOnly ? 'readOnly mode is enabled' : 'create option is disabled'}`)
           }
           // File will be created when first data is written
         } else {
@@ -975,6 +987,10 @@ class Database extends EventEmitter {
                 }
               }
             }
+
+            // Remember which on-disk data file these offsets describe, so the
+            // read path can detect an atomic swap performed by another process.
+            this._offsetsFileSignature = await this._statDataFingerprint()
             
             // Load indexOffset for proper range calculations
             if (parsedIdxData.indexOffset !== undefined) {
@@ -1306,6 +1322,14 @@ class Database extends EventEmitter {
   async _doSave() {
     // CRITICAL FIX: Check if database is destroyed
     if (this.destroyed) return
+
+    // Read-only mode: never persist data to disk
+    if (this.opts.readOnly) {
+      if (this.opts.debugMode) {
+        console.log('💾 _doSave: Database is read-only, skipping save')
+      }
+      return
+    }
     
     // CRITICAL FIX: Use atomic check-and-set to prevent concurrent save operations
     if (this.isSaving) {
@@ -1690,9 +1714,10 @@ class Database extends EventEmitter {
         console.log(`💾 Save: Calculated indexOffset: ${this.indexOffset}, allData.length: ${allData.length}`)
       }
       
-      // CRITICAL FIX: Write main data file first
+      // CRITICAL FIX: Write main data file first (atomically: temp + rename so a
+      // concurrent reader never sees a half-written file).
       // Index will be saved AFTER reconstruction to ensure it contains correct data
-      await this.fileHandler.writeBatch([jsonlData])
+      await this.fileHandler.replaceDataFile(jsonlData)
       
       if (this.opts.debugMode) {
         console.log(`💾 Saved ${allData.length} records to ${this.normalizedFile}`)
@@ -1700,6 +1725,10 @@ class Database extends EventEmitter {
       
       // CRITICAL FIX: Invalidate file size cache after save operation
       this._cachedFileStats = null
+
+      // The in-memory offsets now describe the file we just wrote. Refresh the
+      // swap-detection signature so the next indexed read does not reload.
+      this._offsetsFileSignature = await this._statDataFingerprint()
       
       this.shouldSave = false
       this.lastSaveTime = Date.now()
@@ -2120,6 +2149,10 @@ class Database extends EventEmitter {
    */
   async insert(data) {
     this._validateInitialization('insert')
+
+    if (this.opts.readOnly) {
+      throw new Error('Database is read-only')
+    }
     
     return this.operationQueue.enqueue(async () => {
       this.isInsideOperationQueue = true
@@ -2210,6 +2243,10 @@ class Database extends EventEmitter {
    */
   async insertBatch(dataArray) {
     this._validateInitialization('insertBatch')
+
+    if (this.opts.readOnly) {
+      throw new Error('Database is read-only')
+    }
     
     // If we're already inside the operation queue (e.g., from insert()), avoid re-enqueueing to prevent deadlocks
     if (this.isInsideOperationQueue) {
@@ -2236,6 +2273,11 @@ class Database extends EventEmitter {
    * Internal implementation for insertBatch to allow inline execution when already inside the queue
    */
   async _insertBatchInternal(dataArray) {
+    // Read-only mode: never write to disk
+    if (this.opts.readOnly) {
+      throw new Error('Database is read-only')
+    }
+
     // CRITICAL FIX: Validate state before insert operation
     this.validateState()
     
@@ -2374,15 +2416,12 @@ class Database extends EventEmitter {
             console.warn(`⚠️ Frequent integrity corrections (${this.integrityCorrections.dataIntegrity} times) - this indicates a systemic issue`)
           }
 
+          // Reconcile the in-memory totalLines with the actual persisted offset
+          // count. NOTE: deliberately NOT persisted here - find() is a read path
+          // and must never rewrite the .idx file (especially while a concurrent
+          // writer may be replacing it). A later save() persists a fully
+          // consistent .idx anyway.
           this.indexManager.setTotalLines(offsetsLength)
-
-          // Try to persist the fix, but don't fail the operation if it doesn't work
-          try {
-            await this._saveIndexDataToFile()
-          } catch (error) {
-            // Just track the failure - don't throw since this is a safety net
-            this.integrityCorrections.indexSaveFailures++
-          }
         }
       }
 
@@ -3070,7 +3109,16 @@ class Database extends EventEmitter {
     }
     if (!this._indexRebuildNeeded) return
     if (!this.indexManager || !this.indexManager.indexedFields || this.indexManager.indexedFields.length === 0) return
-    
+
+    // If the index was idle-unloaded (or never loaded), recover it cheaply from
+    // the on-disk .idx file BEFORE considering a full rebuild. A rebuild is only
+    // needed when the on-disk index is genuinely missing/corrupt. Mirrors the
+    // score() hot path and prevents an idle-unload from triggering a full-file
+    // rebuild (or a throw when allowIndexRebuild is false).
+    if (!this.indexManager.indexLoaded) {
+      await this._ensureLazyIndexLoaded()
+    }
+
     // Check if index actually needs rebuilding
     let needsRebuild = false
     for (const field of this.indexManager.indexedFields) {
@@ -3084,7 +3132,14 @@ class Database extends EventEmitter {
       this._indexRebuildNeeded = false
       return
     }
-    
+
+    // Read-only mode: never write/rebuild on disk. Let queries fall back to a
+    // full streaming scan instead of throwing or rewriting the index file.
+    if (this.opts.readOnly) {
+      this._indexRebuildNeeded = false
+      return
+    }
+
     // Check if rebuild is allowed
     if (!this.opts.allowIndexRebuild) {
       const idxPath = this.normalizedFile.replace('.jdb', '.idx.jdb')
@@ -3165,9 +3220,13 @@ class Database extends EventEmitter {
             crlfDelay: Infinity
           })
 
-          // Handle abort
+          // Handle abort. Destroy the stream WITHOUT an error payload, then
+          // close readline. Destroying with `new Error('AbortError')` makes
+          // the stream emit an unhandled 'error' (readline is closed first, so
+          // the for-await loop exits cleanly and never observes it), which
+          // Node escalates to an uncaughtException and crashes the host app.
           controller.signal.addEventListener('abort', () => {
-            stream.destroy(new Error('AbortError'));
+            stream.destroy();
             rl.close();
           });
 
@@ -3209,6 +3268,13 @@ class Database extends EventEmitter {
               }
             }
           }
+
+          // If aborted during schema detection, surface a normalized timeout
+          // error so the retry wrapper (and ultimately the caller) observes it
+          // instead of an uncaughtException.
+          if (controller.signal.aborted) {
+            throw createIoTimeoutError(timeoutMs)
+          }
           stream.destroy()
         }
 
@@ -3228,9 +3294,10 @@ class Database extends EventEmitter {
           crlfDelay: Infinity
         })
 
-        // Handle abort
+        // Handle abort. See the schema stream above - destroy WITHOUT an error
+        // payload to avoid an unhandled 'error' becoming an uncaughtException.
         controller.signal.addEventListener('abort', () => {
-          stream.destroy(new Error('AbortError'));
+          stream.destroy();
           rl.close();
         });
 
@@ -3257,10 +3324,20 @@ class Database extends EventEmitter {
           currentOffset += Buffer.byteLength(line, 'utf8') + 1
         }
 
+        // If the read was aborted, do NOT treat a partial read as a successful
+        // rebuild - surface a normalized timeout error so it can be retried.
+        if (controller.signal.aborted) {
+          throw createIoTimeoutError(timeoutMs)
+        }
+
         count += localCount;
         stream.destroy()
       } catch (error) {
-        if (error.name === 'AbortError' || error.code === 'ETIMEDOUT') {
+        // p-retry "stop" signal (may be absent when p-retry is mocked in tests)
+        if (typeof pRetry.AbortError === 'function' && error instanceof pRetry.AbortError) {
+          throw error
+        }
+        if (isIoTimeoutError(error)) {
           if (this.opts.debugMode) {
             console.log(`⚠️ Index rebuild attempt ${attempt} timed out, retrying...`);
           }
@@ -4063,7 +4140,12 @@ class Database extends EventEmitter {
     if (!this.indexManager.indexLoaded) {
       await this._ensureLazyIndexLoaded()
     }
-    
+
+    // Swap detection: if another process atomically replaced the data file,
+    // reload offsets + index (and term mapping) cleanly so the scores below are
+    // computed against the current file, never stale byte ranges.
+    await this._refreshFromDiskIfChanged()
+
     // Access the index for this field
     const fieldIndex = this.indexManager.index.data[fieldName]
     if (!fieldIndex || Object.keys(fieldIndex).length === 0) {
@@ -4305,9 +4387,19 @@ class Database extends EventEmitter {
           }
         }
 
+        // If the read was aborted, do not silently return partial scores -
+        // surface a normalized timeout error so it can be retried.
+        if (controller.signal.aborted) {
+          throw createIoTimeoutError(timeoutMs)
+        }
+
         results.push(...rangeResults);
       } catch (error) {
-        if (error.name === 'AbortError' || error.code === 'ETIMEDOUT') {
+        // p-retry "stop" signal (may be absent when p-retry is mocked in tests)
+        if (typeof pRetry.AbortError === 'function' && error instanceof pRetry.AbortError) {
+          throw error
+        }
+        if (isIoTimeoutError(error)) {
           if (this.opts.debugMode) {
             console.log(`⚠️ Score range read attempt ${attempt} timed out, retrying...`);
           }
@@ -5391,11 +5483,26 @@ class Database extends EventEmitter {
       return
     }
 
-    if (this._lazyIndexLoadPromise) {
-      return this._lazyIndexLoadPromise
+    // Single-flight: N concurrent callers (find/count/score) share a single
+    // on-disk load. The promise is cleared in a finally so a rejected load is
+    // never left behind to poison every future attempt.
+    if (!this._lazyIndexLoadPromise) {
+      this._lazyIndexLoadPromise = this._doLazyIndexLoad().finally(() => {
+        this._lazyIndexLoadPromise = null
+      })
     }
+    return this._lazyIndexLoadPromise
+  }
 
-    this._lazyIndexLoadPromise = (async () => {
+  /**
+   * Actually perform the lazy index load from the on-disk .idx file.
+   * Never rejects: on failure it degrades to an empty in-memory index (queries
+   * fall back to streaming) instead of poisoning the single-flight or surfacing
+   * a background cold-load as an unhandled rejection.
+   * @private
+   */
+  async _doLazyIndexLoad() {
+    try {
       const indexData = await this._loadIndexDataFromFile()
       if (indexData) {
         this.indexManager.load(indexData)
@@ -5406,11 +5513,143 @@ class Database extends EventEmitter {
         this.indexManager.indexLoaded = true
         this.indexManager.markIndexUsed()
       }
+    } catch (error) {
+      if (this.opts.debugMode) {
+        console.error(`⚠️ _ensureLazyIndexLoaded: Lazy index load failed, continuing with empty index: ${error && error.message}`)
+      }
+      // Never leave the index flagged as not-loaded: mark it loaded (empty) so
+      // later calls short-circuit and queries degrade to a full scan.
+      this.indexManager.indexLoaded = true
+    }
+  }
 
-      this._lazyIndexLoadPromise = null
+  /**
+   * Path of the "writer active" sentinel file for this data file, e.g.
+   * `list.jdb` -> `list.updating.jdb`. While this file exists, a writer is
+   * atomically replacing the database and readers must not refresh/repair it.
+   * @returns {string}
+   */
+  _getUpdatingSentinelPath() {
+    return this.normalizedFile.replace(/\.jdb$/i, '.updating.jdb')
+  }
+
+  /**
+   * Whether a writer sentinel is currently present on disk.
+   * @returns {Promise<boolean>}
+   */
+  async hasUpdatingSentinel() {
+    try {
+      await fs.promises.access(this._getUpdatingSentinelPath())
+      return true
+    } catch (error) {
+      return false
+    }
+  }
+
+  /**
+   * Capture the current data-file fingerprint (size + mtime) for swap
+   * detection. Best-effort: returns null when the file cannot be stat'ed.
+   * @returns {Promise<{size: number, mtimeMs: number}|null>}
+   */
+  async _statDataFingerprint() {
+    try {
+      const st = await fs.promises.stat(this.normalizedFile)
+      return { size: st.size, mtimeMs: st.mtimeMs }
+    } catch (error) {
+      return null
+    }
+  }
+
+  /**
+   * Cheap swap detection for the read path. The data file may be atomically
+   * replaced by a writer (same or another process); the in-memory offsets and
+   * index describe the previous file. When the on-disk size/mtime no longer
+   * match the signature captured when the offsets were loaded, reload offsets
+   * and index cleanly from the current .idx.
+   *
+   * Returns:
+   *  - 'ok'      : nothing changed / refresh not applicable
+   *  - 'changed' : file was swapped and offsets + index were cleanly reloaded
+   *  - 'busy'    : a writer sentinel is present (or the clean reload failed) -
+   *                the caller must fall back to a full streaming scan instead
+   *                of using possibly stale byte offsets on the new file
+   * @returns {Promise<'ok'|'changed'|'busy'>}
+   */
+  async _refreshFromDiskIfChanged() {
+    // If a writer is mid-update, never refresh/repair in place.
+    if (this.opts.updatingSentinel && await this.hasUpdatingSentinel()) {
+      return 'busy'
+    }
+
+    if (!this._offsetsFileSignature) return 'ok'
+    if (!this.offsets || this.offsets.length === 0) return 'ok'
+
+    // Cheap stat with a short TTL so hot queries don't syscall every time.
+    const now = Date.now()
+    if (!this._dataFingerprint || !this._dataFingerprint.at || now - this._dataFingerprint.at > 250) {
+      const st = await this._statDataFingerprint()
+      this._dataFingerprint = { ...(st || { size: 0, mtimeMs: 0 }), at: now }
+    }
+    const fp = this._dataFingerprint
+    const sig = this._offsetsFileSignature
+    if (fp.size === sig.size && fp.mtimeMs === sig.mtimeMs) return 'ok'
+
+    const reloaded = await this._reloadOffsetsAndIndex()
+    if (!reloaded) return 'busy'
+    // Signature now describes the (already stat'ed) new file
+    this._offsetsFileSignature = { size: fp.size, mtimeMs: fp.mtimeMs }
+    return 'changed'
+  }
+
+  /**
+   * Cleanly reload offsets/indexOffset/index data from the on-disk .idx file
+   * after the data file was swapped. Single-flight so N concurrent queries
+   * share one reload.
+   * @returns {Promise<boolean>} true when the reload produced consistent state
+   */
+  async _reloadOffsetsAndIndex() {
+    if (this._offsetsReloadPromise) {
+      return this._offsetsReloadPromise
+    }
+    this._offsetsReloadPromise = (async () => {
+      const idxPath = this.normalizedFile.replace('.jdb', '.idx.jdb')
+      try {
+        const raw = await fs.promises.readFile(idxPath, 'utf8')
+        const parsed = JSON.parse(raw)
+        if (!parsed || !Array.isArray(parsed.offsets)) return false
+        this.offsets = parsed.offsets
+        this.indexOffset = typeof parsed.indexOffset === 'number' ? parsed.indexOffset : 0
+
+        // Reload term mapping (if any) first so term IDs/words match the new
+        // index and the records it describes.
+        if (parsed.termMapping && this.termManager && typeof this.termManager.loadTerms === 'function') {
+          this.termManager.loadTerms(parsed.termMapping)
+        }
+
+        // Clear the current in-memory index so IndexManager.load() does not
+        // short-circuit (load() skips when it already sees actual data).
+        if (this.indexManager && this.indexManager.indexedFields) {
+          for (const field of this.indexManager.indexedFields) {
+            if (this.indexManager.index && this.indexManager.index.data) {
+              this.indexManager.index.data[field] = {}
+            }
+          }
+        }
+        // Reload the in-memory index from the same (new) .idx data
+        this.indexManager.indexLoaded = false
+        await this._ensureLazyIndexLoaded()
+        this.indexManager.setTotalLines(this.offsets.length)
+        return true
+      } catch (error) {
+        if (this.opts.debugMode) {
+          console.warn(`⚠️ _reloadOffsetsAndIndex: could not reload from ${idxPath}: ${error && error.message}`)
+        }
+        return false
+      } finally {
+        this._offsetsReloadPromise = null
+      }
     })()
-
-    return this._lazyIndexLoadPromise
+    return this._offsetsReloadPromise
   }
 
   /**
@@ -5775,6 +6014,10 @@ class Database extends EventEmitter {
         await new Promise(resolve => setTimeout(resolve, 10))
       }
     }
+
+    // Swap detection: if another process replaced the data file, reload offsets
+    // and index cleanly so the line map / ranges describe the current file.
+    await this._refreshFromDiskIfChanged()
     
     let count = 0
     let remainingSkip = options.skip || 0
@@ -6415,6 +6658,9 @@ class Database extends EventEmitter {
    * @private
    */
   async _saveIndexDataToFile() {
+    // Read-only mode: never write to the index file on disk
+    if (this.opts.readOnly) return
+
     if (this.indexManager) {
       try {
         const idxPath = this.normalizedFile.replace('.jdb', '.idx.jdb')
@@ -6483,7 +6729,7 @@ class Database extends EventEmitter {
         // This ensures the database structure is complete
         const originalFile = this.fileHandler.file
         this.fileHandler.file = idxPath
-        await this.fileHandler.writeAll(JSON.stringify(indexData, null, 2))
+        await this.fileHandler.writeFileAtomic(JSON.stringify(indexData, null, 2))
         this.fileHandler.file = originalFile
         
         if (this.opts.debugMode) {

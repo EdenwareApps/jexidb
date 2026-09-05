@@ -338,6 +338,48 @@ const multiTypeCoverage = await db.coverage('tags', [
 ], { mediaType: ['live', 'vod'] })  // Live OR VOD content
 ```
 
+### Fast Partial & Regex Searches
+
+Raw `RegExp` conditions on indexed `string` / term-mapped fields are resolved against the
+index keys instead of streaming the whole data file, so partial searches stay fast:
+
+```javascript
+const results = await db.find({ nameTerms: /^glo/i })   // Indexed regex (v2.2.5+)
+```
+
+In streaming queries, indexed conditions are pre-filtered first and residual conditions such
+as `$ne` / `$nin` are applied last over the reduced candidate set:
+
+```javascript
+const liveItems = await db.find({
+  $and: [{ nameTerms: /news/i }, { mediaType: { $ne: 'video' } }]
+})
+```
+
+> Numeric indexes still use streaming for regex conditions (regex over numbers is not
+> meaningful). With `indexedQueryMode: 'strict'`, residual operators such as `$ne` require
+> `allowNonIndexed: true` to pass query validation.
+
+## Read & Write Safety
+
+The following constructor options control recovery, memory use, and reader/writer
+coordination (also listed in the [API reference](docs/API.md)):
+
+| Option | Default | Purpose |
+|--------|---------|---------|
+| `readOnly` | `false` | Open for reads only: never creates, writes, rebuilds or auto-flushes |
+| `updatingSentinel` | `false` | Writer mode: exposes `<file>.updating.jdb` while saving so cross-process readers can skip in-place refresh/repair |
+| `allowIndexRebuild` | `false` | Rebuild a missing/corrupt index on first query (default throws) |
+| `indexIdleUnloadMs` | `30000` | Unload the in-memory index after inactivity (`0` disables) |
+| `ioTimeoutMs` | `0` | I/O timeout for streaming reads / index rebuilds (`0` disables) |
+| `maxRetries` | `3` | Retry count for timed-out reads / index rebuilds |
+
+Data and index saves are atomic (unique temp file + rename, with a Windows-safe fallback),
+and indexed readers detect a file swap and reload offsets + index from the current `.idx`.
+Atomic saves prevent half-written files and temp collisions; they do not merge simultaneous
+application writes, so keep a single writer (or coordinate via `updatingSentinel`) when
+multiple instances can modify the same database.
+
 ## Testes
 
 JexiDB inclui uma suíte completa de testes com Jest:
@@ -426,6 +468,14 @@ MIT License - see the [LICENSE](LICENSE) file for details.
 - 📈 **Advanced Analytics** - Built-in data analysis tools
 
 ### Recent Updates
+- ✅ **v2.2.5** - Faster indexed regex/partial search, smarter streaming pre-filtering, sampled debug logs, and race-free concurrent atomic saves (see [CHANGELOG](CHANGELOG.md))
+- ✅ **v2.2.4** - Read/write safety hardening (see [CHANGELOG](CHANGELOG.md)):
+  - Atomic data-file saves (temp + rename) - readers never see a half-written file
+  - Reader-side file-swap detection with clean reload on indexed reads
+  - Optional writer sentinel (`updatingSentinel`) for cross-process coordination
+  - I/O timeouts/aborts surface as retriable errors (no more `uncaughtException`)
+  - Idle-unload recovery via on-disk index reload (no forced rebuild/throw)
+  - New `readOnly` mode; single-flight lazy index loading
 - ✅ **v2.1.0** - Term mapping auto-detection, 77% size reduction
 - ✅ **Schema Enforcement** - Mandatory fields for data consistency
 - ✅ **Streaming Operations** - Memory-efficient bulk operations

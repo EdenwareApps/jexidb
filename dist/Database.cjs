@@ -1458,20 +1458,43 @@ class IndexManager {
       if (field.startsWith('$')) continue;
       if (typeof data[field] === 'undefined') continue;
       const originalCriteriaValue = criteria[field];
-      const criteriaValue = normalizeCriteriaOperators(originalCriteriaValue, {
+      // INTENTIONAL (CHANGELOG [2.2.5]): RegExp is not an operator map - never normalize it
+      // (spreading a RegExp yields {} and would make the regex match every record).
+      const criteriaValue = originalCriteriaValue instanceof RegExp ? originalCriteriaValue : normalizeCriteriaOperators(originalCriteriaValue, {
         target: 'legacy',
         preserveOriginal: true
       });
       let lineNumbersForField = new Set();
       const isNumericField = this.opts.indexes[field] === 'number';
 
-      // Handle RegExp values directly (MUST check before object check since RegExp is an object)
+      // INTENTIONAL OPTIMIZATION (see CHANGELOG [2.2.5]): raw RegExp on string/term
+      // indexes is answered via the index keys instead of full-file streaming. For
+      // term-mapped fields the keys are numeric term IDs, translated back to words with
+      // termManager.getTerm() before testing the regex. DO NOT change this back to
+      // "RegExp => streaming" - it regresses partial search to a full scan per database.
       if (criteriaValue instanceof RegExp) {
-        // RegExp cannot be efficiently queried using indices - fall back to streaming
-        // This will be handled by the QueryManager's streaming strategy
-        continue;
+        const fieldIndex = data[field];
+        const indexType = this.opts.indexes && this.opts.indexes[field];
+        const isNumericIndexType = indexType === 'number' || indexType === 'array:number';
+        if (!fieldIndex || isNumericIndexType) {
+          // Not index-answerable (numeric index) - handled by streaming fallback
+          continue;
+        }
+        const termManager = this.database && this.database.termManager;
+        const isTermField = !!(termManager && termManager.termMappingFields && termManager.termMappingFields.includes(field));
+        const regex = criteriaValue;
+        for (const key of Object.keys(fieldIndex)) {
+          const word = isTermField ? termManager.getTerm(Number(key)) : key;
+          if (word === null || word === undefined) continue;
+          regex.lastIndex = 0;
+          if (!regex.test(String(word))) continue;
+          const numbers = this._getAllLineNumbers(fieldIndex[key]);
+          for (const lineNumber of numbers) lineNumbersForField.add(lineNumber);
+        }
+        // Fall through to field consolidation below (RegExp is an object, so it is
+        // excluded from the object/operator branch that follows).
       }
-      if (typeof criteriaValue === 'object' && !Array.isArray(criteriaValue) && criteriaValue !== null) {
+      if (typeof criteriaValue === 'object' && !(criteriaValue instanceof RegExp) && !Array.isArray(criteriaValue) && criteriaValue !== null) {
         const fieldIndex = data[field];
 
         // Handle $in operator for array queries
@@ -4289,6 +4312,39 @@ class OperationQueue {
   }
 }
 
+/**
+ * Shared helpers to normalize and detect I/O timeout / abort errors.
+ *
+ * Node surfaces read timeouts in several inconsistent shapes depending on the
+ * path used (`error.name`, `error.code` or `error.message`). These helpers
+ * centralize creation and detection so every retry branch across Database.mjs
+ * and FileHandler.mjs agrees, and timeouts are always delivered as normal
+ * promise rejections - never as an `uncaughtException`.
+ */
+
+/**
+ * Create a normalized I/O timeout error that every retry branch recognizes.
+ * @param {number} timeoutMs - Timeout that elapsed, in milliseconds.
+ * @returns {Error}
+ */
+function createIoTimeoutError(timeoutMs) {
+  const err = new Error(`I/O timeout after ${timeoutMs}ms`);
+  err.name = 'AbortError';
+  err.code = 'ETIMEDOUT';
+  return err;
+}
+
+/**
+ * Detect whether an error represents an I/O timeout or abort, regardless of the
+ * shape it was produced in.
+ * @param {*} error - Error to inspect (may be null/undefined).
+ * @returns {boolean}
+ */
+function isIoTimeoutError(error) {
+  if (!error) return false;
+  return error.name === 'AbortError' || error.code === 'ETIMEDOUT' || error.message === 'AbortError';
+}
+
 /*
 How it works:
 `this.#head` is an instance of `Node` which keeps track of its current value and nests another instance of `Node` that keeps the value that comes after it. When a value is provided to `.enqueue()`, the code needs to iterate through `this.#head`, going deeper and deeper to find the last value. However, iterating through every single item is slow. This problem is solved by saving a reference to the last value as `this.#tail` so that it can reference it to add a new value.
@@ -5173,6 +5229,23 @@ class FileHandler {
         await fs.promises.rename(tmpFile, targetFile);
         return; // Success
       } catch (error) {
+        // ENOENT: the temp file vanished before the rename. With unique temp names
+        // (see _atomicReplaceFile) this means another concurrent writer already
+        // replaced the target (its rename won, ours was superseded) or an external
+        // cleanup removed our temp. If the target exists, the write was superseded,
+        // not an error. (CHANGELOG [2.2.5])
+        if (error.code === 'ENOENT') {
+          try {
+            await fs.promises.access(targetFile);
+            return; // target already replaced by a concurrent writer - ok
+          } catch (accessError) {
+            if (attempt < maxRetries) {
+              await new Promise(resolve => setTimeout(resolve, 50 * attempt));
+              continue;
+            }
+            throw error;
+          }
+        }
         if (error.code === 'EPERM' && attempt < maxRetries) {
           // Quick delay: 50ms, 100ms, 200ms
           const delay = 50 * attempt;
@@ -5243,6 +5316,69 @@ class FileHandler {
       console.error(`❌ Windows fallback also failed:`, fallbackError);
       throw fallbackError;
     }
+  }
+
+  /**
+   * Atomically replace this file's content: write to a sibling temp file, then
+   * rename over the target (with a Windows copy fallback on EPERM). Concurrent
+   * readers never observe a half-written file.
+   * @param {Buffer|string} data - Full content of the new file.
+   */
+  async _atomicReplaceFile(data) {
+    // Use a UNIQUE temp name per write. A fixed "<file>.tmp" collides when two
+    // Database instances write the same file concurrently: each removes the
+    // other's temp before its rename, causing ENOENT. (CHANGELOG [2.2.5])
+    const tmpFile = `${this.file}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
+    const release = this.fileMutex ? await this.fileMutex.acquire() : () => {};
+    try {
+      await fs.promises.writeFile(tmpFile, data);
+
+      // Windows: brief delay helps readers release the target handle before the
+      // rename (EPERM mitigation, mirroring _writeFileWithRetry).
+      if (process.platform === 'win32') {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      await this._safeRename(tmpFile, this.file);
+    } catch (error) {
+      // Best-effort cleanup of our own temp on failure.
+      await fs.promises.unlink(tmpFile).catch(() => {});
+      throw error;
+    } finally {
+      release();
+    }
+  }
+
+  /**
+   * Atomically replace the whole data file with the given content.
+   *
+   * When `opts.updatingSentinel` is enabled, a `<file>.updating.jdb` sentinel is
+   * created for the duration of the swap so cross-process readers can detect an
+   * active writer and avoid touching the file mid-update.
+   *
+   * @param {Buffer|string} data - Full content of the new data file.
+   */
+  async replaceDataFile(data) {
+    const sentinelFile = this.file.replace(/\.jdb$/i, '.updating.jdb');
+    const useSentinel = !!(this.opts && this.opts.updatingSentinel);
+    let releaseSentinel = null;
+    if (useSentinel) {
+      // Signal "writer active" before touching the target
+      await fs.promises.writeFile(sentinelFile, String(Date.now()), 'utf8').catch(() => {});
+      releaseSentinel = () => fs.promises.unlink(sentinelFile).catch(() => {});
+    }
+    try {
+      await this._atomicReplaceFile(data);
+    } finally {
+      if (releaseSentinel) await releaseSentinel();
+    }
+  }
+
+  /**
+   * Atomically replace this file's content (used for the .idx.jdb index file).
+   * @param {Buffer|string} data - Full content of the new file.
+   */
+  async writeFileAtomic(data) {
+    await this._atomicReplaceFile(data);
   }
   async writeData(data, immediate, fd) {
     await fd.write(data);
@@ -5357,7 +5493,11 @@ class FileHandler {
         const results = await this._readWithStreamingInternal(criteria, options, matchesCriteria, serializer, controller.signal);
         return results;
       } catch (error) {
-        if (error.name === 'AbortError' || error.code === 'ETIMEDOUT') {
+        // p-retry "stop" signal (may be absent when p-retry is mocked in tests)
+        if (typeof pRetry.AbortError === 'function' && error instanceof pRetry.AbortError) {
+          throw error;
+        }
+        if (isIoTimeoutError(error)) {
           if (this.opts.debugMode) {
             console.log(`⚠️ Streaming read attempt ${attempt} timed out, retrying...`);
           }
@@ -6224,6 +6364,29 @@ class QueryManager {
   }
 
   /**
+   * Whether a single field condition can/should be answered by the index during
+   * pre-filtering (so the LEAST number of entries is streamed).
+   *
+   * - Raw RegExp is pre-filterable only on string/term indexes (IndexManager.query
+   *   resolves it via the index keys). Regex on numeric indexes -> residual.
+   * - Complement operators ($ne/$nin) expand to nearly every record, so they are
+   *   NOT pre-filtered: they are applied LAST, on the minimal candidate set, by the
+   *   streaming matcher. (CHANGELOG [2.2.5])
+   */
+  _canPrefilterFieldCondition(field, condition) {
+    if (!this.indexManager?.opts?.indexes?.[field]) return false;
+    if (condition instanceof RegExp) {
+      const idxType = this.indexManager.opts.indexes[field];
+      return idxType !== 'number' && idxType !== 'array:number';
+    }
+    if (condition && typeof condition === 'object' && !Array.isArray(condition)) {
+      const ops = Object.keys(condition).map(op => normalizeOperator(op));
+      if (ops.some(op => op === '$ne' || op === '$nin')) return false;
+    }
+    return true;
+  }
+
+  /**
    * Get indexable fields from criteria
    * @param {Object} criteria - Query criteria
    * @returns {Array} - Array of indexable field names
@@ -6245,8 +6408,9 @@ class QueryManager {
     for (const [field, condition] of Object.entries(criteria)) {
       if (field.startsWith('$')) continue; // Skip logical operators
 
-      // RegExp conditions cannot be pre-filtered using indices
-      if (condition instanceof RegExp) {
+      // Pre-filter with the index only what it can answer minimally; everything
+      // else is applied LAST over the streamed candidates (filter last, stream least).
+      if (!this._canPrefilterFieldCondition(field, condition)) {
         continue;
       }
       if (this.indexManager.opts.indexes && this.indexManager.opts.indexes[field]) {
@@ -6293,8 +6457,9 @@ class QueryManager {
     for (const [field, condition] of Object.entries(criteria)) {
       if (field.startsWith('$')) continue; // Skip logical operators (already handled above)
 
-      // RegExp conditions cannot be pre-filtered using indices
-      if (condition instanceof RegExp) {
+      // Pre-filter with the index only what it can answer minimally; complement/
+      // numeric-regex conditions are left residual and applied LAST on the candidates.
+      if (!this._canPrefilterFieldCondition(field, condition)) {
         continue;
       }
       if (this.indexManager.opts.indexes && this.indexManager.opts.indexes[field]) {
@@ -6620,6 +6785,21 @@ class QueryManager {
         forceFullScan: true
       });
     }
+
+    // Swap detection: if another process atomically replaced the data file, the
+    // in-memory offsets/index describe the previous file. Reload cleanly, or -
+    // when a writer sentinel is present / the clean reload fails - fall back to
+    // a full streaming scan so stale byte offsets are never used on the new file.
+    const refreshStatus = await this.database._refreshFromDiskIfChanged();
+    if (refreshStatus === 'busy') {
+      if (this.opts.debugMode) {
+        console.log('⚠️ findWithIndexed: file busy (writer active) or clean reload failed, falling back to full streaming');
+      }
+      return this.findWithStreaming(criteria, {
+        ...options,
+        forceFullScan: true
+      });
+    }
     let results = [];
     const limit = options.limit; // No default limit - return all results unless explicitly limited
 
@@ -6851,23 +7031,33 @@ class QueryManager {
   matchesFieldCondition(record, field, condition, options = {}) {
     const value = record[field];
 
-    // Debug logging for all field conditions
+    // Debug logging for all field conditions - SAMPLED: only the first record of
+    // each query logs per field, so a full streaming scan (which calls this for
+    // every record) does not spam the console with one line per record.
     if (this.database.opts.debugMode) {
-      console.log(`🔍 Checking field '${field}':`, {
-        value,
-        condition,
-        record: record.name || record.id
-      });
-    }
-
-    // Debug logging for term mapping fields
-    if (this.database.opts.termMapping && Object.keys(this.database.opts.indexes || {}).includes(field)) {
-      if (this.database.opts.debugMode) {
-        console.log(`🔍 Checking term mapping field '${field}':`, {
+      if (!options._dbFieldLog) options._dbFieldLog = {};
+      if (!options._dbFieldLog[field]) {
+        options._dbFieldLog[field] = true;
+        console.log(`🔍 Checking field '${field}':`, {
           value,
           condition,
           record: record.name || record.id
         });
+      }
+    }
+
+    // Debug logging for term mapping fields (sampled the same way)
+    if (this.database.opts.termMapping && Object.keys(this.database.opts.indexes || {}).includes(field)) {
+      if (this.database.opts.debugMode) {
+        if (!options._dbFieldLog) options._dbFieldLog = {};
+        if (!options._dbFieldLog[`tm:${field}`]) {
+          options._dbFieldLog[`tm:${field}`] = true;
+          console.log(`🔍 Checking term mapping field '${field}':`, {
+            value,
+            condition,
+            record: record.name || record.id
+          });
+        }
       }
     }
 
@@ -7140,9 +7330,11 @@ class QueryManager {
           }
           const condition = andCondition[field];
 
-          // RegExp cannot be efficiently queried using indices - must use streaming
+          // INTENTIONAL (CHANGELOG [2.2.5]): raw RegExp on string/term indexes is resolved
+          // via index keys (not streaming). Do not revert to "regex => streaming".
           if (condition instanceof RegExp) {
-            return false;
+            const idxType = this.indexManager?.opts?.indexes?.[field];
+            return idxType !== 'number' && idxType !== 'array:number';
           }
           if (typeof condition === 'object' && !Array.isArray(condition)) {
             const operators = Object.keys(condition).map(op => normalizeOperator(op));
@@ -7184,12 +7376,17 @@ class QueryManager {
       // Check if the field uses operators that are supported by IndexManager
       const condition = criteria[field];
 
-      // RegExp cannot be efficiently queried using indices - must use streaming
+      // INTENTIONAL (CHANGELOG [2.2.5]): raw RegExp on string/term indexes is resolved
+      // via index keys (not streaming). Do not revert to "regex => streaming".
       if (condition instanceof RegExp) {
-        if (this.opts.debugMode) {
-          console.log(`🔍 Field '${field}' uses RegExp - requires streaming strategy`);
+        const idxType = this.indexManager?.opts?.indexes?.[field];
+        if (idxType === 'number' || idxType === 'array:number') {
+          if (this.opts.debugMode) {
+            console.log(`🔍 Field '${field}' uses RegExp on a numeric index - requires streaming strategy`);
+          }
+          return false;
         }
-        return false;
+        return true;
       }
       if (typeof condition === 'object' && !Array.isArray(condition) && condition !== null) {
         const operators = Object.keys(condition).map(op => normalizeOperator(op));
@@ -8999,7 +9196,11 @@ class Database extends events.EventEmitter {
       enableArraySerialization: opts.enableArraySerialization !== false,
       // Enable array serialization by default
       // Index rebuild options
-      allowIndexRebuild: opts.allowIndexRebuild === true // Allow automatic index rebuild when corrupted (default false - throws error)
+      allowIndexRebuild: opts.allowIndexRebuild === true,
+      // Allow automatic index rebuild when corrupted (default false - throws error)
+      // Read-only mode: never create, write, rebuild or auto-flush. Use it to
+      // open a DB purely for reads (e.g. while another process is the writer).
+      readOnly: opts.readOnly === true
     }, opts);
 
     // CRITICAL FIX: Initialize AbortController for lifecycle management
@@ -9028,6 +9229,14 @@ class Database extends events.EventEmitter {
     this.initialized = false;
     this._offsetRecoveryInProgress = false;
     this.writeBufferTotalSize = 0;
+
+    // Swap detection state: the data file may be atomically replaced by another
+    // process while this instance holds offsets/index computed for the previous
+    // file. _offsetsFileSignature remembers which on-disk file the offsets
+    // describe (size + mtime) so the read path can detect a swap cheaply.
+    this._offsetsFileSignature = null;
+    this._dataFingerprint = null; // cached stat (short TTL) for the read path
+    this._offsetsReloadPromise = null; // single-flight clean reload after a swap
 
     // Initialize managers
     this.initializeManagers();
@@ -9404,8 +9613,8 @@ class Database extends events.EventEmitter {
       if (this.normalizedFile) {
         const fileExists = await this.fileHandler.exists();
         if (!fileExists) {
-          if (!this.opts.create) {
-            throw new Error(`Database file '${this.normalizedFile}' does not exist and create option is disabled`);
+          if (!this.opts.create || this.opts.readOnly) {
+            throw new Error(`Database file '${this.normalizedFile}' does not exist and ${this.opts.readOnly ? 'readOnly mode is enabled' : 'create option is disabled'}`);
           }
           // File will be created when first data is written
         } else {
@@ -9580,6 +9789,10 @@ class Database extends events.EventEmitter {
                 }
               }
             }
+
+            // Remember which on-disk data file these offsets describe, so the
+            // read path can detect an atomic swap performed by another process.
+            this._offsetsFileSignature = await this._statDataFingerprint();
 
             // Load indexOffset for proper range calculations
             if (parsedIdxData.indexOffset !== undefined) {
@@ -9880,6 +10093,14 @@ class Database extends events.EventEmitter {
   async _doSave() {
     // CRITICAL FIX: Check if database is destroyed
     if (this.destroyed) return;
+
+    // Read-only mode: never persist data to disk
+    if (this.opts.readOnly) {
+      if (this.opts.debugMode) {
+        console.log('💾 _doSave: Database is read-only, skipping save');
+      }
+      return;
+    }
 
     // CRITICAL FIX: Use atomic check-and-set to prevent concurrent save operations
     if (this.isSaving) {
@@ -10288,15 +10509,20 @@ class Database extends events.EventEmitter {
         console.log(`💾 Save: Calculated indexOffset: ${this.indexOffset}, allData.length: ${allData.length}`);
       }
 
-      // CRITICAL FIX: Write main data file first
+      // CRITICAL FIX: Write main data file first (atomically: temp + rename so a
+      // concurrent reader never sees a half-written file).
       // Index will be saved AFTER reconstruction to ensure it contains correct data
-      await this.fileHandler.writeBatch([jsonlData]);
+      await this.fileHandler.replaceDataFile(jsonlData);
       if (this.opts.debugMode) {
         console.log(`💾 Saved ${allData.length} records to ${this.normalizedFile}`);
       }
 
       // CRITICAL FIX: Invalidate file size cache after save operation
       this._cachedFileStats = null;
+
+      // The in-memory offsets now describe the file we just wrote. Refresh the
+      // swap-detection signature so the next indexed read does not reload.
+      this._offsetsFileSignature = await this._statDataFingerprint();
       this.shouldSave = false;
       this.lastSaveTime = Date.now();
 
@@ -10695,6 +10921,9 @@ class Database extends events.EventEmitter {
    */
   async insert(data) {
     this._validateInitialization('insert');
+    if (this.opts.readOnly) {
+      throw new Error('Database is read-only');
+    }
     return this.operationQueue.enqueue(async () => {
       this.isInsideOperationQueue = true;
       try {
@@ -10789,6 +11018,9 @@ class Database extends events.EventEmitter {
    */
   async insertBatch(dataArray) {
     this._validateInitialization('insertBatch');
+    if (this.opts.readOnly) {
+      throw new Error('Database is read-only');
+    }
 
     // If we're already inside the operation queue (e.g., from insert()), avoid re-enqueueing to prevent deadlocks
     if (this.isInsideOperationQueue) {
@@ -10814,6 +11046,11 @@ class Database extends events.EventEmitter {
    * Internal implementation for insertBatch to allow inline execution when already inside the queue
    */
   async _insertBatchInternal(dataArray) {
+    // Read-only mode: never write to disk
+    if (this.opts.readOnly) {
+      throw new Error('Database is read-only');
+    }
+
     // CRITICAL FIX: Validate state before insert operation
     this.validateState();
     if (!Array.isArray(dataArray) || dataArray.length === 0) {
@@ -10946,15 +11183,13 @@ class Database extends events.EventEmitter {
           if (this.integrityCorrections.dataIntegrity > 5) {
             console.warn(`⚠️ Frequent integrity corrections (${this.integrityCorrections.dataIntegrity} times) - this indicates a systemic issue`);
           }
-          this.indexManager.setTotalLines(offsetsLength);
 
-          // Try to persist the fix, but don't fail the operation if it doesn't work
-          try {
-            await this._saveIndexDataToFile();
-          } catch (error) {
-            // Just track the failure - don't throw since this is a safety net
-            this.integrityCorrections.indexSaveFailures++;
-          }
+          // Reconcile the in-memory totalLines with the actual persisted offset
+          // count. NOTE: deliberately NOT persisted here - find() is a read path
+          // and must never rewrite the .idx file (especially while a concurrent
+          // writer may be replacing it). A later save() persists a fully
+          // consistent .idx anyway.
+          this.indexManager.setTotalLines(offsetsLength);
         }
       }
 
@@ -11608,6 +11843,15 @@ class Database extends events.EventEmitter {
     if (!this._indexRebuildNeeded) return;
     if (!this.indexManager || !this.indexManager.indexedFields || this.indexManager.indexedFields.length === 0) return;
 
+    // If the index was idle-unloaded (or never loaded), recover it cheaply from
+    // the on-disk .idx file BEFORE considering a full rebuild. A rebuild is only
+    // needed when the on-disk index is genuinely missing/corrupt. Mirrors the
+    // score() hot path and prevents an idle-unload from triggering a full-file
+    // rebuild (or a throw when allowIndexRebuild is false).
+    if (!this.indexManager.indexLoaded) {
+      await this._ensureLazyIndexLoaded();
+    }
+
     // Check if index actually needs rebuilding
     let needsRebuild = false;
     for (const field of this.indexManager.indexedFields) {
@@ -11617,6 +11861,13 @@ class Database extends events.EventEmitter {
       }
     }
     if (!needsRebuild) {
+      this._indexRebuildNeeded = false;
+      return;
+    }
+
+    // Read-only mode: never write/rebuild on disk. Let queries fall back to a
+    // full streaming scan instead of throwing or rewriting the index file.
+    if (this.opts.readOnly) {
       this._indexRebuildNeeded = false;
       return;
     }
@@ -11688,9 +11939,13 @@ class Database extends events.EventEmitter {
             crlfDelay: Infinity
           });
 
-          // Handle abort
+          // Handle abort. Destroy the stream WITHOUT an error payload, then
+          // close readline. Destroying with `new Error('AbortError')` makes
+          // the stream emit an unhandled 'error' (readline is closed first, so
+          // the for-await loop exits cleanly and never observes it), which
+          // Node escalates to an uncaughtException and crashes the host app.
           controller.signal.addEventListener('abort', () => {
-            stream.destroy(new Error('AbortError'));
+            stream.destroy();
             rl.close();
           });
           var _iteratorAbruptCompletion = false;
@@ -11738,6 +11993,10 @@ class Database extends events.EventEmitter {
                 }
               }
             }
+
+            // If aborted during schema detection, surface a normalized timeout
+            // error so the retry wrapper (and ultimately the caller) observes it
+            // instead of an uncaughtException.
           } catch (err) {
             _didIteratorError = true;
             _iteratorError = err;
@@ -11751,6 +12010,9 @@ class Database extends events.EventEmitter {
                 throw _iteratorError;
               }
             }
+          }
+          if (controller.signal.aborted) {
+            throw createIoTimeoutError(timeoutMs);
           }
           stream.destroy();
         }
@@ -11769,9 +12031,10 @@ class Database extends events.EventEmitter {
           crlfDelay: Infinity
         });
 
-        // Handle abort
+        // Handle abort. See the schema stream above - destroy WITHOUT an error
+        // payload to avoid an unhandled 'error' becoming an uncaughtException.
         controller.signal.addEventListener('abort', () => {
-          stream.destroy(new Error('AbortError'));
+          stream.destroy();
           rl.close();
         });
         let localCount = 0;
@@ -11802,6 +12065,9 @@ class Database extends events.EventEmitter {
               currentOffset += Buffer.byteLength(line, 'utf8') + 1;
             }
           }
+
+          // If the read was aborted, do NOT treat a partial read as a successful
+          // rebuild - surface a normalized timeout error so it can be retried.
         } catch (err) {
           _didIteratorError2 = true;
           _iteratorError2 = err;
@@ -11816,10 +12082,17 @@ class Database extends events.EventEmitter {
             }
           }
         }
+        if (controller.signal.aborted) {
+          throw createIoTimeoutError(timeoutMs);
+        }
         count += localCount;
         stream.destroy();
       } catch (error) {
-        if (error.name === 'AbortError' || error.code === 'ETIMEDOUT') {
+        // p-retry "stop" signal (may be absent when p-retry is mocked in tests)
+        if (typeof pRetry.AbortError === 'function' && error instanceof pRetry.AbortError) {
+          throw error;
+        }
+        if (isIoTimeoutError(error)) {
           if (this.opts.debugMode) {
             console.log(`⚠️ Index rebuild attempt ${attempt} timed out, retrying...`);
           }
@@ -12550,6 +12823,11 @@ class Database extends events.EventEmitter {
       await this._ensureLazyIndexLoaded();
     }
 
+    // Swap detection: if another process atomically replaced the data file,
+    // reload offsets + index (and term mapping) cleanly so the scores below are
+    // computed against the current file, never stale byte ranges.
+    await this._refreshFromDiskIfChanged();
+
     // Access the index for this field
     const fieldIndex = this.indexManager.index.data[fieldName];
     if (!fieldIndex || Object.keys(fieldIndex).length === 0) {
@@ -12781,6 +13059,9 @@ class Database extends events.EventEmitter {
               }
             }
           }
+
+          // If the read was aborted, do not silently return partial scores -
+          // surface a normalized timeout error so it can be retried.
         } catch (err) {
           _didIteratorError3 = true;
           _iteratorError3 = err;
@@ -12795,9 +13076,16 @@ class Database extends events.EventEmitter {
             }
           }
         }
+        if (controller.signal.aborted) {
+          throw createIoTimeoutError(timeoutMs);
+        }
         results.push(...rangeResults);
       } catch (error) {
-        if (error.name === 'AbortError' || error.code === 'ETIMEDOUT') {
+        // p-retry "stop" signal (may be absent when p-retry is mocked in tests)
+        if (typeof pRetry.AbortError === 'function' && error instanceof pRetry.AbortError) {
+          throw error;
+        }
+        if (isIoTimeoutError(error)) {
           if (this.opts.debugMode) {
             console.log(`⚠️ Score range read attempt ${attempt} timed out, retrying...`);
           }
@@ -13913,10 +14201,27 @@ class Database extends events.EventEmitter {
       this.indexManager.indexLoaded = true;
       return;
     }
-    if (this._lazyIndexLoadPromise) {
-      return this._lazyIndexLoadPromise;
+
+    // Single-flight: N concurrent callers (find/count/score) share a single
+    // on-disk load. The promise is cleared in a finally so a rejected load is
+    // never left behind to poison every future attempt.
+    if (!this._lazyIndexLoadPromise) {
+      this._lazyIndexLoadPromise = this._doLazyIndexLoad().finally(() => {
+        this._lazyIndexLoadPromise = null;
+      });
     }
-    this._lazyIndexLoadPromise = (async () => {
+    return this._lazyIndexLoadPromise;
+  }
+
+  /**
+   * Actually perform the lazy index load from the on-disk .idx file.
+   * Never rejects: on failure it degrades to an empty in-memory index (queries
+   * fall back to streaming) instead of poisoning the single-flight or surfacing
+   * a background cold-load as an unhandled rejection.
+   * @private
+   */
+  async _doLazyIndexLoad() {
+    try {
       const indexData = await this._loadIndexDataFromFile();
       if (indexData) {
         this.indexManager.load(indexData);
@@ -13927,9 +14232,153 @@ class Database extends events.EventEmitter {
         this.indexManager.indexLoaded = true;
         this.indexManager.markIndexUsed();
       }
-      this._lazyIndexLoadPromise = null;
+    } catch (error) {
+      if (this.opts.debugMode) {
+        console.error(`⚠️ _ensureLazyIndexLoaded: Lazy index load failed, continuing with empty index: ${error && error.message}`);
+      }
+      // Never leave the index flagged as not-loaded: mark it loaded (empty) so
+      // later calls short-circuit and queries degrade to a full scan.
+      this.indexManager.indexLoaded = true;
+    }
+  }
+
+  /**
+   * Path of the "writer active" sentinel file for this data file, e.g.
+   * `list.jdb` -> `list.updating.jdb`. While this file exists, a writer is
+   * atomically replacing the database and readers must not refresh/repair it.
+   * @returns {string}
+   */
+  _getUpdatingSentinelPath() {
+    return this.normalizedFile.replace(/\.jdb$/i, '.updating.jdb');
+  }
+
+  /**
+   * Whether a writer sentinel is currently present on disk.
+   * @returns {Promise<boolean>}
+   */
+  async hasUpdatingSentinel() {
+    try {
+      await fs.promises.access(this._getUpdatingSentinelPath());
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  /**
+   * Capture the current data-file fingerprint (size + mtime) for swap
+   * detection. Best-effort: returns null when the file cannot be stat'ed.
+   * @returns {Promise<{size: number, mtimeMs: number}|null>}
+   */
+  async _statDataFingerprint() {
+    try {
+      const st = await fs.promises.stat(this.normalizedFile);
+      return {
+        size: st.size,
+        mtimeMs: st.mtimeMs
+      };
+    } catch (error) {
+      return null;
+    }
+  }
+
+  /**
+   * Cheap swap detection for the read path. The data file may be atomically
+   * replaced by a writer (same or another process); the in-memory offsets and
+   * index describe the previous file. When the on-disk size/mtime no longer
+   * match the signature captured when the offsets were loaded, reload offsets
+   * and index cleanly from the current .idx.
+   *
+   * Returns:
+   *  - 'ok'      : nothing changed / refresh not applicable
+   *  - 'changed' : file was swapped and offsets + index were cleanly reloaded
+   *  - 'busy'    : a writer sentinel is present (or the clean reload failed) -
+   *                the caller must fall back to a full streaming scan instead
+   *                of using possibly stale byte offsets on the new file
+   * @returns {Promise<'ok'|'changed'|'busy'>}
+   */
+  async _refreshFromDiskIfChanged() {
+    // If a writer is mid-update, never refresh/repair in place.
+    if (this.opts.updatingSentinel && (await this.hasUpdatingSentinel())) {
+      return 'busy';
+    }
+    if (!this._offsetsFileSignature) return 'ok';
+    if (!this.offsets || this.offsets.length === 0) return 'ok';
+
+    // Cheap stat with a short TTL so hot queries don't syscall every time.
+    const now = Date.now();
+    if (!this._dataFingerprint || !this._dataFingerprint.at || now - this._dataFingerprint.at > 250) {
+      const st = await this._statDataFingerprint();
+      this._dataFingerprint = {
+        ...(st || {
+          size: 0,
+          mtimeMs: 0
+        }),
+        at: now
+      };
+    }
+    const fp = this._dataFingerprint;
+    const sig = this._offsetsFileSignature;
+    if (fp.size === sig.size && fp.mtimeMs === sig.mtimeMs) return 'ok';
+    const reloaded = await this._reloadOffsetsAndIndex();
+    if (!reloaded) return 'busy';
+    // Signature now describes the (already stat'ed) new file
+    this._offsetsFileSignature = {
+      size: fp.size,
+      mtimeMs: fp.mtimeMs
+    };
+    return 'changed';
+  }
+
+  /**
+   * Cleanly reload offsets/indexOffset/index data from the on-disk .idx file
+   * after the data file was swapped. Single-flight so N concurrent queries
+   * share one reload.
+   * @returns {Promise<boolean>} true when the reload produced consistent state
+   */
+  async _reloadOffsetsAndIndex() {
+    if (this._offsetsReloadPromise) {
+      return this._offsetsReloadPromise;
+    }
+    this._offsetsReloadPromise = (async () => {
+      const idxPath = this.normalizedFile.replace('.jdb', '.idx.jdb');
+      try {
+        const raw = await fs.promises.readFile(idxPath, 'utf8');
+        const parsed = JSON.parse(raw);
+        if (!parsed || !Array.isArray(parsed.offsets)) return false;
+        this.offsets = parsed.offsets;
+        this.indexOffset = typeof parsed.indexOffset === 'number' ? parsed.indexOffset : 0;
+
+        // Reload term mapping (if any) first so term IDs/words match the new
+        // index and the records it describes.
+        if (parsed.termMapping && this.termManager && typeof this.termManager.loadTerms === 'function') {
+          this.termManager.loadTerms(parsed.termMapping);
+        }
+
+        // Clear the current in-memory index so IndexManager.load() does not
+        // short-circuit (load() skips when it already sees actual data).
+        if (this.indexManager && this.indexManager.indexedFields) {
+          for (const field of this.indexManager.indexedFields) {
+            if (this.indexManager.index && this.indexManager.index.data) {
+              this.indexManager.index.data[field] = {};
+            }
+          }
+        }
+        // Reload the in-memory index from the same (new) .idx data
+        this.indexManager.indexLoaded = false;
+        await this._ensureLazyIndexLoaded();
+        this.indexManager.setTotalLines(this.offsets.length);
+        return true;
+      } catch (error) {
+        if (this.opts.debugMode) {
+          console.warn(`⚠️ _reloadOffsetsAndIndex: could not reload from ${idxPath}: ${error && error.message}`);
+        }
+        return false;
+      } finally {
+        this._offsetsReloadPromise = null;
+      }
     })();
-    return this._lazyIndexLoadPromise;
+    return this._offsetsReloadPromise;
   }
 
   /**
@@ -14267,6 +14716,10 @@ class Database extends events.EventEmitter {
           yield _awaitAsyncGenerator(new Promise(resolve => setTimeout(resolve, 10)));
         }
       }
+
+      // Swap detection: if another process replaced the data file, reload offsets
+      // and index cleanly so the line map / ranges describe the current file.
+      yield _awaitAsyncGenerator(_this2._refreshFromDiskIfChanged());
       let count = 0;
       let remainingSkip = options.skip || 0;
       let map;
@@ -15003,6 +15456,8 @@ class Database extends events.EventEmitter {
    * @private
    */
   async _saveIndexDataToFile() {
+    // Read-only mode: never write to the index file on disk
+    if (this.opts.readOnly) return;
     if (this.indexManager) {
       try {
         const idxPath = this.normalizedFile.replace('.jdb', '.idx.jdb');
@@ -15069,7 +15524,7 @@ class Database extends events.EventEmitter {
         // This ensures the database structure is complete
         const originalFile = this.fileHandler.file;
         this.fileHandler.file = idxPath;
-        await this.fileHandler.writeAll(JSON.stringify(indexData, null, 2));
+        await this.fileHandler.writeFileAtomic(JSON.stringify(indexData, null, 2));
         this.fileHandler.file = originalFile;
         if (this.opts.debugMode) {
           console.log(`💾 Index data saved to ${idxPath}`);

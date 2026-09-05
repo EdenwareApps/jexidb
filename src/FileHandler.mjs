@@ -3,6 +3,7 @@ import path from 'path'
 import readline from 'readline'
 import pLimit from 'p-limit'
 import pRetry from 'p-retry'
+import { isIoTimeoutError } from './utils/ioTimeout.mjs'
 
 export default class FileHandler {
   constructor(file, fileMutex = null, opts = {}) {
@@ -707,6 +708,23 @@ export default class FileHandler {
         await fs.promises.rename(tmpFile, targetFile);
         return; // Success
       } catch (error) {
+        // ENOENT: the temp file vanished before the rename. With unique temp names
+        // (see _atomicReplaceFile) this means another concurrent writer already
+        // replaced the target (its rename won, ours was superseded) or an external
+        // cleanup removed our temp. If the target exists, the write was superseded,
+        // not an error. (CHANGELOG [2.2.5])
+        if (error.code === 'ENOENT') {
+          try {
+            await fs.promises.access(targetFile)
+            return // target already replaced by a concurrent writer - ok
+          } catch (accessError) {
+            if (attempt < maxRetries) {
+              await new Promise(resolve => setTimeout(resolve, 50 * attempt))
+              continue
+            }
+            throw error
+          }
+        }
         if (error.code === 'EPERM' && attempt < maxRetries) {
           // Quick delay: 50ms, 100ms, 200ms
           const delay = 50 * attempt;
@@ -784,6 +802,71 @@ export default class FileHandler {
       console.error(`❌ Windows fallback also failed:`, fallbackError);
       throw fallbackError;
     }
+  }
+
+  /**
+   * Atomically replace this file's content: write to a sibling temp file, then
+   * rename over the target (with a Windows copy fallback on EPERM). Concurrent
+   * readers never observe a half-written file.
+   * @param {Buffer|string} data - Full content of the new file.
+   */
+  async _atomicReplaceFile(data) {
+    // Use a UNIQUE temp name per write. A fixed "<file>.tmp" collides when two
+    // Database instances write the same file concurrently: each removes the
+    // other's temp before its rename, causing ENOENT. (CHANGELOG [2.2.5])
+    const tmpFile = `${this.file}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`
+    const release = this.fileMutex ? await this.fileMutex.acquire() : () => {}
+    try {
+      await fs.promises.writeFile(tmpFile, data)
+
+      // Windows: brief delay helps readers release the target handle before the
+      // rename (EPERM mitigation, mirroring _writeFileWithRetry).
+      if (process.platform === 'win32') {
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+
+      await this._safeRename(tmpFile, this.file)
+    } catch (error) {
+      // Best-effort cleanup of our own temp on failure.
+      await fs.promises.unlink(tmpFile).catch(() => {})
+      throw error
+    } finally {
+      release()
+    }
+  }
+
+  /**
+   * Atomically replace the whole data file with the given content.
+   *
+   * When `opts.updatingSentinel` is enabled, a `<file>.updating.jdb` sentinel is
+   * created for the duration of the swap so cross-process readers can detect an
+   * active writer and avoid touching the file mid-update.
+   *
+   * @param {Buffer|string} data - Full content of the new data file.
+   */
+  async replaceDataFile(data) {
+    const sentinelFile = this.file.replace(/\.jdb$/i, '.updating.jdb')
+    const useSentinel = !!(this.opts && this.opts.updatingSentinel)
+
+    let releaseSentinel = null
+    if (useSentinel) {
+      // Signal "writer active" before touching the target
+      await fs.promises.writeFile(sentinelFile, String(Date.now()), 'utf8').catch(() => {})
+      releaseSentinel = () => fs.promises.unlink(sentinelFile).catch(() => {})
+    }
+    try {
+      await this._atomicReplaceFile(data)
+    } finally {
+      if (releaseSentinel) await releaseSentinel()
+    }
+  }
+
+  /**
+   * Atomically replace this file's content (used for the .idx.jdb index file).
+   * @param {Buffer|string} data - Full content of the new file.
+   */
+  async writeFileAtomic(data) {
+    await this._atomicReplaceFile(data)
   }
 
   async writeData(data, immediate, fd) {
@@ -898,7 +981,11 @@ export default class FileHandler {
         const results = await this._readWithStreamingInternal(criteria, options, matchesCriteria, serializer, controller.signal);
         return results;
       } catch (error) {
-        if (error.name === 'AbortError' || error.code === 'ETIMEDOUT') {
+        // p-retry "stop" signal (may be absent when p-retry is mocked in tests)
+        if (typeof pRetry.AbortError === 'function' && error instanceof pRetry.AbortError) {
+          throw error
+        }
+        if (isIoTimeoutError(error)) {
           if (this.opts.debugMode) {
             console.log(`⚠️ Streaming read attempt ${attempt} timed out, retrying...`);
           }

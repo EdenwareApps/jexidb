@@ -33,6 +33,12 @@ const db = new Database('data.jdb', options)
 | `termMapping` | boolean | `true` | Enable term mapping for optimal performance (auto-detected) |
 | `termMappingFields` | string[] | `[]` | Fields to apply term mapping to (when specified, overrides auto-detection from indexes) |
 | `termMappingCleanup` | boolean | `true` | Automatically clean up orphaned terms |
+| `allowIndexRebuild` | boolean | `false` | Automatically rebuild a corrupted/missing index on first query (default throws) |
+| `indexIdleUnloadMs` | number | `30000` | Milliseconds of inactivity before the in-memory index is unloaded (`0` disables) |
+| `ioTimeoutMs` | number | `0` | I/O timeout (ms) for streaming reads / index rebuild; when set, timed-out operations are retried (`maxRetries`) instead of hanging. `0` disables |
+| `maxRetries` | number | `3` | Retry count for timed-out reads / index rebuilds |
+| `readOnly` | boolean | `false` | Open for reads only: never create/write/rebuild/auto-flush the database on disk |
+| `updatingSentinel` | boolean | `false` | Writer mode: create a `<file>.updating.jdb` sentinel around each atomic data-file save so cross-process readers can detect an active writer |
 
 ### Fields vs Indexes - Important Distinction
 
@@ -1105,6 +1111,14 @@ const db = new Database('database.jdb', {
   termMapping: true,               // Enable term mapping (auto-detected)
   termMappingFields: [],           // Fields to map (auto-detected)
   termMappingCleanup: true,        // Auto cleanup
+  
+  // Concurrency & read/write safety
+  readOnly: false,                 // Read-only open: never writes to disk
+  updatingSentinel: false,         // Create <file>.updating.jdb during atomic saves
+  allowIndexRebuild: false,        // Auto-rebuild a corrupted index (default throws)
+  indexIdleUnloadMs: 30000,        // Idle (ms) before unloading the in-memory index
+  ioTimeoutMs: 0,                  // I/O timeout (ms) for reads/rebuild (0 = disabled)
+  maxRetries: 3,                   // Retries for timed-out reads/rebuilds
   
   // Performance
   chunkSize: 1000,                 // Default chunk size

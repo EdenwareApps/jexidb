@@ -1074,18 +1074,44 @@ export default class IndexManager {
       if (typeof data[field] === 'undefined') continue;
       
       const originalCriteriaValue = criteria[field];
-      const criteriaValue = normalizeCriteriaOperators(originalCriteriaValue, { target: 'legacy', preserveOriginal: true });
+      // INTENTIONAL (CHANGELOG [2.2.5]): RegExp is not an operator map - never normalize it
+      // (spreading a RegExp yields {} and would make the regex match every record).
+      const criteriaValue = originalCriteriaValue instanceof RegExp
+        ? originalCriteriaValue
+        : normalizeCriteriaOperators(originalCriteriaValue, { target: 'legacy', preserveOriginal: true });
       let lineNumbersForField = new Set();
       const isNumericField = this.opts.indexes[field] === 'number';
   
-      // Handle RegExp values directly (MUST check before object check since RegExp is an object)
+      // INTENTIONAL OPTIMIZATION (see CHANGELOG [2.2.5]): raw RegExp on string/term
+      // indexes is answered via the index keys instead of full-file streaming. For
+      // term-mapped fields the keys are numeric term IDs, translated back to words with
+      // termManager.getTerm() before testing the regex. DO NOT change this back to
+      // "RegExp => streaming" - it regresses partial search to a full scan per database.
       if (criteriaValue instanceof RegExp) {
-        // RegExp cannot be efficiently queried using indices - fall back to streaming
-        // This will be handled by the QueryManager's streaming strategy
-        continue;
+        const fieldIndex = data[field];
+        const indexType = this.opts.indexes && this.opts.indexes[field];
+        const isNumericIndexType = indexType === 'number' || indexType === 'array:number';
+        if (!fieldIndex || isNumericIndexType) {
+          // Not index-answerable (numeric index) - handled by streaming fallback
+          continue;
+        }
+        const termManager = this.database && this.database.termManager;
+        const isTermField = !!(termManager && termManager.termMappingFields &&
+          termManager.termMappingFields.includes(field));
+        const regex = criteriaValue;
+        for (const key of Object.keys(fieldIndex)) {
+          const word = isTermField ? termManager.getTerm(Number(key)) : key;
+          if (word === null || word === undefined) continue;
+          regex.lastIndex = 0;
+          if (!regex.test(String(word))) continue;
+          const numbers = this._getAllLineNumbers(fieldIndex[key]);
+          for (const lineNumber of numbers) lineNumbersForField.add(lineNumber);
+        }
+        // Fall through to field consolidation below (RegExp is an object, so it is
+        // excluded from the object/operator branch that follows).
       }
 
-      if (typeof criteriaValue === 'object' && !Array.isArray(criteriaValue) && criteriaValue !== null) {
+      if (typeof criteriaValue === 'object' && !(criteriaValue instanceof RegExp) && !Array.isArray(criteriaValue) && criteriaValue !== null) {
         const fieldIndex = data[field];
 
         // Handle $in operator for array queries
